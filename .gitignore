@@ -1,0 +1,6 @@
+/target
+
+# CLI output artifacts
+*.npy
+*.png
+!docs/**/*.png
