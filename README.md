@@ -21,8 +21,8 @@ Early, built one validated milestone at a time.
 
 | Milestone | Content | State |
 |-----------|---------|-------|
-| **M0** | Crate skeleton, `Field`/`Grid`, `.npy`+PNG output, CI | **in progress** |
-| M1 | Symmetric split-step propagator (Gaussian-beam + energy/aliasing/boundary checks) | planned |
+| M0 | Crate skeleton, `Field`/`Grid`, `.npy`+PNG output, CI | **done** |
+| M1 | Symmetric split-step propagator through a `Medium` trait, validated: Gaussian evolution & divergence <1%, power conservation ~1e-14, boundary wraparound, 2nd-order convergence, long-throw Fresnel path | **done** |
 | M2 | Beer–Lambert attenuation | planned |
 | M3 | Turbulence phase screens + Monte-Carlo | planned |
 | M4 | Coupled thermal blooming | planned |
@@ -34,8 +34,11 @@ Early, built one validated milestone at a time.
 cargo build --release
 cargo test
 
-# M0 CLI: write a Gaussian field's intensity to beam.npy and beam.png
-cargo run --release -- --n 512 --dx 1e-3 --w0 5e-2 --out beam
+# write a Gaussian field's intensity to beam.npy and beam.png
+cargo run --release -- gaussian --n 512 --dx 1e-3 --w0 5e-2 --out beam
+
+# propagate a beam over 2 Rayleigh ranges and render the side view + frames
+cargo run --release -- propagate --w0 1e-2 --steps 400 --frames 4 --out beam
 ```
 
 `beamprop --help` lists all options. Analysis and plotting happen in Python/NumPy against the `.npy` output until the PyO3 bindings arrive at M5.
