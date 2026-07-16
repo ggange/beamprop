@@ -112,9 +112,9 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         seed: u64,
     },
-    /// Remove generated results (.npy, .png, .gif files and *_notes.md
-    /// sidecars) from the output directory. Only those are touched; other
-    /// files and the directory itself are left alone.
+    /// Remove generated results (.npy, .png, .gif files and *_notes.md /
+    /// *_meta.json sidecars) from the output directory. Only those are
+    /// touched; other files and the directory itself are left alone.
     Clean {
         /// Directory to clean.
         #[arg(long, default_value = "out")]
@@ -224,6 +224,38 @@ fn turbulence(
     let xz_gif = args.out_path(&format!("{}_xz.gif", args.out))?;
     beamprop::viz::save_colormapped_gif(&xz_frames, 0.5, 80, &xz_gif)?;
 
+    // Raw frame stacks + run metadata for scripts/render.py (labeled
+    // matplotlib figures against the .npy output).
+    let stack = |maps: &[ndarray::Array2<f64>]| {
+        let (ny, nx) = maps[0].dim();
+        let mut s = ndarray::Array3::<f64>::zeros((maps.len(), ny, nx));
+        for (i, m) in maps.iter().enumerate() {
+            s.index_axis_mut(ndarray::Axis(0), i).assign(m);
+        }
+        s
+    };
+    let frames_npy = args.out_path(&format!("{}_frames.npy", args.out))?;
+    ndarray_npy::write_npy(&frames_npy, &stack(&frames))
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", frames_npy.display()))?;
+    let xz_npy = args.out_path(&format!("{}_xz_frames.npy", args.out))?;
+    ndarray_npy::write_npy(&xz_npy, &stack(&xz_frames))
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", xz_npy.display()))?;
+    let meta = format!(
+        "{{\n  \"case\": \"turbulence\",\n  \"n\": {n},\n  \"dx\": {dx},\n  \
+         \"wavelength\": {wl},\n  \"w0\": {w0},\n  \"z\": {z},\n  \
+         \"screens\": {screens},\n  \"substeps\": {substeps},\n  \"cn2\": {cn2},\n  \
+         \"l0\": {l0},\n  \"realizations\": {realizations},\n  \"seed\": {seed},\n  \
+         \"xz_x_min\": {x_min},\n  \"xz_x_max\": {x_max}\n}}\n",
+        n = grid.n,
+        dx = args.dx,
+        wl = args.wavelength,
+        w0 = args.w0,
+        x_min = -grid.extent() / 4.0,
+        x_max = grid.extent() / 4.0,
+    );
+    let meta_path = args.out_path(&format!("{}_meta.json", args.out))?;
+    fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
+
     // Long-exposure (ensemble-mean) receiver intensity.
     let mut mean = ndarray::Array2::<f64>::zeros((grid.n, grid.n));
     for f in &frames {
@@ -284,6 +316,10 @@ fn turbulence(
            One frame per realization.\n\
          - `{out}_longexp.npy` / `.png` — ensemble-mean receiver intensity (the\n\
            long-exposure image), float64, same extent as `{out}_turb.gif`.\n\
+         - `{out}_frames.npy` / `{out}_xz_frames.npy` — the raw frame stacks\n\
+           (realizations × ny × nx, float64) behind the two GIFs, and\n\
+           `{out}_meta.json` the run parameters: inputs to `scripts/render.py`, which\n\
+           produces matplotlib versions with physical axes and a labeled colorbar.\n\
          \n\
          ## Rendering\n\
          \n\
@@ -292,7 +328,8 @@ fn turbulence(
          brightness differences between frames are physical. The strip at the right\n\
          edge of every image is the colorbar: linear in I/I_max from 0 (bottom) to\n\
          I_max (top). Intensity is in units of the initial on-axis peak; no absolute\n\
-         radiometric calibration.\n",
+         radiometric calibration. For labeled, publication-quality figures run\n\
+         `python scripts/render.py <out-dir>/{out}`.\n",
         n = grid.n,
         dx = args.dx,
         extent = grid.extent(),
@@ -321,8 +358,8 @@ fn turbulence(
     Ok(())
 }
 
-/// Delete `.npy`/`.png`/`.gif` files and `*_notes.md` sidecars directly
-/// inside `dir` (non-recursive).
+/// Delete `.npy`/`.png`/`.gif` files and `*_notes.md`/`*_meta.json` sidecars
+/// directly inside `dir` (non-recursive).
 fn clean(dir: &Path) -> Result<()> {
     if !dir.exists() {
         println!("nothing to clean: {} does not exist", dir.display());
@@ -335,9 +372,10 @@ fn clean(dir: &Path) -> Result<()> {
             && (path
                 .extension()
                 .is_some_and(|e| e == "npy" || e == "png" || e == "gif")
-                || path
-                    .file_name()
-                    .is_some_and(|f| f.to_string_lossy().ends_with("_notes.md")));
+                || path.file_name().is_some_and(|f| {
+                    let f = f.to_string_lossy();
+                    f.ends_with("_notes.md") || f.ends_with("_meta.json")
+                }));
         if is_result {
             fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
             removed += 1;

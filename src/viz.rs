@@ -55,7 +55,9 @@ const COLORBAR_GAP: u32 = 6;
 /// `t = (v/max)^gamma`; `gamma < 1` lifts the dim wings of a beam into
 /// visibility. The colorbar is linear in `v/max` — bottom = 0, top = `max` —
 /// and passes through the same gamma mapping as the data, so it reads as the
-/// image's intensity scale.
+/// image's intensity scale. Numeric labels are deliberately out of scope
+/// here (no font rendering): `scripts/render.py` produces the labeled
+/// matplotlib figures from the `.npy` output.
 fn render_frame(data: &Array2<f64>, gamma: f64, max: f64) -> image::RgbaImage {
     use image::Rgba;
     let (ny, nx) = data.dim();

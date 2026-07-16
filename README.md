@@ -46,7 +46,10 @@ cargo run --release -- propagate --w0 1e-2 --z 200 --visibility 5000 --out hazy
 # Monte-Carlo turbulence: animated receiver-plane + side-view GIFs and the long-exposure mean
 cargo run --release -- turbulence --n 256 --dx 2e-3 --w0 1e-2 --z 1000 --cn2 1.5e-14 --out turb
 
-# remove generated results (.npy/.png/.gif and *_notes.md in the output directory)
+# publication-quality versions (physical axes, labeled colorbar) via matplotlib
+python scripts/render.py out/turb
+
+# remove generated results (images, .npy and sidecars in the output directory)
 cargo run --release -- clean
 ```
 
