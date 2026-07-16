@@ -34,26 +34,26 @@ Early, built one validated milestone at a time.
 cargo build --release
 cargo test
 
-# write a Gaussian field's intensity to out/beam.npy and out/beam.png
+# write a Gaussian field's intensity to out/beam.npy
 cargo run --release -- gaussian --n 512 --dx 1e-3 --w0 5e-2 --out beam
 
-# propagate a beam over 2 Rayleigh ranges and render the side view + frames
+# propagate a beam over 2 Rayleigh ranges (side-view map, snapshots, final field)
 cargo run --release -- propagate --w0 1e-2 --steps 400 --frames 4 --out beam
 
 # same, through a 5 km-visibility haze (Kruse aerosol extinction at the beam wavelength)
 cargo run --release -- propagate --w0 1e-2 --z 200 --visibility 5000 --out hazy
 
-# Monte-Carlo turbulence: animated receiver-plane + side-view GIFs and the long-exposure mean
+# Monte-Carlo turbulence: receiver-plane + side-view frame stacks and the long-exposure mean
 cargo run --release -- turbulence --n 256 --dx 2e-3 --w0 1e-2 --z 1000 --cn2 1.5e-14 --out turb
 
-# publication-quality versions (physical axes, labeled colorbar) via matplotlib
-python scripts/render.py out/turb
+# render the images: GIFs/PNGs with physical axes and a labeled colorbar (matplotlib)
+python3 scripts/render.py out/turb
 
 # remove generated results (images, .npy and sidecars in the output directory)
 cargo run --release -- clean
 ```
 
-All generated files land in `out/` by default (`--out-dir` overrides). Each `propagate`/`turbulence` run writes a `<out>_notes.md` sidecar next to its images describing the test case: parameters, derived physical quantities (Rayleigh range, Fried parameter, Rytov variance, …), what each file shows with its physical axes, and the colormap/normalization. `beamprop --help` lists all options. Analysis and plotting happen in Python/NumPy against the `.npy` output until the PyO3 bindings arrive at M5.
+The solver writes **data** (`.npy` arrays plus `_meta.json`/`_notes.md` sidecars); all images come from `python3 scripts/render.py <basename>`. Generated files land in `out/` by default (`--out-dir` overrides). Each `propagate`/`turbulence` run's `<out>_notes.md` describes the test case: parameters, derived physical quantities (Rayleigh range, Fried parameter, Rytov variance, …), what each file contains with its physical axes, and how the images are normalized. `beamprop --help` lists all options; further analysis happens in Python/NumPy against the `.npy` output until the PyO3 bindings arrive at M5.
 
 Every physical model in the solver — equation, implementation site, validation gate, and literature reference — is catalogued in [docs/MODELS.md](docs/MODELS.md).
 

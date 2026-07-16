@@ -10,7 +10,8 @@
 //! ## Build ladder
 //! This crate grows one validated milestone at a time:
 //! - **M0:** the [`Field`](field::Field) container on a [`Grid`](grid::Grid),
-//!   plus its `.npy`/PNG output path — the inspection interface through M2.
+//!   plus its `.npy` output path — the data interface; images are rendered
+//!   from it in Python (`scripts/render.py`).
 //! - **M1 (this milestone):** the symmetric split-step
 //!   [`Propagator`](propagate::Propagator) advancing a field through any
 //!   [`Medium`](medium::Medium), validated against the analytic

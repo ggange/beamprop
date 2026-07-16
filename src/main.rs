@@ -1,7 +1,8 @@
 //! `beamprop` command-line interface.
 //!
 //! The inspection interface until the M5 PyO3 bindings arrive: build a field,
-//! propagate it, dump `.npy` arrays and PNG renders.
+//! propagate it, dump `.npy` arrays (+ `_meta.json`/`_notes.md` sidecars).
+//! Images are rendered from those by `scripts/render.py`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use beamprop::grid::Grid;
 use beamprop::medium::{UniformExtinction, kruse_extinction};
 use beamprop::propagate::{Propagator, beam_width};
 use beamprop::validate::GaussianBeam;
-use beamprop::viz::{XzSliceMap, save_intensity_render};
+use beamprop::viz::XzSliceMap;
 
 #[derive(Parser, Debug)]
 #[command(name = "beamprop", version, about)]
@@ -57,14 +58,16 @@ impl BeamArgs {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Write a Gaussian field's intensity to <out>.npy and <out>.png (M0).
+    /// Write a Gaussian field's intensity to <out>.npy (M0).
     Gaussian {
         #[command(flatten)]
         beam: BeamArgs,
     },
-    /// Propagate a Gaussian beam and render the result (M1/M2): side-view
-    /// <out>_xz.png, snapshot frames, final <out>_final.{npy,png}. Lossless
-    /// unless --alpha or --visibility sets a Beer-Lambert extinction.
+    /// Propagate a Gaussian beam (M1/M2) and write the data: side-view map
+    /// <out>_xz.npy, snapshot stack <out>_frames.npy, final <out>_final.npy,
+    /// plus _meta.json/_notes.md sidecars (render images with
+    /// `python3 scripts/render.py`). Lossless unless --alpha or --visibility
+    /// sets a Beer-Lambert extinction.
     Propagate {
         #[command(flatten)]
         beam: BeamArgs,
@@ -74,7 +77,7 @@ enum Cmd {
         /// Number of split-step slabs.
         #[arg(long, default_value_t = 200)]
         steps: usize,
-        /// Number of snapshot frames to render along the path.
+        /// Number of transverse snapshots to record along the path.
         #[arg(long, default_value_t = 5)]
         frames: usize,
         /// Uniform power extinction coefficient in 1/m (Beer-Lambert).
@@ -86,10 +89,11 @@ enum Cmd {
         visibility: Option<f64>,
     },
     /// Propagate a Gaussian beam through Kolmogorov/von Karman turbulence
-    /// (M3): Monte-Carlo realizations rendered into animated GIFs — receiver
-    /// plane <out>_turb.gif and side view <out>_xz.gif — plus the
-    /// long-exposure mean <out>_longexp.{npy,png} and a comparison against
-    /// weak-turbulence theory.
+    /// (M3) and write the Monte-Carlo data: receiver-plane and side-view
+    /// frame stacks <out>_frames.npy / <out>_xz_frames.npy, long-exposure
+    /// mean <out>_longexp.npy, _meta.json/_notes.md sidecars, and a
+    /// comparison against weak-turbulence theory (render GIFs/PNGs with
+    /// `python3 scripts/render.py`).
     Turbulence {
         #[command(flatten)]
         beam: BeamArgs,
@@ -150,13 +154,10 @@ fn gaussian(args: &BeamArgs) -> Result<()> {
     let grid = Grid::new(args.n, args.dx);
     let field = Field::gaussian(grid, args.wavelength, args.w0);
     let npy = args.out_path(&format!("{}.npy", args.out))?;
-    let png = args.out_path(&format!("{}.png", args.out))?;
     field.save_intensity_npy(&npy)?;
-    field.save_intensity_png(&png)?;
     println!(
-        "wrote {} and {}  (n={}, dx={} m, lambda={} m, w0={} m, power={:.6})",
+        "wrote {}  (n={}, dx={} m, lambda={} m, w0={} m, power={:.6})",
         npy.display(),
-        png.display(),
         grid.n,
         grid.dx,
         args.wavelength,
@@ -209,11 +210,8 @@ fn turbulence(
     });
     let (frames, xz_maps): (Vec<_>, Vec<_>) = results.into_iter().unzip();
 
-    let gif = args.out_path(&format!("{}_turb.gif", args.out))?;
-    beamprop::viz::save_colormapped_gif(&frames, 0.5, 80, &gif)?;
-
     // Side view (x-z plane, beam travelling left to right), cropped to the
-    // middle half in x like the `propagate` render.
+    // middle half in x.
     let xz_frames: Vec<_> = xz_maps
         .iter()
         .map(|m| {
@@ -221,11 +219,9 @@ fn turbulence(
             m.slice(ndarray::s![nx / 4..3 * nx / 4, ..]).to_owned()
         })
         .collect();
-    let xz_gif = args.out_path(&format!("{}_xz.gif", args.out))?;
-    beamprop::viz::save_colormapped_gif(&xz_frames, 0.5, 80, &xz_gif)?;
 
-    // Raw frame stacks + run metadata for scripts/render.py (labeled
-    // matplotlib figures against the .npy output).
+    // Frame stacks + run metadata: the inputs to scripts/render.py, which
+    // does all image rendering.
     let stack = |maps: &[ndarray::Array2<f64>]| {
         let (ny, nx) = maps[0].dim();
         let mut s = ndarray::Array3::<f64>::zeros((maps.len(), ny, nx));
@@ -263,10 +259,8 @@ fn turbulence(
     }
     mean /= realizations as f64;
     let npy = args.out_path(&format!("{}_longexp.npy", args.out))?;
-    let png = args.out_path(&format!("{}_longexp.png", args.out))?;
     ndarray_npy::write_npy(&npy, &mean)
         .map_err(|e| anyhow::anyhow!("writing {}: {e}", npy.display()))?;
-    beamprop::viz::save_colormapped_png(&mean, 0.5, &png)?;
 
     println!(
         "  long-exposure width (theory): {:.2} mm vs vacuum {:.2} mm",
@@ -307,29 +301,26 @@ fn turbulence(
          \n\
          ## Files\n\
          \n\
-         - `{out}_turb.gif` — receiver-plane intensity |u(x,y,z={z})|². Each frame is one\n\
-           **independent atmospheric realization**, not a time sequence. Frame spans the\n\
-           full grid, {extent:.3} m per side.\n\
-         - `{out}_xz.gif` — side view: central slice I(x, 0, z). Horizontal axis is the\n\
-           full path length, z = 0 (left) to z = {z} m (right); vertical axis the middle\n\
-           half of the grid ({half_extent:.3} m) — the axes are **not** to equal scale.\n\
-           One frame per realization.\n\
-         - `{out}_longexp.npy` / `.png` — ensemble-mean receiver intensity (the\n\
-           long-exposure image), float64, same extent as `{out}_turb.gif`.\n\
-         - `{out}_frames.npy` / `{out}_xz_frames.npy` — the raw frame stacks\n\
-           (realizations × ny × nx, float64) behind the two GIFs, and\n\
-           `{out}_meta.json` the run parameters: inputs to `scripts/render.py`, which\n\
-           produces matplotlib versions with physical axes and a labeled colorbar.\n\
+         - `{out}_frames.npy` — receiver-plane intensity |u(x,y,z={z})|², shape\n\
+           {realizations} × {n} × {n} (float64). Each slice is one **independent\n\
+           atmospheric realization**, not a time sequence; it spans the full grid,\n\
+           {extent:.3} m per side.\n\
+         - `{out}_xz_frames.npy` — side views: central slice I(x, 0, z) per realization.\n\
+           Second axis is x over the middle half of the grid ({half_extent:.3} m), third\n\
+           axis is z from 0 to {z} m.\n\
+         - `{out}_longexp.npy` — ensemble-mean receiver intensity (the long-exposure\n\
+           image), float64, same extent as the receiver-plane frames.\n\
+         - `{out}_meta.json` — the run parameters.\n\
          \n\
          ## Rendering\n\
          \n\
-         Magma-like colormap (black → purple → orange → light yellow) on\n\
-         t = (I/I_max)^0.5; I_max is the global peak across all frames of a GIF, so\n\
-         brightness differences between frames are physical. The strip at the right\n\
-         edge of every image is the colorbar: linear in I/I_max from 0 (bottom) to\n\
-         I_max (top). Intensity is in units of the initial on-axis peak; no absolute\n\
-         radiometric calibration. For labeled, publication-quality figures run\n\
-         `python scripts/render.py <out-dir>/{out}`.\n",
+         The solver writes data only. `python3 scripts/render.py <out-dir>/{out}`\n\
+         renders `{out}_turb.gif` and `{out}_xz.gif` (one frame per realization,\n\
+         one global normalization so brightness differences between frames are\n\
+         physical) and `{out}_longexp.png`, with physical axes and a colorbar in\n\
+         I/I_max (magma colormap on (I/I_max)^0.5 to lift the dim wings). Intensity\n\
+         is in units of the initial on-axis peak; no absolute radiometric\n\
+         calibration.\n",
         n = grid.n,
         dx = args.dx,
         extent = grid.extent(),
@@ -348,12 +339,17 @@ fn turbulence(
     fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
 
     println!(
-        "  wrote {} and {} ({realizations} frames), {}, {} and {}",
-        gif.display(),
-        xz_gif.display(),
+        "  wrote {}, {} ({realizations} realizations), {}, {} and {}",
+        frames_npy.display(),
+        xz_npy.display(),
         npy.display(),
-        png.display(),
+        meta_path.display(),
         notes_path.display()
+    );
+    println!(
+        "  render images: python3 scripts/render.py {}/{}",
+        args.out_dir.display(),
+        args.out
     );
     Ok(())
 }
@@ -419,18 +415,15 @@ fn propagate(
     let frame_every = (steps / frames.max(1)).max(1);
     let mut xz = XzSliceMap::new();
     xz.record(&field);
-    save_intensity_render(
-        &field,
-        args.out_path(&format!("{}_frame_000.png", args.out))?,
-    )?;
+    let mut snapshots = vec![field.intensity()];
+    let mut snapshot_z = vec![0.0_f64];
 
     prop.propagate(&mut field, &medium, dz, 0, steps, |i, f| {
         xz.record(f);
         let step = i + 1;
-        if (step % frame_every == 0 || step == steps)
-            && let Ok(path) = args.out_path(&format!("{}_frame_{:03}.png", args.out, step))
-        {
-            let _ = save_intensity_render(f, path);
+        if step % frame_every == 0 || step == steps {
+            snapshots.push(f.intensity());
+            snapshot_z.push(step as f64 * dz);
         }
     })?;
 
@@ -438,11 +431,40 @@ fn propagate(
     let full = xz.to_array();
     let nx = full.dim().0;
     let cropped = full.slice(ndarray::s![nx / 4..3 * nx / 4, ..]).to_owned();
-    let xz_png = args.out_path(&format!("{}_xz.png", args.out))?;
-    beamprop::viz::save_colormapped_png(&cropped, 0.5, &xz_png)?;
+    let xz_npy = args.out_path(&format!("{}_xz.npy", args.out))?;
+    ndarray_npy::write_npy(&xz_npy, &cropped)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", xz_npy.display()))?;
+
+    let mut snap_stack = ndarray::Array3::<f64>::zeros((snapshots.len(), grid.n, grid.n));
+    for (i, s) in snapshots.iter().enumerate() {
+        snap_stack.index_axis_mut(ndarray::Axis(0), i).assign(s);
+    }
+    let frames_npy = args.out_path(&format!("{}_frames.npy", args.out))?;
+    ndarray_npy::write_npy(&frames_npy, &snap_stack)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", frames_npy.display()))?;
 
     field.save_intensity_npy(args.out_path(&format!("{}_final.npy", args.out))?)?;
-    save_intensity_render(&field, args.out_path(&format!("{}_final.png", args.out))?)?;
+
+    let frames_z = snapshot_z
+        .iter()
+        .map(|z| format!("{z}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let meta = format!(
+        "{{\n  \"case\": \"propagate\",\n  \"n\": {n},\n  \"dx\": {dx},\n  \
+         \"wavelength\": {wl},\n  \"w0\": {w0},\n  \"z\": {z_total},\n  \
+         \"steps\": {steps},\n  \"alpha\": {alpha},\n  \
+         \"frames_z\": [{frames_z}],\n  \
+         \"xz_x_min\": {x_min},\n  \"xz_x_max\": {x_max}\n}}\n",
+        n = grid.n,
+        dx = args.dx,
+        wl = args.wavelength,
+        w0 = args.w0,
+        x_min = -grid.extent() / 4.0,
+        x_max = grid.extent() / 4.0,
+    );
+    let meta_path = args.out_path(&format!("{}_meta.json", args.out))?;
+    fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
 
     let (wx, _) = beam_width(&field);
     let w_ref = analytic.width_at(z_total);
@@ -494,22 +516,23 @@ fn propagate(
          \n\
          ## Files\n\
          \n\
-         - `{out}_xz.png` — side view: central slice I(x, 0, z). Horizontal axis is the\n\
-           full path length, z = 0 (left) to z = {z_total:.1} m (right); vertical axis\n\
-           the middle half of the grid ({half_extent:.3} m) — the axes are **not** to\n\
-           equal scale.\n\
-         - `{out}_frame_XXX.png` — transverse intensity snapshots at slab XXX; each\n\
-           spans the full grid, {extent:.3} m per side.\n\
-         - `{out}_final.npy` / `.png` — receiver-plane intensity at z = {z_total:.1} m,\n\
-           float64.\n\
+         - `{out}_xz.npy` — side view: central slice I(x, 0, z), float64. First axis is\n\
+           x over the middle half of the grid ({half_extent:.3} m), second axis is z\n\
+           from 0 to {z_total:.1} m (the full path length).\n\
+         - `{out}_frames.npy` — transverse intensity snapshots along the path (z\n\
+           positions in `{out}_meta.json`); each spans the full grid, {extent:.3} m per\n\
+           side.\n\
+         - `{out}_final.npy` — receiver-plane intensity at z = {z_total:.1} m, float64.\n\
+         - `{out}_meta.json` — the run parameters.\n\
          \n\
          ## Rendering\n\
          \n\
-         Magma-like colormap (black → purple → orange → light yellow) on\n\
-         t = (I/I_max)^0.5, normalized per image. The strip at the right edge of every\n\
-         image is the colorbar: linear in I/I_max from 0 (bottom) to I_max (top).\n\
-         Intensity is in units of the initial on-axis peak; no absolute radiometric\n\
-         calibration.\n",
+         The solver writes data only. `python3 scripts/render.py <out-dir>/{out}`\n\
+         renders the side view `{out}_xz.png` (note: axes not to equal scale), the\n\
+         snapshot animation `{out}_prop.gif`, and `{out}_final.png`, with physical\n\
+         axes and a colorbar in I/I_max (magma colormap on (I/I_max)^0.5 to lift the\n\
+         dim wings). Intensity is in units of the initial on-axis peak; no absolute\n\
+         radiometric calibration.\n",
         n = grid.n,
         dx = args.dx,
         extent = grid.extent(),
@@ -523,11 +546,17 @@ fn propagate(
     fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
 
     println!(
-        "  wrote {}, frames, {} and {} to {}/",
-        xz_png.display(),
-        format_args!("{}_final.npy/png", args.out),
-        notes_path.display(),
-        args.out_dir.display()
+        "  wrote {}, {}, {}, {} and {}",
+        xz_npy.display(),
+        frames_npy.display(),
+        format_args!("{}/{}_final.npy", args.out_dir.display(), args.out),
+        meta_path.display(),
+        notes_path.display()
+    );
+    println!(
+        "  render images: python3 scripts/render.py {}/{}",
+        args.out_dir.display(),
+        args.out
     );
     Ok(())
 }

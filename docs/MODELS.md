@@ -161,13 +161,13 @@ rand_chacha crates.
 
 ## Rendering (not physics)
 
-Intensity images and GIFs use a 6-anchor interpolated approximation of the
-**magma** perceptually-uniform colormap (black → purple → orange → light
-yellow), applied to `t = (I/I_max)^γ` with `γ = 0.5` to lift the dim wings;
-`I_max` is the global peak (across all frames of a GIF), so brightness
-differences between frames are physical. Every render carries a colorbar
-strip at its right edge, linear in `I/I_max` from 0 (bottom) to `I_max` (top)
-through the same gamma mapping. Implemented in `src/viz.rs`.
+The solver writes data only (`.npy` arrays + `_meta.json`/`_notes.md`
+sidecars; collection helpers in `src/viz.rs`). All images come from
+`scripts/render.py` (matplotlib): the perceptually-uniform **magma** colormap
+applied to `t = (I/I_max)^γ` with `γ = 0.5` to lift the dim wings; `I_max` is
+the global peak (across all frames of a GIF), so brightness differences
+between frames are physical. Colorbars are labeled in `I/I_max`, axes in
+metres.
 
 Reference: S. van der Walt, N. Smith, *matplotlib colormaps* (magma),
 <https://bids.github.io/colormap/>.

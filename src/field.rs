@@ -65,28 +65,11 @@ impl Field {
 
     /// Write intensity to a NumPy `.npy` file (`float64`, shape `[n, n]`).
     ///
-    /// This `.npy` path is the M0–M2 interface: analysis and plotting happen in
-    /// Python/NumPy until the PyO3 bindings arrive at M5.
+    /// The `.npy` path is the solver's output interface: analysis and all
+    /// image rendering happen in Python/NumPy (`scripts/render.py`) until the
+    /// PyO3 bindings arrive at M5.
     pub fn save_intensity_npy(&self, path: impl AsRef<Path>) -> Result<()> {
         ndarray_npy::write_npy(path, &self.intensity())?;
-        Ok(())
-    }
-
-    /// Write intensity to a grayscale PNG, linearly normalised to the peak.
-    ///
-    /// A quick look, not a publication figure — the colormapped render is an
-    /// M1 deliverable.
-    pub fn save_intensity_png(&self, path: impl AsRef<Path>) -> Result<()> {
-        let inten = self.intensity();
-        let max = inten.iter().copied().fold(0.0_f64, f64::max);
-        let scale = if max > 0.0 { 255.0 / max } else { 0.0 };
-        let n = self.grid.n as u32;
-        let mut img = image::GrayImage::new(n, n);
-        for ((iy, ix), &v) in inten.indexed_iter() {
-            let px = (v * scale).round().clamp(0.0, 255.0) as u8;
-            img.put_pixel(ix as u32, iy as u32, image::Luma([px]));
-        }
-        img.save(path)?;
         Ok(())
     }
 }
