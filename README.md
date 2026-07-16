@@ -2,6 +2,10 @@
 
 An open, validation-first solver for **laser beam propagation through the atmosphere**, written in Rust.
 
+![A Gaussian beam through Kolmogorov turbulence: side view of one realization, speckled receiver-plane intensity, and the smooth 48-realization long-exposure mean](docs/turbulence.png)
+
+*One Monte-Carlo realization of a 1 µm beam over 1 km of turbulence (`beamprop turbulence`, rendered by `scripts/render.py`): the instantaneous beam wanders and breaks into speckle; averaging 48 realizations recovers the smooth long-exposure profile that theory predicts to within 0.5%.*
+
 Four effects stack when a laser crosses air, and `beamprop` aims to model each one rigorously and reproducibly:
 
 - **Diffraction** — split-step wave-optics propagation.
