@@ -46,11 +46,13 @@ cargo run --release -- propagate --w0 1e-2 --z 200 --visibility 5000 --out hazy
 # Monte-Carlo turbulence: animated receiver-plane + side-view GIFs and the long-exposure mean
 cargo run --release -- turbulence --n 256 --dx 2e-3 --w0 1e-2 --z 1000 --cn2 1.5e-14 --out turb
 
-# remove generated results (.npy/.png/.gif in the output directory)
+# remove generated results (.npy/.png/.gif and *_notes.md in the output directory)
 cargo run --release -- clean
 ```
 
-All generated files land in `out/` by default (`--out-dir` overrides). `beamprop --help` lists all options. Analysis and plotting happen in Python/NumPy against the `.npy` output until the PyO3 bindings arrive at M5.
+All generated files land in `out/` by default (`--out-dir` overrides). Each `propagate`/`turbulence` run writes a `<out>_notes.md` sidecar next to its images describing the test case: parameters, derived physical quantities (Rayleigh range, Fried parameter, Rytov variance, …), what each file shows with its physical axes, and the colormap/normalization. `beamprop --help` lists all options. Analysis and plotting happen in Python/NumPy against the `.npy` output until the PyO3 bindings arrive at M5.
+
+Every physical model in the solver — equation, implementation site, validation gate, and literature reference — is catalogued in [docs/MODELS.md](docs/MODELS.md).
 
 ## License
 

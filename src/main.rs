@@ -112,9 +112,9 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         seed: u64,
     },
-    /// Remove generated results (.npy, .png, .gif files) from the output
-    /// directory. Only those extensions are touched; other files and the
-    /// directory itself are left alone.
+    /// Remove generated results (.npy, .png, .gif files and *_notes.md
+    /// sidecars) from the output directory. Only those are touched; other
+    /// files and the directory itself are left alone.
     Clean {
         /// Directory to clean.
         #[arg(long, default_value = "out")]
@@ -241,17 +241,85 @@ fn turbulence(
         beam.long_exposure_width(z, cn2) * 1e3,
         beam.width_at(z) * 1e3
     );
+
+    let r0 = fried_r0(cn2, args.wavelength, z);
+    let notes = format!(
+        "# Test case: Gaussian beam through Kolmogorov/von Kármán turbulence\n\
+         \n\
+         Collimated Gaussian beam, Monte-Carlo ensemble of {realizations} independent\n\
+         atmospheres (von Kármán phase screens, FFT synthesis + 6 subharmonic levels),\n\
+         symmetric split-step propagation. Models and references: docs/MODELS.md in the\n\
+         beamprop repository.\n\
+         \n\
+         ## Parameters\n\
+         \n\
+         | Quantity | Value |\n\
+         |---|---|\n\
+         | Grid | {n} x {n}, dx = {dx:.3e} m (extent {extent:.3} m) |\n\
+         | Wavelength λ | {wavelength:.3e} m |\n\
+         | Waist w0 (1/e² intensity radius) | {w0:.3e} m |\n\
+         | Rayleigh range zR | {zr:.1} m |\n\
+         | Path length z | {z} m |\n\
+         | Phase screens | {screens} (spacing {dz_screen:.1} m, {substeps} diffraction substeps each) |\n\
+         | Cn² | {cn2:.3e} m^(-2/3) |\n\
+         | Outer scale L0 | {l0:.3e} m |\n\
+         | Realizations / master seed | {realizations} / {seed} |\n\
+         \n\
+         ## Derived quantities\n\
+         \n\
+         | Quantity | Value |\n\
+         |---|---|\n\
+         | Fried parameter r0 (full path) | {r0:.4} m ({r0_dx:.1} grid samples) |\n\
+         | Rytov variance σ_R² (plane wave) | {rytov:.3} (weak fluctuation if ≲ 0.3) |\n\
+         | Long-exposure radius W_LT, theory | {wlt:.2} mm (vacuum w(z) = {wvac:.2} mm) |\n\
+         \n\
+         ## Files\n\
+         \n\
+         - `{out}_turb.gif` — receiver-plane intensity |u(x,y,z={z})|². Each frame is one\n\
+           **independent atmospheric realization**, not a time sequence. Frame spans the\n\
+           full grid, {extent:.3} m per side.\n\
+         - `{out}_xz.gif` — side view: central slice I(x, 0, z), beam travelling left\n\
+           (z = 0) to right (z = {z} m), vertical axis the middle half of the grid\n\
+           ({half_extent:.3} m). One frame per realization.\n\
+         - `{out}_longexp.npy` / `.png` — ensemble-mean receiver intensity (the\n\
+           long-exposure image), float64, same extent as `{out}_turb.gif`.\n\
+         \n\
+         ## Rendering\n\
+         \n\
+         Magma-like colormap (black → purple → orange → light yellow) on\n\
+         t = (I/I_max)^0.5; I_max is the global peak across all frames of a GIF, so\n\
+         brightness differences between frames are physical. Intensity is in units of\n\
+         the initial on-axis peak; no absolute radiometric calibration.\n",
+        n = grid.n,
+        dx = args.dx,
+        extent = grid.extent(),
+        half_extent = grid.extent() / 2.0,
+        wavelength = args.wavelength,
+        w0 = args.w0,
+        zr = beam.rayleigh_range(),
+        dz_screen = z / screens as f64,
+        r0_dx = r0 / args.dx,
+        rytov = rytov_variance(cn2, args.wavelength, z),
+        wlt = beam.long_exposure_width(z, cn2) * 1e3,
+        wvac = beam.width_at(z) * 1e3,
+        out = args.out,
+    );
+    let notes_path = args.out_path(&format!("{}_notes.md", args.out))?;
+    fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
+
     println!(
-        "  wrote {} and {} ({realizations} frames), {} and {}",
+        "  wrote {} and {} ({realizations} frames), {}, {} and {}",
         gif.display(),
         xz_gif.display(),
         npy.display(),
-        png.display()
+        png.display(),
+        notes_path.display()
     );
     Ok(())
 }
 
-/// Delete `.npy`/`.png`/`.gif` files directly inside `dir` (non-recursive).
+/// Delete `.npy`/`.png`/`.gif` files and `*_notes.md` sidecars directly
+/// inside `dir` (non-recursive).
 fn clean(dir: &Path) -> Result<()> {
     if !dir.exists() {
         println!("nothing to clean: {} does not exist", dir.display());
@@ -261,9 +329,12 @@ fn clean(dir: &Path) -> Result<()> {
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         let is_result = path.is_file()
-            && path
+            && (path
                 .extension()
-                .is_some_and(|e| e == "npy" || e == "png" || e == "gif");
+                .is_some_and(|e| e == "npy" || e == "png" || e == "gif")
+                || path
+                    .file_name()
+                    .is_some_and(|f| f.to_string_lossy().ends_with("_notes.md")));
         if is_result {
             fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
             removed += 1;
@@ -355,10 +426,63 @@ fn propagate(
         let drift = (field.power() - p0).abs() / p0;
         println!("  power drift: {drift:.2e}");
     }
+    let extinction_row = match (alpha > 0.0, visibility) {
+        (true, Some(v)) => {
+            format!("| Extinction α (Kruse, visibility {v} m) | {alpha:.4e} 1/m |\n")
+        }
+        (true, None) => format!("| Extinction α | {alpha:.4e} 1/m |\n"),
+        (false, _) => "| Extinction | none (vacuum) |\n".to_string(),
+    };
+    let notes = format!(
+        "# Test case: Gaussian beam free-space / Beer–Lambert propagation\n\
+         \n\
+         Collimated Gaussian beam, symmetric split-step propagation, optionally through\n\
+         a uniform Beer–Lambert extinction (Kruse aerosol model when set via visibility).\n\
+         Models and references: docs/MODELS.md in the beamprop repository.\n\
+         \n\
+         ## Parameters\n\
+         \n\
+         | Quantity | Value |\n\
+         |---|---|\n\
+         | Grid | {n} x {n}, dx = {dx:.3e} m (extent {extent:.3} m) |\n\
+         | Wavelength λ | {wavelength:.3e} m |\n\
+         | Waist w0 (1/e² intensity radius) | {w0:.3e} m |\n\
+         | Rayleigh range zR | {zr:.1} m |\n\
+         | Path length z | {z_total:.1} m ({steps} slabs, dz = {dz:.2} m) |\n\
+         {extinction_row}\
+         \n\
+         ## Files\n\
+         \n\
+         - `{out}_xz.png` — side view: central slice I(x, 0, z), beam travelling left\n\
+           (z = 0) to right (z = {z_total:.1} m), vertical axis the middle half of the\n\
+           grid ({half_extent:.3} m).\n\
+         - `{out}_frame_XXX.png` — transverse intensity snapshots at slab XXX; each\n\
+           spans the full grid, {extent:.3} m per side.\n\
+         - `{out}_final.npy` / `.png` — receiver-plane intensity at z = {z_total:.1} m,\n\
+           float64.\n\
+         \n\
+         ## Rendering\n\
+         \n\
+         Magma-like colormap (black → purple → orange → light yellow) on\n\
+         t = (I/I_max)^0.5, normalized per image. Intensity is in units of the initial\n\
+         on-axis peak; no absolute radiometric calibration.\n",
+        n = grid.n,
+        dx = args.dx,
+        extent = grid.extent(),
+        half_extent = grid.extent() / 2.0,
+        wavelength = args.wavelength,
+        w0 = args.w0,
+        zr = analytic.rayleigh_range(),
+        out = args.out,
+    );
+    let notes_path = args.out_path(&format!("{}_notes.md", args.out))?;
+    fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
+
     println!(
-        "  wrote {}, frames, and {} to {}/",
+        "  wrote {}, frames, {} and {} to {}/",
         xz_png.display(),
         format_args!("{}_final.npy/png", args.out),
+        notes_path.display(),
         args.out_dir.display()
     );
     Ok(())
