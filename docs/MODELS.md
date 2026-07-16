@@ -165,7 +165,9 @@ Intensity images and GIFs use a 6-anchor interpolated approximation of the
 **magma** perceptually-uniform colormap (black → purple → orange → light
 yellow), applied to `t = (I/I_max)^γ` with `γ = 0.5` to lift the dim wings;
 `I_max` is the global peak (across all frames of a GIF), so brightness
-differences between frames are physical. Implemented in `src/viz.rs`.
+differences between frames are physical. Every render carries a colorbar
+strip at its right edge, linear in `I/I_max` from 0 (bottom) to `I_max` (top)
+through the same gamma mapping. Implemented in `src/viz.rs`.
 
 Reference: S. van der Walt, N. Smith, *matplotlib colormaps* (magma),
 <https://bids.github.io/colormap/>.

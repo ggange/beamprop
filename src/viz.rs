@@ -44,24 +44,47 @@ pub fn colormap(t: f64) -> [u8; 3] {
     rgb
 }
 
-/// Render a non-negative array to a colormapped PNG.
+/// Colorbar strip appended to the right edge of every render: width of the
+/// bar and of the separating black gap, in pixels.
+const COLORBAR_W: u32 = 12;
+const COLORBAR_GAP: u32 = 6;
+
+/// Render one frame: the data region plus a right-edge colorbar.
 ///
-/// Values are normalised to `max` (global peak) and gamma-compressed with
+/// Values are normalised to `max` and gamma-compressed with
 /// `t = (v/max)^gamma`; `gamma < 1` lifts the dim wings of a beam into
-/// visibility. `gamma = 0.5` is a good default for intensity.
-pub fn save_colormapped_png(data: &Array2<f64>, gamma: f64, path: impl AsRef<Path>) -> Result<()> {
-    let max = data.iter().copied().fold(0.0_f64, f64::max);
+/// visibility. The colorbar is linear in `v/max` — bottom = 0, top = `max` —
+/// and passes through the same gamma mapping as the data, so it reads as the
+/// image's intensity scale.
+fn render_frame(data: &Array2<f64>, gamma: f64, max: f64) -> image::RgbaImage {
+    use image::Rgba;
     let (ny, nx) = data.dim();
-    let mut img = image::RgbImage::new(nx as u32, ny as u32);
+    let width = nx as u32 + COLORBAR_GAP + COLORBAR_W;
+    let mut img = image::RgbaImage::from_pixel(width, ny as u32, Rgba([0, 0, 0, 255]));
     for ((iy, ix), &v) in data.indexed_iter() {
         let t = if max > 0.0 {
             (v / max).powf(gamma)
         } else {
             0.0
         };
-        img.put_pixel(ix as u32, iy as u32, image::Rgb(colormap(t)));
+        let [r, g, b] = colormap(t);
+        img.put_pixel(ix as u32, iy as u32, Rgba([r, g, b, 255]));
     }
-    img.save(path)?;
+    for iy in 0..ny as u32 {
+        let frac = 1.0 - iy as f64 / (ny as f64 - 1.0).max(1.0);
+        let [r, g, b] = colormap(frac.powf(gamma));
+        for ix in (nx as u32 + COLORBAR_GAP)..width {
+            img.put_pixel(ix, iy, Rgba([r, g, b, 255]));
+        }
+    }
+    img
+}
+
+/// Render a non-negative array to a colormapped PNG (with colorbar),
+/// normalised to its own peak. See [`render_frame`] for the mapping.
+pub fn save_colormapped_png(data: &Array2<f64>, gamma: f64, path: impl AsRef<Path>) -> Result<()> {
+    let max = data.iter().copied().fold(0.0_f64, f64::max);
+    render_frame(data, gamma, max).save(path)?;
     Ok(())
 }
 
@@ -82,7 +105,7 @@ pub fn save_colormapped_gif(
     path: impl AsRef<Path>,
 ) -> Result<()> {
     use image::codecs::gif::{GifEncoder, Repeat};
-    use image::{Delay, Frame, Rgba, RgbaImage};
+    use image::{Delay, Frame};
 
     anyhow::ensure!(!frames.is_empty(), "no frames to encode");
     let max = frames
@@ -94,17 +117,7 @@ pub fn save_colormapped_gif(
     let mut encoder = GifEncoder::new(file);
     encoder.set_repeat(Repeat::Infinite)?;
     for data in frames {
-        let (ny, nx) = data.dim();
-        let mut img = RgbaImage::new(nx as u32, ny as u32);
-        for ((iy, ix), &v) in data.indexed_iter() {
-            let t = if max > 0.0 {
-                (v / max).powf(gamma)
-            } else {
-                0.0
-            };
-            let [r, g, b] = colormap(t);
-            img.put_pixel(ix as u32, iy as u32, Rgba([r, g, b, 255]));
-        }
+        let img = render_frame(data, gamma, max);
         let delay = Delay::from_numer_denom_ms(frame_delay_ms, 1);
         encoder.encode_frame(Frame::from_parts(img, 0, 0, delay))?;
     }
@@ -165,6 +178,22 @@ mod tests {
     fn colormap_endpoints() {
         assert_eq!(colormap(0.0), [0, 0, 4]);
         assert_eq!(colormap(1.0), [252, 253, 191]);
+    }
+
+    #[test]
+    fn render_frame_appends_colorbar() {
+        let data = Array2::from_shape_fn((8, 4), |(iy, _)| iy as f64);
+        let img = render_frame(&data, 0.5, 7.0);
+        assert_eq!(img.width(), 4 + COLORBAR_GAP + COLORBAR_W);
+        assert_eq!(img.height(), 8);
+        // Gap is black; bar spans colormap(0) at the bottom to colormap(1)
+        // at the top (peak).
+        assert_eq!(img.get_pixel(4 + COLORBAR_GAP / 2, 0).0, [0, 0, 0, 255]);
+        let bar_x = 4 + COLORBAR_GAP;
+        let [r, g, b] = colormap(1.0);
+        assert_eq!(img.get_pixel(bar_x, 0).0, [r, g, b, 255]);
+        let [r, g, b] = colormap(0.0);
+        assert_eq!(img.get_pixel(bar_x, 7).0, [r, g, b, 255]);
     }
 
     #[test]

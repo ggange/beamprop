@@ -278,9 +278,10 @@ fn turbulence(
          - `{out}_turb.gif` — receiver-plane intensity |u(x,y,z={z})|². Each frame is one\n\
            **independent atmospheric realization**, not a time sequence. Frame spans the\n\
            full grid, {extent:.3} m per side.\n\
-         - `{out}_xz.gif` — side view: central slice I(x, 0, z), beam travelling left\n\
-           (z = 0) to right (z = {z} m), vertical axis the middle half of the grid\n\
-           ({half_extent:.3} m). One frame per realization.\n\
+         - `{out}_xz.gif` — side view: central slice I(x, 0, z). Horizontal axis is the\n\
+           full path length, z = 0 (left) to z = {z} m (right); vertical axis the middle\n\
+           half of the grid ({half_extent:.3} m) — the axes are **not** to equal scale.\n\
+           One frame per realization.\n\
          - `{out}_longexp.npy` / `.png` — ensemble-mean receiver intensity (the\n\
            long-exposure image), float64, same extent as `{out}_turb.gif`.\n\
          \n\
@@ -288,8 +289,10 @@ fn turbulence(
          \n\
          Magma-like colormap (black → purple → orange → light yellow) on\n\
          t = (I/I_max)^0.5; I_max is the global peak across all frames of a GIF, so\n\
-         brightness differences between frames are physical. Intensity is in units of\n\
-         the initial on-axis peak; no absolute radiometric calibration.\n",
+         brightness differences between frames are physical. The strip at the right\n\
+         edge of every image is the colorbar: linear in I/I_max from 0 (bottom) to\n\
+         I_max (top). Intensity is in units of the initial on-axis peak; no absolute\n\
+         radiometric calibration.\n",
         n = grid.n,
         dx = args.dx,
         extent = grid.extent(),
@@ -453,9 +456,10 @@ fn propagate(
          \n\
          ## Files\n\
          \n\
-         - `{out}_xz.png` — side view: central slice I(x, 0, z), beam travelling left\n\
-           (z = 0) to right (z = {z_total:.1} m), vertical axis the middle half of the\n\
-           grid ({half_extent:.3} m).\n\
+         - `{out}_xz.png` — side view: central slice I(x, 0, z). Horizontal axis is the\n\
+           full path length, z = 0 (left) to z = {z_total:.1} m (right); vertical axis\n\
+           the middle half of the grid ({half_extent:.3} m) — the axes are **not** to\n\
+           equal scale.\n\
          - `{out}_frame_XXX.png` — transverse intensity snapshots at slab XXX; each\n\
            spans the full grid, {extent:.3} m per side.\n\
          - `{out}_final.npy` / `.png` — receiver-plane intensity at z = {z_total:.1} m,\n\
@@ -464,8 +468,10 @@ fn propagate(
          ## Rendering\n\
          \n\
          Magma-like colormap (black → purple → orange → light yellow) on\n\
-         t = (I/I_max)^0.5, normalized per image. Intensity is in units of the initial\n\
-         on-axis peak; no absolute radiometric calibration.\n",
+         t = (I/I_max)^0.5, normalized per image. The strip at the right edge of every\n\
+         image is the colorbar: linear in I/I_max from 0 (bottom) to I_max (top).\n\
+         Intensity is in units of the initial on-axis peak; no absolute radiometric\n\
+         calibration.\n",
         n = grid.n,
         dx = args.dx,
         extent = grid.extent(),
