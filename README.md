@@ -23,7 +23,7 @@ Early, built one validated milestone at a time.
 |-----------|---------|-------|
 | M0 | Crate skeleton, `Field`/`Grid`, `.npy`+PNG output, CI | **done** |
 | M1 | Symmetric split-step propagator through a `Medium` trait, validated: Gaussian evolution & divergence <1%, power conservation ~1e-14, boundary wraparound, 2nd-order convergence, long-throw Fresnel path | **done** |
-| M2 | Beer–Lambert attenuation | planned |
+| M2 | Beer–Lambert attenuation via the `Medium` trait, Kruse visibility model, validated: uniform extinction matches `exp(−α·z)` to ~1e-13, transverse absorber removes exactly the predicted power, `α = 0` bit-identical to vacuum | **done** |
 | M3 | Turbulence phase screens + Monte-Carlo | planned |
 | M4 | Coupled thermal blooming | planned |
 | M5 | Python bindings (PyO3) + wheels | planned |
@@ -39,6 +39,9 @@ cargo run --release -- gaussian --n 512 --dx 1e-3 --w0 5e-2 --out beam
 
 # propagate a beam over 2 Rayleigh ranges and render the side view + frames
 cargo run --release -- propagate --w0 1e-2 --steps 400 --frames 4 --out beam
+
+# same, through a 5 km-visibility haze (Kruse aerosol extinction at the beam wavelength)
+cargo run --release -- propagate --w0 1e-2 --z 200 --visibility 5000 --out hazy
 ```
 
 `beamprop --help` lists all options. Analysis and plotting happen in Python/NumPy against the `.npy` output until the PyO3 bindings arrive at M5.

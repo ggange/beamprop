@@ -190,7 +190,8 @@ impl Propagator {
     }
 
     /// One symmetric split step: diffract `dz/2`, apply the slab's medium
-    /// phase over `dz`, diffract `dz/2`, then apply the absorbing boundary.
+    /// phase (and Beer–Lambert amplitude decay, if the medium is lossy) over
+    /// `dz`, diffract `dz/2`, then apply the absorbing boundary.
     pub fn step(
         &mut self,
         field: &mut Field,
@@ -209,9 +210,30 @@ impl Propagator {
             );
         }
         let k = 2.0 * PI / self.wavelength;
-        Zip::from(&mut field.u).and(&dn).for_each(|u, &d| {
-            *u *= Complex64::from_polar(1.0, k * d * dz);
-        });
+        match medium.extinction(z_slab) {
+            Some(alpha) => {
+                if alpha.dim() != field.u.dim() {
+                    bail!(
+                        "medium returned α of shape {:?}, expected {:?}",
+                        alpha.dim(),
+                        field.u.dim()
+                    );
+                }
+                // α is the power extinction coefficient, so the amplitude
+                // decays at α/2: intensity goes as exp(−α·dz).
+                Zip::from(&mut field.u)
+                    .and(&dn)
+                    .and(&alpha)
+                    .for_each(|u, &d, &a| {
+                        *u *= Complex64::from_polar((-0.5 * a * dz).exp(), k * d * dz);
+                    });
+            }
+            None => {
+                Zip::from(&mut field.u).and(&dn).for_each(|u, &d| {
+                    *u *= Complex64::from_polar(1.0, k * d * dz);
+                });
+            }
+        }
 
         self.diffract(field, dz / 2.0)?;
 

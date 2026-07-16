@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 
 use beamprop::field::Field;
 use beamprop::grid::Grid;
-use beamprop::medium::Vacuum;
+use beamprop::medium::{UniformExtinction, kruse_extinction};
 use beamprop::propagate::{Propagator, beam_width};
 use beamprop::validate::GaussianBeam;
 use beamprop::viz::{XzSliceMap, save_intensity_render};
@@ -47,8 +47,9 @@ enum Cmd {
         #[command(flatten)]
         beam: BeamArgs,
     },
-    /// Propagate a Gaussian beam through vacuum and render the result (M1):
-    /// side-view <out>_xz.png, snapshot frames, final <out>_final.{npy,png}.
+    /// Propagate a Gaussian beam and render the result (M1/M2): side-view
+    /// <out>_xz.png, snapshot frames, final <out>_final.{npy,png}. Lossless
+    /// unless --alpha or --visibility sets a Beer-Lambert extinction.
     Propagate {
         #[command(flatten)]
         beam: BeamArgs,
@@ -61,6 +62,13 @@ enum Cmd {
         /// Number of snapshot frames to render along the path.
         #[arg(long, default_value_t = 5)]
         frames: usize,
+        /// Uniform power extinction coefficient in 1/m (Beer-Lambert).
+        #[arg(long, conflicts_with = "visibility")]
+        alpha: Option<f64>,
+        /// Meteorological visibility in metres; sets alpha via the Kruse
+        /// model at the beam wavelength.
+        #[arg(long)]
+        visibility: Option<f64>,
     },
 }
 
@@ -72,7 +80,9 @@ fn main() -> Result<()> {
             z,
             steps,
             frames,
-        } => propagate(&beam, z, steps, frames),
+            alpha,
+            visibility,
+        } => propagate(&beam, z, steps, frames, alpha, visibility),
     }
 }
 
@@ -94,7 +104,14 @@ fn gaussian(args: &BeamArgs) -> Result<()> {
     Ok(())
 }
 
-fn propagate(args: &BeamArgs, z: Option<f64>, steps: usize, frames: usize) -> Result<()> {
+fn propagate(
+    args: &BeamArgs,
+    z: Option<f64>,
+    steps: usize,
+    frames: usize,
+    alpha: Option<f64>,
+    visibility: Option<f64>,
+) -> Result<()> {
     let grid = Grid::new(args.n, args.dx);
     let analytic = GaussianBeam {
         w0: args.w0,
@@ -103,17 +120,27 @@ fn propagate(args: &BeamArgs, z: Option<f64>, steps: usize, frames: usize) -> Re
     let z_total = z.unwrap_or(2.0 * analytic.rayleigh_range());
     let dz = z_total / steps as f64;
 
+    let alpha = match (alpha, visibility) {
+        (Some(a), _) => a,
+        (None, Some(v)) => {
+            let a = kruse_extinction(args.wavelength, v);
+            println!("visibility {v} m -> alpha = {a:.4e} 1/m (Kruse)");
+            a
+        }
+        (None, None) => 0.0,
+    };
+    let medium = UniformExtinction::new(grid.n, alpha);
+
     let mut field = Field::gaussian(grid, args.wavelength, args.w0);
     let p0 = field.power();
     let mut prop = Propagator::new(grid, args.wavelength)?;
-    let vacuum = Vacuum::new(grid.n);
 
     let frame_every = (steps / frames.max(1)).max(1);
     let mut xz = XzSliceMap::new();
     xz.record(&field);
     save_intensity_render(&field, format!("{}_frame_000.png", args.out))?;
 
-    prop.propagate(&mut field, &vacuum, dz, 0, steps, |i, f| {
+    prop.propagate(&mut field, &medium, dz, 0, steps, |i, f| {
         xz.record(f);
         let step = i + 1;
         if step % frame_every == 0 || step == steps {
@@ -133,7 +160,6 @@ fn propagate(args: &BeamArgs, z: Option<f64>, steps: usize, frames: usize) -> Re
 
     let (wx, _) = beam_width(&field);
     let w_ref = analytic.width_at(z_total);
-    let drift = (field.power() - p0).abs() / p0;
     println!(
         "propagated z = {z_total:.1} m in {steps} steps (dz = {dz:.2} m, zR = {:.1} m)",
         analytic.rayleigh_range()
@@ -144,7 +170,17 @@ fn propagate(args: &BeamArgs, z: Option<f64>, steps: usize, frames: usize) -> Re
         w_ref * 1e3,
         100.0 * (wx - w_ref) / w_ref
     );
-    println!("  power drift: {drift:.2e}");
+    if alpha > 0.0 {
+        let t_num = field.power() / p0;
+        let t_ref = (-alpha * z_total).exp();
+        println!(
+            "  transmission: {t_num:.6e} numeric vs {t_ref:.6e} Beer-Lambert ({:+.2e} rel)",
+            (t_num - t_ref) / t_ref
+        );
+    } else {
+        let drift = (field.power() - p0).abs() / p0;
+        println!("  power drift: {drift:.2e}");
+    }
     println!("  wrote {xz_png}, frames, and {}_final.npy/png", args.out);
     Ok(())
 }

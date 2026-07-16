@@ -1,17 +1,23 @@
-//! M1 validation gate.
+//! M1 + M2 validation gates.
 //!
 //! The contract is explicit that a Gaussian check alone under-tests the
-//! propagator (it is the most forgiving input), so this suite is:
+//! propagator (it is the most forgiving input), so the M1 suite is:
 //! Gaussian-beam accuracy (<1% on width/Rayleigh evolution and far-field
 //! divergence) **plus** power conservation (~1e-13), boundary wraparound,
 //! order-of-accuracy (slope ≈ 2), medium-trait interchangeability, and the
 //! long-throw Fresnel impulse-response path.
+//!
+//! The M2 gate anchors Beer–Lambert extinction to its closed form: uniform
+//! extinction must reproduce `T = exp(−α·z)` to near machine precision
+//! without touching the beam shape, `α = 0` must be bit-identical to vacuum,
+//! and a transversely varying absorber must remove exactly the power its
+//! profile predicts.
 
 use ndarray::Array2;
 
 use beamprop::field::Field;
 use beamprop::grid::Grid;
-use beamprop::medium::{ConstantDeltaN, Medium, Vacuum};
+use beamprop::medium::{ConstantDeltaN, Medium, UniformExtinction, Vacuum};
 use beamprop::propagate::{DiffractionMethod, Propagator, beam_width, centroid};
 use beamprop::validate::{GaussianBeam, observed_order};
 
@@ -365,4 +371,137 @@ fn fresnel_impulse_response_long_throw() {
             "IR fitted width ({w_axis}) at z = {z} m: {w_fit:.6e} vs {w_ref:.6e} ({rel:.2e})"
         );
     }
+}
+
+// ------------------------------------------------------------------------
+// M2 gate: Beer–Lambert attenuation.
+// ------------------------------------------------------------------------
+
+/// M2 headline check: uniform extinction reproduces the closed form
+/// `P(z) = P0·exp(−α·z)` to near machine precision, and — because uniform
+/// loss is a pure scalar factor — the beam still diffracts exactly like the
+/// analytic free-space Gaussian.
+#[test]
+fn beer_lambert_matches_closed_form() {
+    let grid = Grid::new(256, 1e-3);
+    let wavelength = 1e-6;
+    let w0 = 8e-3;
+    let beam = GaussianBeam { w0, wavelength };
+    let alpha = 0.02; // 1/m
+    let z = 50.0; // α·z = 1 → T = 1/e
+
+    let mut field = Field::gaussian(grid, wavelength, w0);
+    let p0 = field.power();
+    let mut prop = Propagator::new(grid, wavelength).unwrap();
+    let medium = UniformExtinction::new(grid.n, alpha);
+    prop.propagate(&mut field, &medium, 1.0, 0, 50, |_, _| {})
+        .unwrap();
+
+    let t_num = field.power() / p0;
+    let t_ref = (-alpha * z).exp();
+    let rel = (t_num - t_ref).abs() / t_ref;
+    assert!(
+        rel < 1e-12,
+        "transmission {t_num:.15e} vs exp(−α·z) = {t_ref:.15e} ({rel:.2e})"
+    );
+
+    // Uniform loss must not touch the shape: width still analytic to <1%.
+    let (wx, wy) = beam_width(&field);
+    let w_ref = beam.width_at(z);
+    for w in [wx, wy] {
+        assert!(
+            (w - w_ref).abs() / w_ref < 0.01,
+            "width under uniform loss: {w:.6e} vs {w_ref:.6e}"
+        );
+    }
+}
+
+/// `α = 0` must be *identical* to vacuum — the lossless path is untouched by
+/// the M2 change.
+#[test]
+fn zero_extinction_matches_vacuum() {
+    let grid = Grid::new(128, 1e-3);
+    let wavelength = 1e-6;
+    let run = |medium: &dyn Medium| {
+        let mut f = Field::gaussian(grid, wavelength, 10e-3);
+        let mut prop = Propagator::new(grid, wavelength).unwrap();
+        prop.propagate(&mut f, medium, 5.0, 0, 20, |_, _| {})
+            .unwrap();
+        f
+    };
+    let vac = run(&Vacuum::new(grid.n));
+    let lossless = run(&UniformExtinction::new(grid.n, 0.0));
+    let max_diff = vac
+        .u
+        .iter()
+        .zip(lossless.u.iter())
+        .map(|(a, b)| (a - b).norm())
+        .fold(0.0, f64::max);
+    assert!(
+        max_diff == 0.0,
+        "UniformExtinction(0) differs from Vacuum by {max_diff:.3e}"
+    );
+}
+
+/// A transversely varying absorber column: `α(x, y) = α0·exp(−r²/(2s²))`.
+struct GaussianAbsorber {
+    grid: Grid,
+    alpha0: f64,
+    sigma: f64,
+}
+
+impl Medium for GaussianAbsorber {
+    fn index_perturbation(&self, _z_slab: usize) -> Array2<f64> {
+        Array2::zeros((self.grid.n, self.grid.n))
+    }
+
+    fn extinction(&self, _z_slab: usize) -> Option<Array2<f64>> {
+        let g = self.grid;
+        Some(Array2::from_shape_fn((g.n, g.n), |(iy, ix)| {
+            let x = g.coord(ix);
+            let y = g.coord(iy);
+            self.alpha0 * (-(x * x + y * y) / (2.0 * self.sigma * self.sigma)).exp()
+        }))
+    }
+}
+
+/// Spatially varying extinction removes exactly the power its profile
+/// predicts: over one thin slab (dz ≪ zR, so diffraction barely moves the
+/// intensity) the surviving power is `Σ I·exp(−α(x,y)·dz)·dx²`.
+#[test]
+fn transverse_extinction_removes_predicted_power() {
+    let grid = Grid::new(256, 1e-3);
+    let wavelength = 1e-6;
+    let w0 = 8e-3; // zR ≈ 201 m ≫ dz
+    let dz = 0.1;
+    let absorber = GaussianAbsorber {
+        grid,
+        alpha0: 5.0, // e^{-0.5} ≈ 0.61 on-axis transmission over the slab
+        sigma: 6e-3,
+    };
+
+    let mut field = Field::gaussian(grid, wavelength, w0);
+    let dx2 = grid.dx * grid.dx;
+    let alpha = absorber.extinction(0).unwrap();
+    let p_expected: f64 = field
+        .intensity()
+        .iter()
+        .zip(alpha.iter())
+        .map(|(&i, &a)| i * (-a * dz).exp() * dx2)
+        .sum();
+
+    let mut prop = Propagator::new(grid, wavelength).unwrap();
+    prop.propagate(&mut field, &absorber, dz, 0, 1, |_, _| {})
+        .unwrap();
+
+    let rel = (field.power() - p_expected).abs() / p_expected;
+    assert!(
+        rel < 1e-6,
+        "power {:.9e} vs predicted {p_expected:.9e} ({rel:.2e})",
+        field.power()
+    );
+
+    // The on-axis absorber is symmetric: the centroid must stay put.
+    let (cx, cy) = centroid(&field);
+    assert!(cx.abs() < grid.dx / 10.0 && cy.abs() < grid.dx / 10.0);
 }
