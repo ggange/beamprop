@@ -3,7 +3,10 @@
 //! The inspection interface until the M5 PyO3 bindings arrive: build a field,
 //! propagate it, dump `.npy` arrays and PNG renders.
 
-use anyhow::Result;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use beamprop::field::Field;
@@ -35,9 +38,21 @@ struct BeamArgs {
     /// Gaussian 1/e² waist radius w0 in metres.
     #[arg(long, default_value_t = 1.0e-2)]
     w0: f64,
-    /// Output basename.
+    /// Output basename (within --out-dir).
     #[arg(long, default_value = "beam")]
     out: String,
+    /// Directory for all generated files; created if missing.
+    #[arg(long, default_value = "out")]
+    out_dir: PathBuf,
+}
+
+impl BeamArgs {
+    /// Ensure the output directory exists and resolve `<out-dir>/<name>`.
+    fn out_path(&self, name: &str) -> Result<PathBuf> {
+        fs::create_dir_all(&self.out_dir)
+            .with_context(|| format!("creating output directory {}", self.out_dir.display()))?;
+        Ok(self.out_dir.join(name))
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -70,6 +85,14 @@ enum Cmd {
         #[arg(long)]
         visibility: Option<f64>,
     },
+    /// Remove generated results (.npy and .png files) from the output
+    /// directory. Only those extensions are touched; other files and the
+    /// directory itself are left alone.
+    Clean {
+        /// Directory to clean.
+        #[arg(long, default_value = "out")]
+        out_dir: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -83,24 +106,47 @@ fn main() -> Result<()> {
             alpha,
             visibility,
         } => propagate(&beam, z, steps, frames, alpha, visibility),
+        Cmd::Clean { out_dir } => clean(&out_dir),
     }
 }
 
 fn gaussian(args: &BeamArgs) -> Result<()> {
     let grid = Grid::new(args.n, args.dx);
     let field = Field::gaussian(grid, args.wavelength, args.w0);
-    let npy = format!("{}.npy", args.out);
-    let png = format!("{}.png", args.out);
+    let npy = args.out_path(&format!("{}.npy", args.out))?;
+    let png = args.out_path(&format!("{}.png", args.out))?;
     field.save_intensity_npy(&npy)?;
     field.save_intensity_png(&png)?;
     println!(
-        "wrote {npy} and {png}  (n={}, dx={} m, lambda={} m, w0={} m, power={:.6})",
+        "wrote {} and {}  (n={}, dx={} m, lambda={} m, w0={} m, power={:.6})",
+        npy.display(),
+        png.display(),
         grid.n,
         grid.dx,
         args.wavelength,
         args.w0,
         field.power()
     );
+    Ok(())
+}
+
+/// Delete `.npy`/`.png` files directly inside `dir` (non-recursive).
+fn clean(dir: &Path) -> Result<()> {
+    if !dir.exists() {
+        println!("nothing to clean: {} does not exist", dir.display());
+        return Ok(());
+    }
+    let mut removed = 0usize;
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        let is_result =
+            path.is_file() && path.extension().is_some_and(|e| e == "npy" || e == "png");
+        if is_result {
+            fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+            removed += 1;
+        }
+    }
+    println!("removed {removed} result file(s) from {}", dir.display());
     Ok(())
 }
 
@@ -138,13 +184,18 @@ fn propagate(
     let frame_every = (steps / frames.max(1)).max(1);
     let mut xz = XzSliceMap::new();
     xz.record(&field);
-    save_intensity_render(&field, format!("{}_frame_000.png", args.out))?;
+    save_intensity_render(
+        &field,
+        args.out_path(&format!("{}_frame_000.png", args.out))?,
+    )?;
 
     prop.propagate(&mut field, &medium, dz, 0, steps, |i, f| {
         xz.record(f);
         let step = i + 1;
-        if step % frame_every == 0 || step == steps {
-            let _ = save_intensity_render(f, format!("{}_frame_{:03}.png", args.out, step));
+        if (step % frame_every == 0 || step == steps)
+            && let Ok(path) = args.out_path(&format!("{}_frame_{:03}.png", args.out, step))
+        {
+            let _ = save_intensity_render(f, path);
         }
     })?;
 
@@ -152,11 +203,11 @@ fn propagate(
     let full = xz.to_array();
     let nx = full.dim().0;
     let cropped = full.slice(ndarray::s![nx / 4..3 * nx / 4, ..]).to_owned();
-    let xz_png = format!("{}_xz.png", args.out);
+    let xz_png = args.out_path(&format!("{}_xz.png", args.out))?;
     beamprop::viz::save_colormapped_png(&cropped, 0.5, &xz_png)?;
 
-    field.save_intensity_npy(format!("{}_final.npy", args.out))?;
-    save_intensity_render(&field, format!("{}_final.png", args.out))?;
+    field.save_intensity_npy(args.out_path(&format!("{}_final.npy", args.out))?)?;
+    save_intensity_render(&field, args.out_path(&format!("{}_final.png", args.out))?)?;
 
     let (wx, _) = beam_width(&field);
     let w_ref = analytic.width_at(z_total);
@@ -181,6 +232,11 @@ fn propagate(
         let drift = (field.power() - p0).abs() / p0;
         println!("  power drift: {drift:.2e}");
     }
-    println!("  wrote {xz_png}, frames, and {}_final.npy/png", args.out);
+    println!(
+        "  wrote {}, frames, and {} to {}/",
+        xz_png.display(),
+        format_args!("{}_final.npy/png", args.out),
+        args.out_dir.display()
+    );
     Ok(())
 }

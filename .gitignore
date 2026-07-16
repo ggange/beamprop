@@ -1,6 +1,7 @@
 /target
 
 # CLI output artifacts
+/out/
 *.npy
 *.png
 !docs/**/*.png

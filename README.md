@@ -34,7 +34,7 @@ Early, built one validated milestone at a time.
 cargo build --release
 cargo test
 
-# write a Gaussian field's intensity to beam.npy and beam.png
+# write a Gaussian field's intensity to out/beam.npy and out/beam.png
 cargo run --release -- gaussian --n 512 --dx 1e-3 --w0 5e-2 --out beam
 
 # propagate a beam over 2 Rayleigh ranges and render the side view + frames
@@ -42,9 +42,12 @@ cargo run --release -- propagate --w0 1e-2 --steps 400 --frames 4 --out beam
 
 # same, through a 5 km-visibility haze (Kruse aerosol extinction at the beam wavelength)
 cargo run --release -- propagate --w0 1e-2 --z 200 --visibility 5000 --out hazy
+
+# remove generated results (.npy/.png in the output directory)
+cargo run --release -- clean
 ```
 
-`beamprop --help` lists all options. Analysis and plotting happen in Python/NumPy against the `.npy` output until the PyO3 bindings arrive at M5.
+All generated files land in `out/` by default (`--out-dir` overrides). `beamprop --help` lists all options. Analysis and plotting happen in Python/NumPy against the `.npy` output until the PyO3 bindings arrive at M5.
 
 ## License
 
