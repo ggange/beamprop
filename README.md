@@ -15,7 +15,7 @@ Four effects stack when a laser crosses air, and `beamprop` aims to model each o
 
 ## Scope
 
-This repository is **pure propagation physics**. It contains no application-specific content — no weapon, comms, or lidar modeling. Those are downstream consumers of the delivered-field output and live in separate projects. What is here has obvious civilian homes: free-space optical communications, lidar, adaptive optics and astronomy, laser machining, and atmospheric science.
+This repository is **pure propagation physics** — how a beam evolves through air. It deliberately contains no application-specific modeling of any kind, and none is planned here. The physics has broad civilian use: free-space optical communications, lidar, adaptive optics and astronomy, laser machining, and atmospheric science.
 
 Every physical effect is anchored to a closed-form solution or a published benchmark **before** the next effect is added. The validation suite is the project's reason to be trusted.
 
