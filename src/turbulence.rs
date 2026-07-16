@@ -373,8 +373,8 @@ mod tests {
             Array2::from_elem((16, 16), 0.3),
             Array2::from_elem((16, 16), -0.7),
         ];
-        let path = TurbulentPath::from_screens(screens.clone(), wavelength, dz_screen)
-            .with_substeps(5);
+        let path =
+            TurbulentPath::from_screens(screens.clone(), wavelength, dz_screen).with_substeps(5);
         assert_eq!(path.n_screens(), 2);
         assert_eq!(path.n_slabs(), 10);
         assert!((path.dz() - 10.0).abs() < 1e-12);
