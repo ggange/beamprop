@@ -86,9 +86,10 @@ enum Cmd {
         visibility: Option<f64>,
     },
     /// Propagate a Gaussian beam through Kolmogorov/von Karman turbulence
-    /// (M3): Monte-Carlo realizations rendered into an animated
-    /// <out>_turb.gif, plus the long-exposure mean <out>_longexp.{npy,png}
-    /// and a comparison against weak-turbulence theory.
+    /// (M3): Monte-Carlo realizations rendered into animated GIFs — receiver
+    /// plane <out>_turb.gif and side view <out>_xz.gif — plus the
+    /// long-exposure mean <out>_longexp.{npy,png} and a comparison against
+    /// weak-turbulence theory.
     Turbulence {
         #[command(flatten)]
         beam: BeamArgs,
@@ -190,17 +191,38 @@ fn turbulence(
         rytov_variance(cn2, args.wavelength, z)
     );
 
-    let frames = seeded_ensemble(realizations, |i| {
-        let path = TurbulentPath::new(grid, args.wavelength, cn2, l0, z, screens, seed, i);
+    // Diffraction-only substeps between screens give the side view a smooth
+    // z-axis (~240 columns) without changing the screen physics.
+    let substeps = (240 / screens).max(1);
+    let results = seeded_ensemble(realizations, |i| {
+        let path = TurbulentPath::new(grid, args.wavelength, cn2, l0, z, screens, seed, i)
+            .with_substeps(substeps);
         let mut field = Field::gaussian(grid, args.wavelength, args.w0);
         let mut prop = Propagator::new(grid, args.wavelength).expect("valid propagator");
-        prop.propagate(&mut field, &path, path.dz(), 0, screens, |_, _| {})
-            .expect("propagation");
-        field.intensity()
+        let mut xz = XzSliceMap::new();
+        xz.record(&field);
+        prop.propagate(&mut field, &path, path.dz(), 0, path.n_slabs(), |_, f| {
+            xz.record(f);
+        })
+        .expect("propagation");
+        (field.intensity(), xz.to_array())
     });
+    let (frames, xz_maps): (Vec<_>, Vec<_>) = results.into_iter().unzip();
 
     let gif = args.out_path(&format!("{}_turb.gif", args.out))?;
     beamprop::viz::save_colormapped_gif(&frames, 0.5, 80, &gif)?;
+
+    // Side view (x-z plane, beam travelling left to right), cropped to the
+    // middle half in x like the `propagate` render.
+    let xz_frames: Vec<_> = xz_maps
+        .iter()
+        .map(|m| {
+            let nx = m.dim().0;
+            m.slice(ndarray::s![nx / 4..3 * nx / 4, ..]).to_owned()
+        })
+        .collect();
+    let xz_gif = args.out_path(&format!("{}_xz.gif", args.out))?;
+    beamprop::viz::save_colormapped_gif(&xz_frames, 0.5, 80, &xz_gif)?;
 
     // Long-exposure (ensemble-mean) receiver intensity.
     let mut mean = ndarray::Array2::<f64>::zeros((grid.n, grid.n));
@@ -220,8 +242,9 @@ fn turbulence(
         beam.width_at(z) * 1e3
     );
     println!(
-        "  wrote {} ({realizations} frames), {} and {}",
+        "  wrote {} and {} ({realizations} frames), {} and {}",
         gif.display(),
+        xz_gif.display(),
         npy.display(),
         png.display()
     );

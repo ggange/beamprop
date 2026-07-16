@@ -43,7 +43,7 @@ cargo run --release -- propagate --w0 1e-2 --steps 400 --frames 4 --out beam
 # same, through a 5 km-visibility haze (Kruse aerosol extinction at the beam wavelength)
 cargo run --release -- propagate --w0 1e-2 --z 200 --visibility 5000 --out hazy
 
-# Monte-Carlo turbulence: animated wandering/scintillating beam GIF + long-exposure mean
+# Monte-Carlo turbulence: animated receiver-plane + side-view GIFs and the long-exposure mean
 cargo run --release -- turbulence --n 256 --dx 2e-3 --w0 1e-2 --z 1000 --cn2 1.5e-14 --out turb
 
 # remove generated results (.npy/.png/.gif in the output directory)

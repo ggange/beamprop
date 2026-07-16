@@ -197,6 +197,9 @@ pub struct TurbulentPath {
     screens: Vec<Array2<f64>>,
     k: f64,
     dz: f64,
+    /// Diffraction-only sub-slabs per screen; the screen phase is applied in
+    /// full at the central sub-slab. 1 = one slab per screen (the default).
+    substeps: usize,
 }
 
 impl TurbulentPath {
@@ -238,29 +241,51 @@ impl TurbulentPath {
             screens,
             k: 2.0 * PI / wavelength,
             dz,
+            substeps: 1,
         }
     }
 
-    /// Number of slabs (= screens) on this path.
+    /// Subdivide each screen slab into `substeps` diffraction-only sub-slabs,
+    /// with the full screen phase applied at the central one. The physics is
+    /// unchanged (each screen still imposes its phase exactly once); the extra
+    /// steps only refine where along z the field is observable — e.g. for a
+    /// smooth side-view rendering. `substeps = 1` is the identity.
+    pub fn with_substeps(mut self, substeps: usize) -> Self {
+        assert!(substeps > 0, "need at least one substep per screen");
+        self.substeps = substeps;
+        self
+    }
+
+    /// Number of screens on this path.
     pub fn n_screens(&self) -> usize {
         self.screens.len()
     }
 
-    /// Slab thickness (m).
+    /// Total number of propagation slabs (screens × substeps).
+    pub fn n_slabs(&self) -> usize {
+        self.screens.len() * self.substeps
+    }
+
+    /// Propagation slab thickness (m): screen spacing / substeps.
     pub fn dz(&self) -> f64 {
-        self.dz
+        self.dz / self.substeps as f64
     }
 }
 
 impl Medium for TurbulentPath {
     fn index_perturbation(&self, z_slab: usize) -> Array2<f64> {
-        let screen = self.screens.get(z_slab).unwrap_or_else(|| {
+        let screen = self.screens.get(z_slab / self.substeps).unwrap_or_else(|| {
             panic!(
-                "slab {z_slab} beyond path of {} screens",
-                self.screens.len()
+                "slab {z_slab} beyond path of {} screens x {} substeps",
+                self.screens.len(),
+                self.substeps
             )
         });
-        let scale = 1.0 / (self.k * self.dz);
+        if z_slab % self.substeps != self.substeps / 2 {
+            // Diffraction-only sub-slab: no medium perturbation.
+            return Array2::zeros(screen.dim());
+        }
+        let scale = 1.0 / (self.k * self.dz());
         screen.mapv(|phi| phi * scale)
     }
 }
@@ -335,6 +360,40 @@ mod tests {
         assert_eq!(dn.dim(), (32, 32));
         // δn·k·dz must reproduce the stored screen phase scale: δn is tiny.
         assert!(dn.iter().all(|v| v.abs() < 1e-3));
+    }
+
+    /// Substeps must not change the total phase a screen imposes: exactly one
+    /// sub-slab carries the screen (scaled to its thinner dz), the rest are
+    /// zero, and slab indices map to the right screen.
+    #[test]
+    fn substeps_preserve_screen_phase() {
+        let (wavelength, dz_screen) = (1e-6, 50.0);
+        let k = 2.0 * PI / wavelength;
+        let screens = vec![
+            Array2::from_elem((16, 16), 0.3),
+            Array2::from_elem((16, 16), -0.7),
+        ];
+        let path = TurbulentPath::from_screens(screens.clone(), wavelength, dz_screen)
+            .with_substeps(5);
+        assert_eq!(path.n_screens(), 2);
+        assert_eq!(path.n_slabs(), 10);
+        assert!((path.dz() - 10.0).abs() < 1e-12);
+
+        for (s, screen) in screens.iter().enumerate() {
+            for sub in 0..5 {
+                let dn = path.index_perturbation(s * 5 + sub);
+                if sub == 2 {
+                    // Central sub-slab: propagator phase k·δn·dz == screen φ.
+                    let phase = dn.mapv(|d| d * k * path.dz());
+                    let max_err = (&phase - screen)
+                        .iter()
+                        .fold(0.0_f64, |m, v| m.max(v.abs()));
+                    assert!(max_err < 1e-12, "screen phase not preserved: {max_err}");
+                } else {
+                    assert!(dn.iter().all(|&v| v == 0.0), "sub-slab {sub} not empty");
+                }
+            }
+        }
     }
 
     #[test]
