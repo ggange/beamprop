@@ -70,6 +70,47 @@ pub fn save_intensity_render(field: &Field, path: impl AsRef<Path>) -> Result<()
     save_colormapped_png(&field.intensity(), 0.5, path)
 }
 
+/// Write a sequence of non-negative frames as a looping colormapped GIF
+/// (the M3 "wandering beam" deliverable, T6).
+///
+/// All frames share one normalisation (the global peak), so brightness
+/// changes across frames are physical, not renormalisation artifacts.
+pub fn save_colormapped_gif(
+    frames: &[Array2<f64>],
+    gamma: f64,
+    frame_delay_ms: u32,
+    path: impl AsRef<Path>,
+) -> Result<()> {
+    use image::codecs::gif::{GifEncoder, Repeat};
+    use image::{Delay, Frame, Rgba, RgbaImage};
+
+    anyhow::ensure!(!frames.is_empty(), "no frames to encode");
+    let max = frames
+        .iter()
+        .flat_map(|f| f.iter().copied())
+        .fold(0.0_f64, f64::max);
+
+    let file = std::fs::File::create(path)?;
+    let mut encoder = GifEncoder::new(file);
+    encoder.set_repeat(Repeat::Infinite)?;
+    for data in frames {
+        let (ny, nx) = data.dim();
+        let mut img = RgbaImage::new(nx as u32, ny as u32);
+        for ((iy, ix), &v) in data.indexed_iter() {
+            let t = if max > 0.0 {
+                (v / max).powf(gamma)
+            } else {
+                0.0
+            };
+            let [r, g, b] = colormap(t);
+            img.put_pixel(ix as u32, iy as u32, Rgba([r, g, b, 255]));
+        }
+        let delay = Delay::from_numer_denom_ms(frame_delay_ms, 1);
+        encoder.encode_frame(Frame::from_parts(img, 0, 0, delay))?;
+    }
+    Ok(())
+}
+
 /// Accumulates the beam's central intensity slice `I(x)` at each z-step into
 /// an `x`–`z` map: the classic side-view of a propagating beam.
 pub struct XzSliceMap {

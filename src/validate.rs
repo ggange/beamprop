@@ -49,6 +49,47 @@ pub fn observed_order(err_h: f64, err_half: f64) -> f64 {
     (err_h / err_half).log2()
 }
 
+// ------------------------------------------------------------------------
+// M3 references: Kolmogorov turbulence statistics (plane-wave forms).
+// ------------------------------------------------------------------------
+
+/// Fried parameter `r0 = (0.423·k²·Cn²·z)^(-3/5)` (m) of a uniform-`Cn²`
+/// plane-wave path of length `z` (m), `cn2` in m^(-2/3).
+pub fn fried_r0(cn2: f64, wavelength: f64, z: f64) -> f64 {
+    let k = 2.0 * PI / wavelength;
+    (0.423 * k * k * cn2 * z).powf(-3.0 / 5.0)
+}
+
+/// Plane-wave Rytov variance `σ_R² = 1.23·Cn²·k^(7/6)·z^(11/6)`.
+///
+/// In weak fluctuation (`σ_R² ≲ 0.3`) this equals the on-axis scintillation
+/// index `σ_I² = ⟨I²⟩/⟨I⟩² − 1` — the M3 scintillation gate.
+pub fn rytov_variance(cn2: f64, wavelength: f64, z: f64) -> f64 {
+    let k = 2.0 * PI / wavelength;
+    1.23 * cn2 * k.powf(7.0 / 6.0) * z.powf(11.0 / 6.0)
+}
+
+/// Kolmogorov phase structure function `D_φ(r) = 6.88·(r/r0)^(5/3)` (rad²) —
+/// what generated phase screens must reproduce for `r` well inside the outer
+/// scale.
+pub fn kolmogorov_structure_function(r: f64, r0: f64) -> f64 {
+    6.88 * (r / r0).powf(5.0 / 3.0)
+}
+
+impl GaussianBeam {
+    /// Long-exposure (ensemble-averaged) beam radius after `z` metres of
+    /// uniform-`Cn²` Kolmogorov turbulence, weak-fluctuation theory
+    /// (Andrews & Phillips): `W_LT = W(z)·√(1 + 1.33·σ_R²·Λ^(5/6))` with
+    /// `Λ = 2z/(k·W(z)²)`. Includes beam wander (long-term average).
+    pub fn long_exposure_width(&self, z: f64, cn2: f64) -> f64 {
+        let k = 2.0 * PI / self.wavelength;
+        let w = self.width_at(z);
+        let lambda_param = 2.0 * z / (k * w * w);
+        let t = 1.33 * rytov_variance(cn2, self.wavelength, z) * lambda_param.powf(5.0 / 6.0);
+        w * (1.0 + t).sqrt()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +129,32 @@ mod tests {
         // e(h) = C·h² → p = 2 exactly
         let p = observed_order(4.0e-3, 1.0e-3);
         assert!((p - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fried_r0_and_rytov_scaling() {
+        let (cn2, wl) = (1e-14, 1e-6);
+        // r0 ∝ z^(-3/5): doubling the path shrinks r0 by 2^(3/5)
+        let ratio = fried_r0(cn2, wl, 1000.0) / fried_r0(cn2, wl, 2000.0);
+        assert!((ratio - 2f64.powf(0.6)).abs() < 1e-12);
+        // σ_R² ∝ z^(11/6)
+        let ratio = rytov_variance(cn2, wl, 2000.0) / rytov_variance(cn2, wl, 1000.0);
+        assert!((ratio - 2f64.powf(11.0 / 6.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn structure_function_at_r0_is_6_88() {
+        assert!((kolmogorov_structure_function(0.05, 0.05) - 6.88).abs() < 1e-12);
+    }
+
+    #[test]
+    fn long_exposure_width_reduces_to_vacuum_without_turbulence() {
+        let b = GaussianBeam {
+            w0: 1e-2,
+            wavelength: 1e-6,
+        };
+        let z = 1000.0;
+        assert!((b.long_exposure_width(z, 0.0) - b.width_at(z)).abs() < 1e-15);
+        assert!(b.long_exposure_width(z, 1e-14) > b.width_at(z));
     }
 }

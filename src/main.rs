@@ -85,7 +85,33 @@ enum Cmd {
         #[arg(long)]
         visibility: Option<f64>,
     },
-    /// Remove generated results (.npy and .png files) from the output
+    /// Propagate a Gaussian beam through Kolmogorov/von Karman turbulence
+    /// (M3): Monte-Carlo realizations rendered into an animated
+    /// <out>_turb.gif, plus the long-exposure mean <out>_longexp.{npy,png}
+    /// and a comparison against weak-turbulence theory.
+    Turbulence {
+        #[command(flatten)]
+        beam: BeamArgs,
+        /// Total propagation distance in metres.
+        #[arg(long, default_value_t = 1000.0)]
+        z: f64,
+        /// Number of phase screens (= split-step slabs).
+        #[arg(long, default_value_t = 10)]
+        screens: usize,
+        /// Refractive-index structure constant Cn^2 in m^(-2/3).
+        #[arg(long, default_value_t = 1.5e-14)]
+        cn2: f64,
+        /// Turbulence outer scale L0 in metres.
+        #[arg(long, default_value_t = 1e3)]
+        l0: f64,
+        /// Number of Monte-Carlo realizations (= GIF frames).
+        #[arg(long, default_value_t = 48)]
+        realizations: usize,
+        /// Master seed for the reproducible screen ensemble.
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+    },
+    /// Remove generated results (.npy, .png, .gif files) from the output
     /// directory. Only those extensions are touched; other files and the
     /// directory itself are left alone.
     Clean {
@@ -106,6 +132,15 @@ fn main() -> Result<()> {
             alpha,
             visibility,
         } => propagate(&beam, z, steps, frames, alpha, visibility),
+        Cmd::Turbulence {
+            beam,
+            z,
+            screens,
+            cn2,
+            l0,
+            realizations,
+            seed,
+        } => turbulence(&beam, z, screens, cn2, l0, realizations, seed),
         Cmd::Clean { out_dir } => clean(&out_dir),
     }
 }
@@ -130,7 +165,70 @@ fn gaussian(args: &BeamArgs) -> Result<()> {
     Ok(())
 }
 
-/// Delete `.npy`/`.png` files directly inside `dir` (non-recursive).
+fn turbulence(
+    args: &BeamArgs,
+    z: f64,
+    screens: usize,
+    cn2: f64,
+    l0: f64,
+    realizations: usize,
+    seed: u64,
+) -> Result<()> {
+    use beamprop::montecarlo::seeded_ensemble;
+    use beamprop::turbulence::TurbulentPath;
+    use beamprop::validate::{fried_r0, rytov_variance};
+
+    let grid = Grid::new(args.n, args.dx);
+    let beam = GaussianBeam {
+        w0: args.w0,
+        wavelength: args.wavelength,
+    };
+    println!(
+        "turbulent path: z = {z} m, {screens} screens, Cn2 = {cn2:.2e} m^-2/3, \
+         r0 = {:.3} m, Rytov sigma_R^2 = {:.3}",
+        fried_r0(cn2, args.wavelength, z),
+        rytov_variance(cn2, args.wavelength, z)
+    );
+
+    let frames = seeded_ensemble(realizations, |i| {
+        let path = TurbulentPath::new(grid, args.wavelength, cn2, l0, z, screens, seed, i);
+        let mut field = Field::gaussian(grid, args.wavelength, args.w0);
+        let mut prop = Propagator::new(grid, args.wavelength).expect("valid propagator");
+        prop.propagate(&mut field, &path, path.dz(), 0, screens, |_, _| {})
+            .expect("propagation");
+        field.intensity()
+    });
+
+    let gif = args.out_path(&format!("{}_turb.gif", args.out))?;
+    beamprop::viz::save_colormapped_gif(&frames, 0.5, 80, &gif)?;
+
+    // Long-exposure (ensemble-mean) receiver intensity.
+    let mut mean = ndarray::Array2::<f64>::zeros((grid.n, grid.n));
+    for f in &frames {
+        mean += f;
+    }
+    mean /= realizations as f64;
+    let npy = args.out_path(&format!("{}_longexp.npy", args.out))?;
+    let png = args.out_path(&format!("{}_longexp.png", args.out))?;
+    ndarray_npy::write_npy(&npy, &mean)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", npy.display()))?;
+    beamprop::viz::save_colormapped_png(&mean, 0.5, &png)?;
+
+    println!(
+        "  long-exposure width (theory): {:.2} mm vs vacuum {:.2} mm",
+        beam.long_exposure_width(z, cn2) * 1e3,
+        beam.width_at(z) * 1e3
+    );
+    println!(
+        "  wrote {} ({realizations} frames), {} and {}",
+        gif.display(),
+        npy.display(),
+        png.display()
+    );
+    Ok(())
+}
+
+/// Delete `.npy`/`.png`/`.gif` files directly inside `dir` (non-recursive).
 fn clean(dir: &Path) -> Result<()> {
     if !dir.exists() {
         println!("nothing to clean: {} does not exist", dir.display());
@@ -139,8 +237,10 @@ fn clean(dir: &Path) -> Result<()> {
     let mut removed = 0usize;
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
-        let is_result =
-            path.is_file() && path.extension().is_some_and(|e| e == "npy" || e == "png");
+        let is_result = path.is_file()
+            && path
+                .extension()
+                .is_some_and(|e| e == "npy" || e == "png" || e == "gif");
         if is_result {
             fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
             removed += 1;

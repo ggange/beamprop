@@ -4,4 +4,5 @@
 /out/
 *.npy
 *.png
+*.gif
 !docs/**/*.png

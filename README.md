@@ -24,7 +24,7 @@ Early, built one validated milestone at a time.
 | M0 | Crate skeleton, `Field`/`Grid`, `.npy`+PNG output, CI | **done** |
 | M1 | Symmetric split-step propagator through a `Medium` trait, validated: Gaussian evolution & divergence <1%, power conservation ~1e-14, boundary wraparound, 2nd-order convergence, long-throw Fresnel path | **done** |
 | M2 | Beer–Lambert attenuation via the `Medium` trait, Kruse visibility model, validated: uniform extinction matches `exp(−α·z)` to ~1e-13, transverse absorber removes exactly the predicted power, `α = 0` bit-identical to vacuum | **done** |
-| M3 | Turbulence phase screens + Monte-Carlo | planned |
+| M3 | Von Kármán phase screens (FFT + subharmonics) + reproducible Monte-Carlo, validated: Kolmogorov structure function <10% over a decade of lags, long-exposure spread 0.5% off Andrews–Phillips, scintillation index 1.6% off Rytov, bitwise thread-count reproducibility | **done** |
 | M4 | Coupled thermal blooming | planned |
 | M5 | Python bindings (PyO3) + wheels | planned |
 
@@ -43,7 +43,10 @@ cargo run --release -- propagate --w0 1e-2 --steps 400 --frames 4 --out beam
 # same, through a 5 km-visibility haze (Kruse aerosol extinction at the beam wavelength)
 cargo run --release -- propagate --w0 1e-2 --z 200 --visibility 5000 --out hazy
 
-# remove generated results (.npy/.png in the output directory)
+# Monte-Carlo turbulence: animated wandering/scintillating beam GIF + long-exposure mean
+cargo run --release -- turbulence --n 256 --dx 2e-3 --w0 1e-2 --z 1000 --cn2 1.5e-14 --out turb
+
+# remove generated results (.npy/.png/.gif in the output directory)
 cargo run --release -- clean
 ```
 

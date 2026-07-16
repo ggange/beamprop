@@ -16,12 +16,20 @@
 //!   [`Medium`](medium::Medium), validated against the analytic
 //!   [`GaussianBeam`](validate::GaussianBeam) plus energy-conservation,
 //!   boundary-wraparound, and order-of-accuracy tests.
-//! - **M2:** Beer–Lambert attenuation. **M3:** turbulence phase screens.
+//! - **M2:** Beer–Lambert attenuation through the same `Medium` trait.
+//! - **M3 (this milestone):** von Kármán
+//!   [turbulence phase screens](turbulence::ScreenGenerator) stacked into a
+//!   [`TurbulentPath`](turbulence::TurbulentPath), with reproducible
+//!   [Monte-Carlo ensembles](montecarlo::seeded_ensemble), validated against
+//!   the Kolmogorov structure function, long-exposure spread, and
+//!   weak-turbulence scintillation.
 //! - **M4:** coupled thermal blooming. **M5:** PyO3 bindings.
 
 pub mod field;
 pub mod grid;
 pub mod medium;
+pub mod montecarlo;
 pub mod propagate;
+pub mod turbulence;
 pub mod validate;
 pub mod viz;
