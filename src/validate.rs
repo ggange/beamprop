@@ -90,9 +90,140 @@ impl GaussianBeam {
     }
 }
 
+// ------------------------------------------------------------------------
+// M4 references: steady-state thermal blooming (crosswind, weak heating).
+// ------------------------------------------------------------------------
+
+/// Error function via Abramowitz & Stegun 7.1.26 (|error| ≤ 1.5·10⁻⁷).
+///
+/// Used by the closed-form blooming reference; `f64::erf` is not in stable
+/// std, and this accuracy is far below the 0.5 % B1 gate.
+pub fn erf(x: f64) -> f64 {
+    let sign = x.signum();
+    let x = x.abs();
+    let t = 1.0 / (1.0 + 0.3275911 * x);
+    let poly = t
+        * (0.254829592
+            + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+    sign * (1.0 - poly * (-x * x).exp())
+}
+
+/// Parameters of a steady-state thermal-blooming case (SI units), collecting
+/// the air state and beam that the closed-form references below need.
+#[derive(Debug, Clone, Copy)]
+pub struct BloomingCase {
+    /// Absorbed-power coefficient α_abs (1/m).
+    pub alpha_abs: f64,
+    /// Total beam power P (W).
+    pub power: f64,
+    /// Gaussian 1/e² intensity radius w (m).
+    pub w: f64,
+    /// Crosswind speed v (m/s), along +x.
+    pub wind: f64,
+    /// Air density ρ (kg/m³).
+    pub rho: f64,
+    /// Isobaric specific heat c_p (J/(kg·K)).
+    pub cp: f64,
+    /// Background refractivity n₀ − 1 (dimensionless).
+    pub n_minus_1: f64,
+    /// Ambient temperature T₀ (K).
+    pub t0: f64,
+    /// Vacuum wavelength λ (m).
+    pub wavelength: f64,
+}
+
+impl BloomingCase {
+    /// On-axis peak intensity of the collimated Gaussian, `I₀ = 2P/(π·w²)`.
+    pub fn peak_intensity(&self) -> f64 {
+        2.0 * self.power / (PI * self.w * self.w)
+    }
+
+    /// Closed-form steady-state temperature rise (K) of a collimated Gaussian
+    /// in uniform crosswind (M4_SPEC B1):
+    /// `ΔT = (α·I₀·w/(ρ·c_p·v))·√(π/8)·exp(−2y²/w²)·(1 + erf(√2·x/w))`.
+    pub fn delta_t_ref(&self, x: f64, y: f64) -> f64 {
+        let i0 = self.peak_intensity();
+        let amp = self.alpha_abs * i0 * self.w / (self.rho * self.cp * self.wind);
+        amp * (PI / 8.0).sqrt()
+            * (-2.0 * y * y / (self.w * self.w)).exp()
+            * (1.0 + erf(std::f64::consts::SQRT_2 * x / self.w))
+    }
+
+    /// Closed-form accumulated blooming phase (rad) of a frozen field over a
+    /// path `path_len` (m): `φ = −k·(n₀−1)/T₀·ΔT·L` (heated air thins).
+    pub fn phase_ref(&self, x: f64, y: f64, path_len: f64) -> f64 {
+        let k = 2.0 * PI / self.wavelength;
+        -k * self.n_minus_1 / self.t0 * self.delta_t_ref(x, y) * path_len
+    }
+
+    /// Peak phase distortion number (M4_SPEC convention):
+    /// `N_φ = √(2/π)·k·(n₀−1)·α·P·L/(T₀·ρ·c_p·v·w)`.
+    pub fn distortion_number(&self, path_len: f64) -> f64 {
+        let k = 2.0 * PI / self.wavelength;
+        (2.0 / PI).sqrt() * k * self.n_minus_1 * self.alpha_abs * self.power * path_len
+            / (self.t0 * self.rho * self.cp * self.wind * self.w)
+    }
+
+    /// Total beam power (W) that yields distortion number `n_phi` over
+    /// `path_len` — the inverse of [`distortion_number`](Self::distortion_number),
+    /// for setting up gates at a target blooming strength.
+    pub fn power_for_distortion(&self, n_phi: f64, path_len: f64) -> f64 {
+        let k = 2.0 * PI / self.wavelength;
+        n_phi * self.t0 * self.rho * self.cp * self.wind * self.w
+            / ((2.0 / PI).sqrt() * k * self.n_minus_1 * self.alpha_abs * path_len)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erf_reference_values() {
+        assert!((erf(0.0)).abs() < 2e-7);
+        assert!((erf(1.0) - 0.8427007929).abs() < 2e-7);
+        assert!((erf(-1.0) + 0.8427007929).abs() < 2e-7);
+        assert!((erf(2.0) - 0.9953222650).abs() < 2e-7);
+        // saturates to ±1
+        assert!((erf(5.0) - 1.0).abs() < 1e-6);
+    }
+
+    fn sample_case() -> BloomingCase {
+        BloomingCase {
+            alpha_abs: 1e-4,
+            power: 1e4,
+            w: 1e-2,
+            wind: 1.0,
+            rho: 1.2,
+            cp: 1005.0,
+            n_minus_1: 2.7e-4,
+            t0: 288.15,
+            wavelength: 1e-6,
+        }
+    }
+
+    #[test]
+    fn delta_t_saturates_downwind_and_is_symmetric_in_y() {
+        let c = sample_case();
+        // Far upwind (x ≪ 0) the integral is ~0; far downwind it saturates to
+        // twice the on-axis half value.
+        let up = c.delta_t_ref(-5.0 * c.w, 0.0);
+        let down = c.delta_t_ref(5.0 * c.w, 0.0);
+        assert!(up < 1e-3 * down, "upwind {up} not ≪ downwind {down}");
+        // y-symmetry
+        assert!((c.delta_t_ref(0.0, c.w) - c.delta_t_ref(0.0, -c.w)).abs() < 1e-18);
+        // heated → δn < 0 via phase sign
+        assert!(c.phase_ref(5.0 * c.w, 0.0, 100.0) < 0.0);
+    }
+
+    #[test]
+    fn distortion_number_inverts() {
+        let c = sample_case();
+        let l = 500.0;
+        let p = c.power_for_distortion(3.0, l);
+        let c2 = BloomingCase { power: p, ..c };
+        assert!((c2.distortion_number(l) - 3.0).abs() < 1e-9);
+    }
 
     #[test]
     fn rayleigh_range_reference_value() {

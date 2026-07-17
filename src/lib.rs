@@ -26,6 +26,8 @@
 //!   weak-turbulence scintillation.
 //! - **M4:** coupled thermal blooming. **M5:** PyO3 bindings.
 
+pub mod airprops;
+pub mod blooming;
 pub mod field;
 pub mod grid;
 pub mod medium;
