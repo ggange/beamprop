@@ -30,7 +30,7 @@ Early, built one validated milestone at a time.
 | M2 | Beer–Lambert attenuation via the `Medium` trait, Kruse visibility model, validated: uniform extinction matches `exp(−α·z)` to ~1e-13, transverse absorber removes exactly the predicted power, `α = 0` bit-identical to vacuum | **done** |
 | M3 | Von Kármán phase screens (FFT + subharmonics) + reproducible Monte-Carlo, validated: Kolmogorov structure function <10% over a decade of lags, long-exposure spread 0.5% off Andrews–Phillips, scintillation index 1.6% off Rytov, bitwise thread-count reproducibility | **done** |
 | M3.5 | M4 pre-spec gate ([docs/M4_SPEC.md](docs/M4_SPEC.md)): fluid model (steady-state isobaric, convection-dominated), slab-local predictor–corrector coupling with a 2nd-order gate, stability/resolution bounds, closed-form anchor benchmark (erf blooming phase) + Gebhardt/Smith trend curve, air-property tabulation pinned (no FFI) | **done** |
-| M4 | Coupled thermal blooming | planned |
+| M4 | Coupled thermal blooming (steady-state isobaric, convection-dominated) through a field-aware `Medium`, frozen air-property table, validated: closed-form erf blooming phase 0.39% max, coupling 2nd-order by self-convergence (slope 2.000), weak-blooming first-order limit 0.008% with quadratic back-reaction residual (ratio 3.65 vs 4), stable at N_φ = 20 with closed power budget, upwind bend + crescent + irradiance-rollover signatures | **done** (Smith-1977 curve overlay pending digitization) |
 | M5 | Python bindings (PyO3) + wheels | planned |
 
 ## Build & run
@@ -50,6 +50,9 @@ cargo run --release -- propagate --w0 1e-2 --z 200 --visibility 5000 --out hazy
 
 # Monte-Carlo turbulence: receiver-plane + side-view frame stacks and the long-exposure mean
 cargo run --release -- turbulence --n 256 --dx 2e-3 --w0 1e-2 --z 1000 --cn2 1.5e-14 --out turb
+
+# thermal blooming: a 20 kW beam heating the air, bending into a 2 m/s crosswind
+cargo run --release -- blooming --w0 5e-2 --power 2e4 --wind 2 --alpha-abs 1e-4 --z 500 --out bloom
 
 # render the images: GIFs/PNGs with physical axes and a labeled colorbar (matplotlib)
 python3 scripts/render.py out/turb

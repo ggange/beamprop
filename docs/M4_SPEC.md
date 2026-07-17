@@ -134,6 +134,20 @@ propagator's verified 2nd order:
 The upwind quadrature `∫ I dx'` is a cumulative sum along wind rows — exact
 for the discretized field, `O(N²)` per slab, negligible next to the FFTs.
 
+**✅ IMPLEMENTATION RECORD (2026-07-17).** The predictor–corrector fell out
+of the existing propagator structure: `step()` already applies the medium
+after the leading `D(dz/2)`, so the field at the medium call *is* the
+slab-centre field — realized as `Medium::index_response(z_slab, intensity,
+dz)` with `needs_intensity()`, no extra FFTs. One subtlety the convergence
+gate caught exactly as designed: the handed-over intensity predates the
+slab's own Beer–Lambert decay, and using it raw makes the heating a
+rectangle rule in *absorbed power* — measured order dropped cleanly to
+1.00. The fix is the half-slab factor `I_mid = |u*|²·e^(−α_abs·dz/2)` in
+`ThermalBlooming::index_response`; measured order after: **2.000 / 2.000**.
+The order gate itself uses **self-convergence** (Cauchy differences between
+successive resolutions), not a fixed fine reference, whose finite fineness
+was found to corrupt the order estimate at the finer test points.
+
 ## Stability and resolution bounds
 
 - **Steady-state advection:** the upwind integral is exact quadrature — no
@@ -206,6 +220,15 @@ receiver-plane on-axis intensity change is **linear in `N_φ`** as `P → 0`.
 with the quadratic residual consistent with `O(N_φ²)`. This is the test
 that the coupling (not just the medium formula) is right.
 
+**✅ OPERATIONALIZED (2026-07-17):** the first-order reference is built
+analytically — per-slab phase screens from the *undisturbed* Gaussian
+(`w(z)` from the M1 closed form, power attenuated `e^(−α_abs·z)`) fed
+through the closed-form ΔT of B1, applied as a linear `Medium`
+(`TurbulentPath::from_screens`). The coupled deficit is normalized by the
+Beer–Lambert transmission so the comparison isolates blooming from plain
+absorption. Measured: coupled vs first-order agreement **0.008 %** at
+`N_φ = 0.1`; back-reaction gap ratio (0.2 vs 0.1) **3.65** (theory 4).
+
 ### B3 — Gebhardt/Smith irradiance curve (magnitude + trend, published)
 
 The classic steady-state result for a collimated Gaussian in crosswind:
@@ -227,6 +250,14 @@ M4 gate becomes B1 + B2 + published-signature checks (qualitative) + a
 cross-code comparison against a modern open wave-optics blooming result,
 and this spec gets amended with the reason — decided now, not renegotiated
 at the finish line.
+
+**⏳ STATUS (2026-07-17):** the qualitative signatures are implemented and
+gated (`tests/blooming.rs::b3_qualitative_signatures`: upwind peak shift,
+downwind crescent, monotone irradiance rollover over `N_φ = 1, 3, 6`). The
+quantitative overlay reads digitized `(N_D, I_rel)` points from
+`tests/data/smith1977_curve.csv` and is `#[ignore]`d until that file exists
+— the paper/curve is being supplied; record the exact source figure here
+when it lands.
 
 ### Stability gate
 

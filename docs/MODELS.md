@@ -159,6 +159,63 @@ counts (gated).
 Reference: D. J. Bernstein, *ChaCha, a variant of Salsa20* (2008); rand /
 rand_chacha crates.
 
+## M4 — Thermal blooming
+
+### Steady-state convection-dominated heating (isobaric)
+
+A high-power beam deposits `α_abs·I` (W/m³) into the air; with crosswind `v`
+along `+x` and Péclet number `Pe = ρ·c_p·v·w/κ_t ≫ 1` (asserted > 100 at
+construction) the CW steady state is the upwind line integral
+
+```text
+ΔT(x, y, z) = (α_abs / (ρ·c_p·v)) · ∫_{−∞}^{x} I(x', y, z) dx'
+δn(x, y, z) = −(n₀ − 1)/T₀ · ΔT     (isobaric: Δρ/ρ₀ = −ΔT/T₀, Gladstone–Dale)
+```
+
+evaluated slab-locally as a trapezoid cumulative sum. Implemented in
+`src/blooming.rs` (`ThermalBlooming`) through the field-aware
+`Medium::index_response` path: the propagator hands over the intensity after
+the leading half-step of diffraction (the slab-centre field), and the medium
+applies the half-slab Beer–Lambert factor `e^(−α_abs·dz/2)` so the heating is
+a midpoint rule in absorbed power — without that factor the coupling
+measurably degrades to 1st order. Ambient `ρ, c_p, κ_t, n₀−1` come from the
+frozen air table (`src/airprops.rs`, embedded `data/air_properties.npy`,
+bilinear in `(T, p)`, refractivity rescaled to the run wavelength by Ciddor
+dispersion). The absorbed power also leaves the beam (`extinction = α_abs`).
+
+Gates (`tests/blooming.rs`):
+- **B1** closed-form crosswind phase (erf profile) reproduced to 0.39 % max
+  over all points with `I > 10⁻⁶·I₀`;
+- coupling order by self-convergence: observed slope **2.000 / 2.000**;
+- **B2** weak-blooming limit vs an analytic first-order (no back-reaction)
+  screen reference, transmission-normalized: 0.008 % agreement at `N_φ = 0.1`,
+  back-reaction residual scaling ratio 3.65 (theory: 4, quadratic);
+- upwind bend sign, strong-blooming (`N_φ = 20`) boundedness with a closed
+  power budget, and the qualitative Smith/Gebhardt signatures (upwind peak
+  shift, downwind crescent, peak-irradiance rollover). The quantitative
+  Smith (1977) curve overlay (±15 %) is pending the digitized figure.
+
+Distortion number (spec convention, reported in run notes):
+
+```text
+N_φ = √(2/π) · k·(n₀−1)·α_abs·P·L / (T₀·ρ·c_p·v·w)
+```
+
+Implemented in `src/validate.rs` (`BloomingCase`: closed-form ΔT/phase
+references, `distortion_number`, A&S 7.1.26 `erf`).
+
+References:
+- D. C. Smith, *High-power laser propagation: Thermal blooming*, Proc. IEEE
+  **65**, 1679–1714 (1977) — steady-state crosswind theory, whole-beam curves.
+- F. G. Gebhardt, *High power laser propagation*, Appl. Opt. **15**,
+  1479–1493 (1976) — scaling laws, distortion-number phenomenology.
+- R. M. Manning, NASA/TM—2012-217634 (2012) — forced-convection heat budget
+  and the closed-form erf thin-screen phase behind B1.
+- P. E. Ciddor, Appl. Opt. **35**, 1566–1573 (1996) — air refractivity and
+  dispersion.
+- E. W. Lemmon et al., J. Phys. Chem. Ref. Data **33**, 111 (2004) — NIST air
+  data gating the property table's `κ_t` (see `docs/M4_SPEC.md`).
+
 ## Rendering (not physics)
 
 The solver writes data only (`.npy` arrays + `_meta.json`/`_notes.md`

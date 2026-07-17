@@ -96,6 +96,7 @@ fn b1_closed_form_blooming_phase() {
             checked += 1;
         }
     }
+    println!("B1 max rel error {max_rel:.2e} over {checked} points");
     assert!(checked > 1000, "B1 sampled too few points ({checked})");
     assert!(
         max_rel < 5e-3,
@@ -284,11 +285,13 @@ fn b2_weak_blooming_linear_limit() {
     assert!(d_lo > 0.0 && f_lo > 0.0, "d_lo={d_lo:.3e}, f_lo={f_lo:.3e}");
     // Coupled ≈ first-order in the weak limit.
     let rel_lo = (d_lo - f_lo).abs() / f_lo;
+    println!("B2 weak-limit deviation {rel_lo:.2e}; deficits d={d_lo:.3e} f={f_lo:.3e}");
     assert!(rel_lo < 0.01, "weak-limit coupled vs first-order {rel_lo:.3e}");
     // The back-reaction gap grows quadratically: gap(0.2)/gap(0.1) ≈ 4.
     let gap_lo = (d_lo - f_lo).abs();
     let gap_hi = (d_hi - f_hi).abs();
     let ratio = gap_hi / gap_lo;
+    println!("B2 back-reaction gap ratio {ratio:.2}");
     assert!(
         (2.5..=6.0).contains(&ratio),
         "back-reaction gap ratio {ratio:.2} (gap_lo={gap_lo:.3e}, gap_hi={gap_hi:.3e})"
