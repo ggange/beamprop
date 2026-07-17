@@ -199,6 +199,7 @@ fn turbulence(
         let path = TurbulentPath::new(grid, args.wavelength, cn2, l0, z, screens, seed, i)
             .with_substeps(substeps);
         let mut field = Field::gaussian(grid, args.wavelength, args.w0);
+        let p0 = field.power();
         let mut prop = Propagator::new(grid, args.wavelength).expect("valid propagator");
         let mut xz = XzSliceMap::new();
         xz.record(&field);
@@ -206,9 +207,17 @@ fn turbulence(
             xz.record(f);
         })
         .expect("propagation");
-        (field.intensity(), xz.to_array())
+        (field.intensity(), xz.to_array(), prop.guard_absorbed() / p0)
     });
-    let (frames, xz_maps): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+    let mut frames = Vec::with_capacity(realizations);
+    let mut xz_maps = Vec::with_capacity(realizations);
+    let mut guard_sum = 0.0;
+    for (frame, xz_map, guard_frac) in results {
+        frames.push(frame);
+        xz_maps.push(xz_map);
+        guard_sum += guard_frac;
+    }
+    let guard_frac_mean = guard_sum / realizations as f64;
 
     // Side view (x-z plane, beam travelling left to right), cropped to the
     // middle half in x.
@@ -267,6 +276,7 @@ fn turbulence(
         beam.long_exposure_width(z, cn2) * 1e3,
         beam.width_at(z) * 1e3
     );
+    println!("  guard-band absorption (ensemble mean): {guard_frac_mean:.2e} of initial power");
 
     let r0 = fried_r0(cn2, args.wavelength, z);
     let notes = format!(
@@ -298,6 +308,7 @@ fn turbulence(
          | Fried parameter r0 (full path) | {r0:.4} m ({r0_dx:.1} grid samples) |\n\
          | Rytov variance σ_R² (plane wave) | {rytov:.3} (weak fluctuation if ≲ 0.3) |\n\
          | Long-exposure radius W_LT, theory | {wlt:.2} mm (vacuum w(z) = {wvac:.2} mm) |\n\
+         | Guard-band absorbed power (ensemble mean) | {guard_frac_mean:.2e} of initial (grid-edge artifact unless ≈ 0) |\n\
          \n\
          ## Files\n\
          \n\
@@ -489,6 +500,8 @@ fn propagate(
         let drift = (field.power() - p0).abs() / p0;
         println!("  power drift: {drift:.2e}");
     }
+    let guard_frac = prop.guard_absorbed() / p0;
+    println!("  guard-band absorption: {guard_frac:.2e} of initial power");
     let extinction_row = match (alpha > 0.0, visibility) {
         (true, Some(v)) => {
             format!("| Extinction α (Kruse, visibility {v} m) | {alpha:.4e} 1/m |\n")
@@ -513,6 +526,7 @@ fn propagate(
          | Rayleigh range zR | {zr:.1} m |\n\
          | Path length z | {z_total:.1} m ({steps} slabs, dz = {dz:.2} m) |\n\
          {extinction_row}\
+         | Guard-band absorbed power | {guard_frac:.2e} of initial (grid-edge artifact unless ≈ 0) |\n\
          \n\
          ## Files\n\
          \n\

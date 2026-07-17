@@ -2,8 +2,10 @@
 
 /// A square `n × n` transverse grid with uniform spacing `dx` (metres).
 ///
-/// Coordinates are centred on zero, so sample `n / 2` sits at the origin. This
-/// is the sampling that the M1 split-step propagator and its FFTs will assume.
+/// Coordinates are centred on zero, so sample `n / 2` sits at the origin.
+/// `n` must be **even**: the centring convention, the central-slice
+/// diagnostics, and the FFT frequency ordering all place the origin at
+/// sample `n / 2` exactly, which an odd grid would shift by half a pixel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grid {
     /// Number of samples per side.
@@ -16,9 +18,10 @@ impl Grid {
     /// Create a grid of `n` samples per side spaced `dx` metres apart.
     ///
     /// # Panics
-    /// Panics if `n == 0` or `dx` is not a positive, finite number.
+    /// Panics if `n` is zero or odd, or `dx` is not a positive, finite number.
     pub fn new(n: usize, dx: f64) -> Self {
         assert!(n > 0, "grid size must be positive");
+        assert!(n.is_multiple_of(2), "grid size must be even (origin sits at n/2)");
         assert!(
             dx > 0.0 && dx.is_finite(),
             "grid spacing must be positive and finite"
@@ -58,6 +61,12 @@ mod tests {
     #[should_panic]
     fn rejects_zero_size() {
         Grid::new(0, 1.0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_odd_size() {
+        Grid::new(65, 1.0);
     }
 
     #[test]

@@ -46,9 +46,12 @@ def make_axes(extent, xlabel, ylabel, aspect):
 
 def save_still(data, extent, xlabel, ylabel, title, path, aspect="equal"):
     """Render a single 2D intensity map, normalized to its own peak."""
+    peak = data.max()
+    if peak <= 0:
+        raise SystemExit(f"cannot render {path}: intensity data is all zero")
     fig, ax = make_axes(extent, xlabel, ylabel, aspect)
     im = ax.imshow(
-        (data / data.max()) ** GAMMA,
+        (data / peak) ** GAMMA,
         origin="lower",
         extent=extent,
         cmap="magma",
@@ -70,7 +73,10 @@ def save_animation(stack, extent, xlabel, ylabel, frame_title, path, fps, aspect
 
     `frame_title(i)` supplies the per-frame title.
     """
-    norm = (stack / stack.max()) ** GAMMA
+    peak = stack.max()
+    if peak <= 0:
+        raise SystemExit(f"cannot render {path}: intensity data is all zero")
+    norm = (stack / peak) ** GAMMA
     fig, ax = make_axes(extent, xlabel, ylabel, aspect)
     im = ax.imshow(
         norm[0],

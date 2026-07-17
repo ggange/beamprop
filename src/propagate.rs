@@ -61,6 +61,7 @@ pub struct Propagator {
     scratch_b: Array2<Complex64>,
     boundary: Array2<f64>,
     apply_boundary: bool,
+    guard_absorbed: f64,
     /// Cached diffraction transfer function, keyed by the dz it was built for.
     cached: Option<(f64, DiffractionMethod, Array2<Complex64>)>,
 }
@@ -80,6 +81,7 @@ impl Propagator {
             scratch_b: Array2::zeros((n, n)),
             boundary: boundary_mask(grid),
             apply_boundary: true,
+            guard_absorbed: 0.0,
             cached: None,
         })
     }
@@ -89,6 +91,16 @@ impl Propagator {
     pub fn without_boundary(mut self) -> Self {
         self.apply_boundary = false;
         self
+    }
+
+    /// Total power absorbed by the guard band so far, accumulated over this
+    /// propagator's lifetime (same units as [`Field::power`]).
+    ///
+    /// In a lossless medium this is exactly the run's power deficit; a
+    /// non-negligible fraction means the beam reached the grid edge and the
+    /// result is contaminated by the finite domain — enlarge the grid.
+    pub fn guard_absorbed(&self) -> f64 {
+        self.guard_absorbed
     }
 
     /// Critical distance `z_c = N·dx²/λ` separating the sampling regimes of
@@ -238,9 +250,11 @@ impl Propagator {
         self.diffract(field, dz / 2.0)?;
 
         if self.apply_boundary {
+            let before = field.power();
             Zip::from(&mut field.u)
                 .and(&self.boundary)
                 .for_each(|u, &m| *u *= m);
+            self.guard_absorbed += before - field.power();
         }
         Ok(())
     }
@@ -374,6 +388,9 @@ fn boundary_mask(grid: Grid) -> Array2<f64> {
 
 /// Second-moment beam widths `(wx, wy)` of the intensity distribution,
 /// defined as `w = 2σ` so that a Gaussian beam's `w` is its `1/e²` radius.
+///
+/// # Panics
+/// Panics on a field with no power (the moments are undefined).
 pub fn beam_width(field: &Field) -> (f64, f64) {
     let inten = field.intensity();
     let g = field.grid;
@@ -384,6 +401,7 @@ pub fn beam_width(field: &Field) -> (f64, f64) {
         mx += p * g.coord(ix);
         my += p * g.coord(iy);
     }
+    assert!(total > 0.0, "beam_width of a field with no power");
     let (cx, cy) = (mx / total, my / total);
     let (mut vx, mut vy) = (0.0, 0.0);
     for ((iy, ix), &p) in inten.indexed_iter() {
@@ -396,6 +414,9 @@ pub fn beam_width(field: &Field) -> (f64, f64) {
 }
 
 /// Intensity centroid `(x̄, ȳ)` in metres.
+///
+/// # Panics
+/// Panics on a field with no power (the centroid is undefined).
 pub fn centroid(field: &Field) -> (f64, f64) {
     let inten = field.intensity();
     let g = field.grid;
@@ -406,6 +427,7 @@ pub fn centroid(field: &Field) -> (f64, f64) {
         mx += p * g.coord(ix);
         my += p * g.coord(iy);
     }
+    assert!(total > 0.0, "centroid of a field with no power");
     (mx / total, my / total)
 }
 

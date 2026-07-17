@@ -46,6 +46,92 @@ impl Medium for GaussianDuct {
     }
 }
 
+/// A linear index gradient (a prism): `δn(x) = g·x`, z-invariant.
+struct Prism {
+    grid: Grid,
+    gradient: f64,
+}
+
+impl Medium for Prism {
+    fn index_perturbation(&self, _z_slab: usize) -> Array2<f64> {
+        let g = self.grid;
+        Array2::from_shape_fn((g.n, g.n), |(_, ix)| self.gradient * g.coord(ix))
+    }
+}
+
+/// Sign gate: the medium phase must bend the beam **toward higher index**,
+/// with the deflection magnitude of geometric optics.
+///
+/// Through `δn(x) = g·x` the paraxial centroid obeys `d²x̄/dz² = g` exactly
+/// (Ehrenfest — diffraction cannot move the centroid of a linear-potential
+/// problem), so `x̄(L) = g·L²/2`, toward +x for `g > 0`. No other test pins
+/// this sign: the order-of-accuracy test converges to its own reference
+/// regardless, and turbulence statistics are sign-symmetric — a global sign
+/// flip in the medium operator would pass everything else and silently invert
+/// every lens (fatal for M4 blooming, where defocus + upwind bend hang on it).
+#[test]
+fn medium_phase_bends_toward_higher_index() {
+    let grid = Grid::new(256, 1e-3);
+    let wavelength = 1e-6;
+    let gradient = 1e-6; // 1/m: deflection g·L²/2 = 20 mm over L = 200 m
+    let z_total = 200.0;
+    let prism = Prism { grid, gradient };
+
+    let mut field = Field::gaussian(grid, wavelength, 8e-3);
+    let mut prop = Propagator::new(grid, wavelength).unwrap();
+    prop.propagate(&mut field, &prism, z_total / 100.0, 0, 100, |_, _| {})
+        .unwrap();
+
+    let (cx, cy) = centroid(&field);
+    let x_ref = gradient * z_total * z_total / 2.0;
+    assert!(
+        cx > 0.0,
+        "beam bent away from higher index (cx = {cx:.3e}): medium phase sign is flipped"
+    );
+    let rel = (cx - x_ref).abs() / x_ref;
+    assert!(
+        rel < 0.02,
+        "prism deflection {cx:.4e} m vs geometric-optics {x_ref:.4e} m ({rel:.2e})"
+    );
+    // The gradient is along x only: no sideways drift.
+    assert!(cy.abs() < grid.dx / 10.0);
+}
+
+/// Sign gate, independent observable: a duct with `δn > 0` on axis is a
+/// converging lens — the beam must end up *narrower* than in vacuum.
+#[test]
+fn positive_index_duct_focuses() {
+    let grid = Grid::new(128, 2e-3);
+    let wavelength = 1e-6;
+    let w0 = 20e-3;
+    let z_total = 400.0;
+    // GaussianDuct applies −amplitude, so a negative amplitude gives the
+    // on-axis δn > 0 of a focusing duct (weak: focal length ≈ 2.3 km ≫ z).
+    let duct = GaussianDuct {
+        grid,
+        amplitude: -1e-9,
+        sigma: 30e-3,
+    };
+
+    let run = |medium: &dyn Medium| {
+        let mut f = Field::gaussian(grid, wavelength, w0);
+        let mut prop = Propagator::new(grid, wavelength).unwrap();
+        prop.propagate(&mut f, medium, z_total / 40.0, 0, 40, |_, _| {})
+            .unwrap();
+        beam_width(&f).0
+    };
+
+    let w_duct = run(&duct);
+    let w_vac = run(&Vacuum::new(grid.n));
+    assert!(
+        w_duct < 0.97 * w_vac,
+        "positive-δn duct did not focus: {w_duct:.4e} m vs vacuum {w_vac:.4e} m \
+         — medium phase sign is flipped"
+    );
+    // Sanity: focusing, not collapse to an under-resolved spot.
+    assert!(w_duct > 0.5 * w_vac);
+}
+
 /// M1 headline check: free-space Gaussian evolution matches the analytic
 /// `w(z) = w0·√(1 + (z/zR)²)` to <1% through the near field, and the
 /// far-field expansion slope matches `θ = λ/(π·w0)` to <1%.
@@ -186,6 +272,14 @@ fn boundary_absorbs_instead_of_wrapping() {
     assert!(
         guarded.power() < 0.99 * p0,
         "beam never reached the boundary; test is vacuous"
+    );
+    // ...and the propagator's ledger accounts for exactly that deficit
+    // (lossless medium: all missing power went into the guard band).
+    let deficit = p0 - guarded.power();
+    let ledger = prop.guard_absorbed();
+    assert!(
+        (ledger - deficit).abs() / deficit < 1e-9,
+        "guard_absorbed {ledger:.6e} vs power deficit {deficit:.6e}"
     );
     // ...nothing re-entered on the far side...
     assert!(
