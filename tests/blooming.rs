@@ -73,7 +73,7 @@ fn b1_closed_form_blooming_phase() {
     .unwrap();
     // dz = 0: no midpoint absorption factor — a pure quadrature gate on the
     // medium's temperature integral against the closed form.
-    let dn = bloom.index_response(0, &field.intensity(), 0.0);
+    let dn = bloom.index_response(0, &field.intensity(), 0.0).unwrap();
 
     let c = case(air, power, w, wind);
     let k = 2.0 * std::f64::consts::PI / WAVELENGTH;
@@ -448,7 +448,17 @@ fn load_smith_curve() -> Option<Vec<SmithPoint>> {
             Some(SmithPoint { n_c, i_rel })
         })
         .collect();
-    (pts.len() >= 2).then_some(pts)
+    if pts.len() < 2 {
+        return None;
+    }
+    // interp_i_rel and the loop's range guard both assume the curve is strictly
+    // ascending in N; enforce it here so a mis-ordered or duplicated row fails
+    // loudly on the ordering rather than silently mis-interpolating.
+    assert!(
+        pts.windows(2).all(|w| w[1].n_c > w[0].n_c),
+        "Smith curve CSV must be strictly ascending in N"
+    );
+    Some(pts)
 }
 
 /// Linear interpolation of the digitized curve at `n_c` (curve ascending in N_c).
@@ -513,12 +523,15 @@ fn b3_smith1977_curve_quantitative() {
 
     let unit = case(air, 1.0, w0, wind);
     let mut worst = 0.0_f64;
+    let mut checked = 0u32;
     // Sample the rollover; all interior to the digitized curve (which ends at
     // N ≈ 1.87) so interpolation is always bracketed — no extrapolation.
-    for &n in &[0.5, 1.0, 1.5, 1.8] {
+    let samples = [0.5, 1.0, 1.5, 1.8];
+    for &n in &samples {
         if n < curve[0].n_c || n > curve[curve.len() - 1].n_c {
             continue;
         }
+        checked += 1;
         let power = unit.power_for_smith_number(n, B3_Z);
         let bloom = ThermalBlooming::new(grid, air, ALPHA_ABS, wind, power, p0, w0, T0).unwrap();
         let mut field = launch.clone();
@@ -538,5 +551,13 @@ fn b3_smith1977_curve_quantitative() {
             "B3 I_REL at N={n:.2}: {i_rel:.3} vs Smith {reference:.3} (off {pct:.1}%)"
         );
     }
+    // Guard against a vacuous pass: if the digitized curve's range ever stops
+    // covering the samples, fail rather than report success with no comparisons.
+    assert!(
+        checked >= 3,
+        "B3 compared only {checked}/{} samples — digitized curve range does not \
+         cover the rollover; the gate would pass vacuously",
+        samples.len()
+    );
     println!("B3 quantitative worst deviation {:.1}% (F₀={B3_F0})", 100.0 * worst);
 }

@@ -117,7 +117,12 @@ impl Medium for ThermalBlooming {
         true
     }
 
-    fn index_response(&self, _z_slab: usize, intensity: &Array2<f64>, dz: f64) -> Array2<f64> {
+    fn index_response(
+        &self,
+        _z_slab: usize,
+        intensity: &Array2<f64>,
+        dz: f64,
+    ) -> Result<Array2<f64>> {
         let (ny, nx) = intensity.dim();
         // The propagator hands over the field before the slab's own
         // Beer–Lambert decay; the physical intensity at the slab midpoint
@@ -148,13 +153,14 @@ impl Medium for ThermalBlooming {
                 prev = cur;
             }
         }
-        assert!(
-            max_delta_t < MAX_DELTA_T_FRAC * self.t0,
-            "thermal-blooming ΔT_max = {max_delta_t:.1} K exceeds {MAX_DELTA_T_FRAC}·T₀ \
-             = {:.1} K: outside the small-perturbation model (lower power or raise wind)",
-            MAX_DELTA_T_FRAC * self.t0
-        );
-        dn
+        if max_delta_t >= MAX_DELTA_T_FRAC * self.t0 {
+            bail!(
+                "thermal-blooming ΔT_max = {max_delta_t:.1} K exceeds {MAX_DELTA_T_FRAC}·T₀ \
+                 = {:.1} K: outside the small-perturbation model (lower power or raise wind)",
+                MAX_DELTA_T_FRAC * self.t0
+            );
+        }
+        Ok(dn)
     }
 
     fn extinction(&self, _z_slab: usize) -> Option<Array2<f64>> {
@@ -211,7 +217,7 @@ mod tests {
             288.15,
         )
         .unwrap();
-        let dn = bloom.index_response(0, &field.intensity(), 0.0);
+        let dn = bloom.index_response(0, &field.intensity(), 0.0).unwrap();
         let mid = grid.n / 2;
         // Heated air thins: δn ≤ 0, and |δn| accumulates toward +x (downwind).
         assert!(dn.iter().all(|&v| v <= 0.0));

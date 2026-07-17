@@ -6,6 +6,7 @@
 //! blooming field (M4) implement the same trait. This interface is fixed at M1
 //! so the later physics needs no propagator rewrite.
 
+use anyhow::Result;
 use ndarray::Array2;
 
 /// A propagation medium, sampled as one `δn(x, y)` field per z-slab.
@@ -48,9 +49,18 @@ pub trait Medium {
     /// half-slab decay (e.g. `e^(−α·dz/2)` on intensity) to stay a midpoint
     /// rule in the absorbed power — skipping this demotes the coupling to 1st
     /// order, which the M4 order gate catches.
-    fn index_response(&self, z_slab: usize, intensity: &Array2<f64>, dz: f64) -> Array2<f64> {
+    ///
+    /// Returns `Err` when the field drives the medium outside its validity
+    /// (e.g. thermal blooming past the small-perturbation `ΔT` ceiling), so the
+    /// propagator can surface a recoverable error rather than aborting.
+    fn index_response(
+        &self,
+        z_slab: usize,
+        intensity: &Array2<f64>,
+        dz: f64,
+    ) -> Result<Array2<f64>> {
         let _ = (intensity, dz);
-        self.index_perturbation(z_slab)
+        Ok(self.index_perturbation(z_slab))
     }
 
     /// Power extinction coefficient `α(x, y)` (1/m) for slab `z_slab`, or
