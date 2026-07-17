@@ -192,21 +192,43 @@ Gates (`tests/blooming.rs`):
   back-reaction residual scaling ratio 3.65 (theory: 4, quadratic);
 - upwind bend sign, strong-blooming (`N_φ = 20`) boundedness with a closed
   power budget, and the qualitative Smith/Gebhardt signatures (upwind peak
-  shift, downwind crescent, peak-irradiance rollover). The quantitative
-  Smith (1977) curve overlay (±15 %) is pending the digitized figure.
+  shift, downwind crescent, peak-irradiance rollover);
+- **B3 quantitative** — the coupled solver reproduces Smith's (1977)
+  whole-beam steady-state peak-irradiance curve `I_REL(N)` along the `F₀ = 5`
+  branch to **10.3 % max** over `N ∈ [0.5, 2]` (rollover minimum at `N ≈ 1`
+  matched to 0.8 %), against the digitized figure in
+  `tests/data/smith1977_F5.csv`. The largest deviation is at `N = 2`, where
+  the wave solver shows a mild diffractive recovery that Smith's flat `F₀ = 5`
+  curve does not (it behaves like a marginally higher effective Fresnel
+  number there); still inside the ±15 % gate.
 
-Distortion number (spec convention, reported in run notes):
+Two distortion numbers appear. The **phase** number (spec convention, reported
+in run notes) measures peak on-axis blooming phase in radians:
 
 ```text
 N_φ = √(2/π) · k·(n₀−1)·α_abs·P·L / (T₀·ρ·c_p·v·w)
 ```
 
-Implemented in `src/validate.rs` (`BloomingCase`: closed-form ΔT/phase
-references, `distortion_number`, A&S 7.1.26 `erf`).
+Smith's **geometrical-optics** number `N_c` (the x-axis of his curves) carries
+no wavenumber — it is a ray-bending measure — with `a = w/√2` the 1/e amplitude
+radius and an absorption path factor that → 1 as `α·z → 0`:
+
+```text
+N_c = (n₀−1)/T₀ · I₀·α·z² / (n₀·ρ·c_p·v·a) · [2/(αz) − 2/(αz)²·(1 − e^(−αz))]
+```
+
+Smith plots against an effective `N = N_c·{path factor with diffraction Q, Ω}`;
+for the B3 sub-Rayleigh geometry (`F₀ = 5` ⟹ `z_R = 5z`, `Q ≤ 1.02`; `αz =
+0.05`) that factor is within a few percent of unity, so `N ≈ N_c` to ≲4 %.
+
+Both implemented in `src/validate.rs` (`BloomingCase`: closed-form ΔT/phase
+references, `distortion_number`, `smith_distortion_number`, A&S 7.1.26 `erf`).
 
 References:
 - D. C. Smith, *High-power laser propagation: Thermal blooming*, Proc. IEEE
-  **65**, 1679–1714 (1977) — steady-state crosswind theory, whole-beam curves.
+  **65**, 1679–1714 (1977) — steady-state crosswind theory, the `N_c`
+  distortion number and the whole-beam `I_REL(N)` curves (B3, F₀ = 5 branch
+  digitized in `tests/data/smith1977_F5.csv`).
 - F. G. Gebhardt, *High power laser propagation*, Appl. Opt. **15**,
   1479–1493 (1976) — scaling laws, distortion-number phenomenology.
 - R. M. Manning, NASA/TM—2012-217634 (2012) — forced-convection heat budget

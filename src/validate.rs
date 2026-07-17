@@ -164,6 +164,45 @@ impl BloomingCase {
             / (self.t0 * self.rho * self.cp * self.wind * self.w)
     }
 
+    /// Smith's (1977) whole-beam *geometrical-optics* distortion number `N_c`
+    /// — the x-axis of his steady-state peak-irradiance curves. Unlike
+    /// [`distortion_number`](Self::distortion_number) it carries **no
+    /// wavenumber** (it is a ray-bending, not a phase, measure):
+    ///
+    /// ```text
+    /// N_c = (−μ_T·I₀·α·z²)/(μ·ρ·c_p·v·a)·[2/(αz) − 2/(αz)²·(1 − e^(−αz))]
+    /// ```
+    ///
+    /// with `−μ_T = (n₀−1)/T₀` (isobaric ∂n/∂T magnitude), `μ = n₀`, `I₀` the
+    /// peak intensity `2P/(π·w²)`, and `a = w/√2` the `1/e` **amplitude** radius
+    /// (Smith's convention; our `w` is the `1/e²` intensity radius). The bracket
+    /// is the absorption-weighted path factor — it → 1 as `α·z → 0` and folds
+    /// in beam attenuation over the path. Used only to place solver runs on
+    /// Smith's published x-axis for the B3 quantitative gate.
+    pub fn smith_distortion_number(&self, path_len: f64) -> f64 {
+        let n0 = 1.0 + self.n_minus_1;
+        let mu_t_neg = self.n_minus_1 / self.t0; // −μ_T = (n₀−1)/T₀ > 0
+        let a = self.w / std::f64::consts::SQRT_2; // 1/e amplitude radius
+        let i0 = self.peak_intensity();
+        let az = self.alpha_abs * path_len;
+        // Absorption path factor; → 1 as αz → 0 (2/(αz)·(1 − (1−e^-az)/(az))).
+        let bracket = 2.0 / az - 2.0 / (az * az) * (1.0 - (-az).exp());
+        mu_t_neg * i0 * self.alpha_abs * path_len * path_len
+            / (n0 * self.rho * self.cp * self.wind * a)
+            * bracket
+    }
+
+    /// Total beam power (W) giving Smith distortion number `n_c` over
+    /// `path_len` — inverse of [`smith_distortion_number`](Self::smith_distortion_number)
+    /// (which is linear in power through `I₀`), for placing runs at target `N_c`.
+    pub fn power_for_smith_number(&self, n_c: f64, path_len: f64) -> f64 {
+        let unit = BloomingCase {
+            power: 1.0,
+            ..*self
+        };
+        n_c / unit.smith_distortion_number(path_len)
+    }
+
     /// Total beam power (W) that yields distortion number `n_phi` over
     /// `path_len` — the inverse of [`distortion_number`](Self::distortion_number),
     /// for setting up gates at a target blooming strength.
@@ -223,6 +262,40 @@ mod tests {
         let p = c.power_for_distortion(3.0, l);
         let c2 = BloomingCase { power: p, ..c };
         assert!((c2.distortion_number(l) - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn smith_number_positive_linear_and_inverts() {
+        let c = sample_case();
+        let l = 500.0;
+        // Positive (blooming) and linear in power.
+        let n1 = c.smith_distortion_number(l);
+        let n2 = BloomingCase { power: 2.0 * c.power, ..c }.smith_distortion_number(l);
+        assert!(n1 > 0.0, "N_c = {n1}");
+        assert!((n2 / n1 - 2.0).abs() < 1e-12, "N_c not linear in power");
+        // Inverse recovers the target.
+        let p = c.power_for_smith_number(2.5, l);
+        let c2 = BloomingCase { power: p, ..c };
+        assert!((c2.smith_distortion_number(l) - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn smith_bracket_matches_thin_path_expansion() {
+        // The absorption path factor expands as
+        //   bracket = 1 − αz/3 + (αz)²/12 − …  (→ 1 as αz → 0).
+        // Check N_c against the no-attenuation limit times this expansion at a
+        // realistic αz (avoiding the catastrophic cancellation of very thin
+        // paths, where 2/(αz)² amplifies the roundoff of 1 − e^(−αz)).
+        let c = BloomingCase { alpha_abs: 1e-5, ..sample_case() }; // αz = 5e-3
+        let l = 500.0;
+        let az = c.alpha_abs * l;
+        let n0 = 1.0 + c.n_minus_1;
+        let a = c.w / std::f64::consts::SQRT_2;
+        let limit = (c.n_minus_1 / c.t0) * c.peak_intensity() * c.alpha_abs * l * l
+            / (n0 * c.rho * c.cp * c.wind * a);
+        let expected = limit * (1.0 - az / 3.0 + az * az / 12.0);
+        let rel = (c.smith_distortion_number(l) - expected).abs() / expected;
+        assert!(rel < 1e-5, "N_c off thin-path expansion by {rel:.2e}");
     }
 
     #[test]

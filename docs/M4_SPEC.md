@@ -251,13 +251,39 @@ cross-code comparison against a modern open wave-optics blooming result,
 and this spec gets amended with the reason — decided now, not renegotiated
 at the finish line.
 
-**⏳ STATUS (2026-07-17):** the qualitative signatures are implemented and
-gated (`tests/blooming.rs::b3_qualitative_signatures`: upwind peak shift,
-downwind crescent, monotone irradiance rollover over `N_φ = 1, 3, 6`). The
-quantitative overlay reads digitized `(N_D, I_rel)` points from
-`tests/data/smith1977_curve.csv` and is `#[ignore]`d until that file exists
-— the paper/curve is being supplied; record the exact source figure here
-when it lands.
+**✅ STATUS (2026-07-17, resolved):** both parts are gated in
+`tests/blooming.rs`. Qualitative: `b3_qualitative_signatures` (upwind peak
+shift, downwind crescent, monotone irradiance rollover over `N_φ = 1, 3, 6`).
+Quantitative: `b3_smith1977_curve_quantitative` reproduces Smith's whole-beam
+`I_REL(N)` curve to **10.3 % max** over `N ∈ [0.5, 2]` (±15 % gate), rollover
+minimum at `N ≈ 1` matched to 0.8 %.
+
+Source figure and convention (as supplied): Smith (1977), the whole-beam
+steady-state top panel `I_REL` vs `N` for `F₀ = k·a²/z₀ ∈ {∞, 20, 10, 5}`; we
+target the **F₀ = 5** dash-dot branch, digitized by eye into
+`tests/data/smith1977_F5.csv` (I_REL uncertainty ~±0.015). Two corrections to
+the original plan, both material:
+
+1. **Axis is Smith's `N`, not our `N_φ`.** The plan assumed a symbolic O(1)
+   conversion from `N_φ`. In fact Smith's abscissa is his *geometrical-optics*
+   number `N_c` (no wavenumber; `a = w/√2` the 1/e amplitude radius), scaled by
+   an effective-path brace `N = N_c·{(2/z²)∫Q⁻¹∫ e^(−αz'')/(ΩQ²)}`. We compute
+   `N` directly from the run via `BloomingCase::smith_distortion_number` rather
+   than converting `N_φ`. We deliberately chose a **sub-Rayleigh** geometry
+   (`F₀ = 5` ⟹ `z_R = 5z`, `Q ≤ 1.02`; `αz = 0.05`) so the brace is within a
+   few percent of the pure absorption bracket — `N ≈ N_c` to ≲4 %, negligible
+   against the ±15 % gate. Matching `F₀` is done by geometry
+   (`w₀ = √(2·F₀·z/k)`), not by rescaling.
+2. **`I_REL` normalization.** Smith's `I_REL = I_bloomed/I_unbloomed` cancels
+   the common Beer–Lambert loss (→ 1 at `N → 0`); our vacuum reference has no
+   absorption, so the test divides the peak ratio by `e^(−αz)` — the same
+   transmission normalization used in B2.
+
+Honest residual: at `N = 2` the wave solver shows a mild diffractive recovery
+(`I_REL` rising 0.757 → 0.827) that Smith's flat `F₀ = 5` curve does not,
+i.e. it reads like a marginally higher effective Fresnel number at the high-N
+end. This is the 10.3 % worst point; the descent and rollover are matched much
+more tightly. The fallback (B1+B2+signatures+cross-code) was **not** needed.
 
 ### Stability gate
 
@@ -272,10 +298,11 @@ finite, power-conserving, `dz`-refinement-consistent).
   by B1's structural check and B3's upwind-shift signature.
 - **Bent beam into the guard band:** silent wraparound — caught by the
   runtime beam-centroid assert.
-- **Convention mismatch in B3:** wrong O(1) factor between our `N_φ` and
-  the paper's `N_D` reads as a uniform horizontal shift of the whole curve
-  — the symbolic conversion in the test plus the B1/B2 tight anchors
-  disambiguate a real physics error from a convention slip.
+- **Convention mismatch in B3:** a wrong factor between our axis and Smith's
+  `N` reads as a uniform horizontal shift of the whole curve. Resolved by
+  computing Smith's `N` (via `N_c`) directly from run parameters rather than
+  rescaling `N_φ`, and by choosing a sub-Rayleigh geometry where `N ≈ N_c`;
+  the B1/B2 tight anchors disambiguate a real physics error from a slip.
 
 ## References
 

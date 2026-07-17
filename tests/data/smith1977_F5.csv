@@ -1,0 +1,23 @@
+# Digitized from D. C. Smith, "High-power laser propagation: Thermal blooming",
+# Proc. IEEE 65(12), 1679-1714 (1977), the F0 = k*a^2/z0 = 5 (dash-dot) curve of
+# the whole-beam steady-state peak-irradiance figure (I_REL vs N, top panel).
+# a = 1/e amplitude radius (= w0/sqrt(2)). N is Smith's effective whole-beam
+# distortion number. I_REL = I_bloomed/I_unbloomed (absorption cancels; ->1 at N->0).
+# Read by eye; I_REL uncertainty ~+/-0.015. First data row is the header.
+N,I_rel
+0.00,1.000
+0.10,0.955
+0.20,0.915
+0.30,0.878
+0.40,0.848
+0.50,0.822
+0.60,0.802
+0.70,0.788
+0.80,0.778
+0.90,0.770
+1.00,0.763
+1.20,0.755
+1.40,0.751
+1.60,0.750
+1.80,0.750
+2.00,0.750

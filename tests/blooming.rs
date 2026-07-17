@@ -405,13 +405,138 @@ fn b3_qualitative_signatures() {
     );
 }
 
-/// B3 quantitative: the digitized Smith 1977 whole-beam steady-state
-/// peak-irradiance curve, ±15 % over N_φ ∈ [1, 10] on our convention.
+/// Which Smith (1977) finite-`F₀` peak-irradiance curve the quantitative gate
+/// compares against. Smith's `F₀ = k·a²/z` is the collimated-beam Fresnel
+/// number (`a = w₀/√2`, the 1/e amplitude radius). We reproduce it by choosing
+/// the run geometry so `F₀` lands exactly on a digitized curve, rather than by
+/// converting our N_φ — Smith's N_c is a *geometrical-optics* number and shares
+/// no wavenumber with N_φ, so it is computed directly per run.
+const B3_F0: f64 = 5.0;
+const B3_Z: f64 = 500.0;
+
+/// Waist `w₀` (1/e² intensity radius) giving the target Fresnel number `B3_F0`
+/// at range `B3_Z`: `F₀ = k·a²/z`, `a = w₀/√2` ⟹ `w₀ = √(2·F₀·z/k)`.
+fn b3_waist() -> f64 {
+    let k = 2.0 * std::f64::consts::PI / WAVELENGTH;
+    (2.0 * B3_F0 * B3_Z / k).sqrt()
+}
+
+/// A digitized (N_c, I_REL) sample of Smith's published curve.
+struct SmithPoint {
+    n_c: f64,
+    i_rel: f64,
+}
+
+/// Load `tests/data/smith1977_F<F0>.csv` — two columns `N_c,I_rel`, one header
+/// line, ascending in N_c. Returns `None` if the file is absent (gate skips).
+fn load_smith_curve() -> Option<Vec<SmithPoint>> {
+    let path = format!(
+        "{}/tests/data/smith1977_F{}.csv",
+        env!("CARGO_MANIFEST_DIR"),
+        B3_F0 as u32
+    );
+    let text = std::fs::read_to_string(path).ok()?;
+    let pts: Vec<SmithPoint> = text
+        .lines()
+        .map(str::trim)
+        // Drop `#` comments, blanks, and any header row (non-numeric first field).
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut c = l.split(',');
+            let n_c = c.next()?.trim().parse().ok()?;
+            let i_rel = c.next()?.trim().parse().ok()?;
+            Some(SmithPoint { n_c, i_rel })
+        })
+        .collect();
+    (pts.len() >= 2).then_some(pts)
+}
+
+/// Linear interpolation of the digitized curve at `n_c` (curve ascending in N_c).
+fn interp_i_rel(curve: &[SmithPoint], n_c: f64) -> f64 {
+    let w = curve
+        .windows(2)
+        .find(|w| n_c >= w[0].n_c && n_c <= w[1].n_c)
+        .expect("N_c outside digitized curve range");
+    let t = (n_c - w[0].n_c) / (w[1].n_c - w[0].n_c);
+    w[0].i_rel + t * (w[1].i_rel - w[0].i_rel)
+}
+
+/// B3 quantitative: the coupled solver reproduces Smith's (1977) whole-beam
+/// steady-state peak-irradiance rollover, `I_REL(N)`, to ±15 % along the
+/// `F₀ = B3_F0` curve.
+///
+/// **x-axis (N).** Smith plots against his effective whole-beam number
+/// `N = N_c·{ (2/z²)∫₀ᶻ Q(z')⁻¹ ∫₀^{z'} e^(−αz'')/(Ω(z'')Q²(z'')) dz'' dz' }`,
+/// where the braces carry absorption (`e^(−αz'')`) and diffractive spreading
+/// (`Q`, `Ω`). We deliberately pick a **sub-Rayleigh** geometry: `F₀ = 5` gives
+/// `z_R = k·a² = 5·z`, so `Q(z) = √(1+(z/z_R)²) ≤ 1.02` across the whole path
+/// and `αz = 0.05`. The brace factor is then within a few percent of the pure
+/// absorption bracket already inside `smith_distortion_number`, so `N ≈ N_c` to
+/// ≲4 % — well under the ±15 % gate. We therefore read the run's N straight
+/// from `BloomingCase::smith_distortion_number`.
+///
+/// **y-axis (I_REL).** Smith's `I_REL = I_bloomed/I_unbloomed` cancels the
+/// common Beer–Lambert loss, so it → 1 at `N → 0`. Our vacuum reference carries
+/// no absorption, so we divide the measured peak ratio by the transmission
+/// `e^(−αz)` to match Smith's normalization (identical to the B2 fix).
 ///
 /// Ignored until the digitized figure is supplied as
-/// `tests/data/smith1977_curve.csv`; enabling it is the final M4 step.
+/// `tests/data/smith1977_F<F0>.csv`; enabling it is the final M4 step.
 #[test]
-#[ignore = "needs tests/data/smith1977_curve.csv from the Smith 1977 figure"]
 fn b3_smith1977_curve_quantitative() {
-    unimplemented!("digitize Smith 1977 peak-irradiance curve → CSV, then gate ±15%");
+    let curve = load_smith_curve()
+        .expect("digitize Smith 1977 F₀ curve into tests/data/smith1977_F<F0>.csv");
+
+    let grid = Grid::new(512, 1e-3);
+    let w0 = b3_waist();
+    let wind = 2.0;
+    let air = standard_air();
+    let steps = 200;
+    let transmission = (-ALPHA_ABS * B3_Z).exp();
+
+    // Bloom-free (vacuum-diffracted) reference peak at the receiver.
+    let launch = Field::gaussian(grid, WAVELENGTH, w0);
+    let p0 = launch.power();
+    let mut vac = launch.clone();
+    let mut prop = Propagator::new(grid, WAVELENGTH).unwrap();
+    prop.propagate(
+        &mut vac,
+        &beamprop::medium::Vacuum::new(grid.n),
+        B3_Z / steps as f64,
+        0,
+        steps,
+        |_, _| {},
+    )
+    .unwrap();
+    let mid = grid.n / 2;
+    let vac_peak = vac.intensity()[[mid, mid]];
+
+    let unit = case(air, 1.0, w0, wind);
+    let mut worst = 0.0_f64;
+    // Sample the rollover; all ≤ 2 (the figure's N range) and interior to the
+    // digitized curve so interpolation is always bracketed.
+    for &n in &[0.5, 1.0, 1.5, 2.0] {
+        if n < curve[0].n_c || n > curve[curve.len() - 1].n_c {
+            continue;
+        }
+        let power = unit.power_for_smith_number(n, B3_Z);
+        let bloom = ThermalBlooming::new(grid, air, ALPHA_ABS, wind, power, p0, w0, T0).unwrap();
+        let mut field = launch.clone();
+        let mut prop = Propagator::new(grid, WAVELENGTH).unwrap();
+        prop.propagate(&mut field, &bloom, B3_Z / steps as f64, 0, steps, |_, _| {})
+            .unwrap();
+        let peak = field.intensity().iter().cloned().fold(0.0_f64, f64::max);
+        // Divide out the common absorption so I_REL isolates blooming (→1 at N→0).
+        let i_rel = peak / (vac_peak * transmission);
+        let reference = interp_i_rel(&curve, n);
+        let rel = (i_rel - reference).abs() / reference;
+        let pct = 100.0 * rel;
+        println!("B3 N={n:.2}: I_REL solver {i_rel:.3} vs Smith {reference:.3} ({pct:.1}%)");
+        worst = worst.max(rel);
+        assert!(
+            rel < 0.15,
+            "B3 I_REL at N={n:.2}: {i_rel:.3} vs Smith {reference:.3} (off {pct:.1}%)"
+        );
+    }
+    println!("B3 quantitative worst deviation {:.1}% (F₀={B3_F0})", 100.0 * worst);
 }
