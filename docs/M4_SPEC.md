@@ -255,13 +255,13 @@ at the finish line.
 `tests/blooming.rs`. Qualitative: `b3_qualitative_signatures` (upwind peak
 shift, downwind crescent, monotone irradiance rollover over `N_φ = 1, 3, 6`).
 Quantitative: `b3_smith1977_curve_quantitative` reproduces Smith's whole-beam
-`I_REL(N)` curve to **10.3 % max** over `N ∈ [0.5, 2]` (±15 % gate), rollover
-minimum at `N ≈ 1` matched to 0.8 %.
+`I_REL(N)` curve to **7.2 % max** over `N ∈ [0.5, 1.8]` (±15 % gate), rollover
+minimum at `N ≈ 1` matched to 0.7 %.
 
 Source figure and convention (as supplied): Smith (1977), the whole-beam
 steady-state top panel `I_REL` vs `N` for `F₀ = k·a²/z₀ ∈ {∞, 20, 10, 5}`; we
-target the **F₀ = 5** dash-dot branch, digitized by eye into
-`tests/data/smith1977_F5.csv` (I_REL uncertainty ~±0.015). Two corrections to
+target the **F₀ = 5** dash-dot branch, WebPlotDigitizer-traced into
+`tests/data/smith1977_F5.csv` (13 points out to N ≈ 1.87). Two corrections to
 the original plan, both material:
 
 1. **Axis is Smith's `N`, not our `N_φ`.** The plan assumed a symbolic O(1)
@@ -279,11 +279,12 @@ the original plan, both material:
    absorption, so the test divides the peak ratio by `e^(−αz)` — the same
    transmission normalization used in B2.
 
-Honest residual: at `N = 2` the wave solver shows a mild diffractive recovery
-(`I_REL` rising 0.757 → 0.827) that Smith's flat `F₀ = 5` curve does not,
-i.e. it reads like a marginally higher effective Fresnel number at the high-N
-end. This is the 10.3 % worst point; the descent and rollover are matched much
-more tightly. The fallback (B1+B2+signatures+cross-code) was **not** needed.
+Honest residual: at the high-N end (`N = 1.8`) the wave solver shows a mild
+diffractive recovery (`I_REL` rising 0.757 → 0.807) that Smith's flat `F₀ = 5`
+curve does not, i.e. it reads like a marginally higher effective Fresnel number
+there. This is the 7.2 % worst point; the descent and rollover are matched much
+more tightly (0.1 %, 0.7 %, 3.0 % at N = 0.5, 1.0, 1.5). The fallback
+(B1+B2+signatures+cross-code) was **not** needed.
 
 ### Stability gate
 

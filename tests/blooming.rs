@@ -513,9 +513,9 @@ fn b3_smith1977_curve_quantitative() {
 
     let unit = case(air, 1.0, w0, wind);
     let mut worst = 0.0_f64;
-    // Sample the rollover; all ≤ 2 (the figure's N range) and interior to the
-    // digitized curve so interpolation is always bracketed.
-    for &n in &[0.5, 1.0, 1.5, 2.0] {
+    // Sample the rollover; all interior to the digitized curve (which ends at
+    // N ≈ 1.87) so interpolation is always bracketed — no extrapolation.
+    for &n in &[0.5, 1.0, 1.5, 1.8] {
         if n < curve[0].n_c || n > curve[curve.len() - 1].n_c {
             continue;
         }

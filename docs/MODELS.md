@@ -195,12 +195,13 @@ Gates (`tests/blooming.rs`):
   shift, downwind crescent, peak-irradiance rollover);
 - **B3 quantitative** — the coupled solver reproduces Smith's (1977)
   whole-beam steady-state peak-irradiance curve `I_REL(N)` along the `F₀ = 5`
-  branch to **10.3 % max** over `N ∈ [0.5, 2]` (rollover minimum at `N ≈ 1`
-  matched to 0.8 %), against the digitized figure in
-  `tests/data/smith1977_F5.csv`. The largest deviation is at `N = 2`, where
-  the wave solver shows a mild diffractive recovery that Smith's flat `F₀ = 5`
-  curve does not (it behaves like a marginally higher effective Fresnel
-  number there); still inside the ±15 % gate.
+  branch to **7.2 % max** over `N ∈ [0.5, 1.8]` (rollover minimum at `N ≈ 1`
+  matched to 0.7 %), against the WebPlotDigitizer trace in
+  `tests/data/smith1977_F5.csv`. The largest deviation is at the high-N end,
+  where the wave solver shows a mild diffractive recovery (`I_REL` rising
+  0.757 → 0.807) that Smith's flat `F₀ = 5` curve does not — it behaves like a
+  marginally higher effective Fresnel number there; still inside the ±15 %
+  gate.
 
 Two distortion numbers appear. The **phase** number (spec convention, reported
 in run notes) measures peak on-axis blooming phase in radians:
