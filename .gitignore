@@ -6,3 +6,5 @@
 *.png
 *.gif
 !docs/**/*.png
+# frozen air-property table (canonical input data, see docs/M4_SPEC.md)
+!data/air_properties.npy
