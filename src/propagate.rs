@@ -176,6 +176,31 @@ impl Propagator {
         Ok(())
     }
 
+    /// Assert the slab phase `k·δn·dz` is transversely resolved: the jump
+    /// between adjacent samples must stay below π, or the diffraction FFT
+    /// aliases the accumulating tilt. Checked only for nonlinear media, whose
+    /// index is not pre-validated by [`check_field`](Self::check_field); the
+    /// x-direction (along the wind, where the blooming integral varies most)
+    /// bounds it.
+    fn check_phase_sampling(&self, dn: &Array2<f64>, k: f64, dz: f64) -> Result<()> {
+        let mut max_jump = 0.0_f64;
+        for row in dn.rows() {
+            for w in row.windows(2) {
+                let jump = (k * (w[1] - w[0]) * dz).abs();
+                if jump > max_jump {
+                    max_jump = jump;
+                }
+            }
+        }
+        if max_jump >= PI {
+            bail!(
+                "blooming phase under-resolved: adjacent-sample jump {max_jump:.3} rad ≥ π; \
+                 shrink dz or refine dx"
+            );
+        }
+        Ok(())
+    }
+
     /// Advance the field by `n_steps` slabs of thickness `dz` through
     /// `medium`, starting at slab `first_slab`. Calls `on_step(slab_index,
     /// field)` after each completed step.
@@ -213,7 +238,15 @@ impl Propagator {
     ) -> Result<()> {
         self.diffract(field, dz / 2.0)?;
 
-        let dn = medium.index_perturbation(z_slab);
+        // The field is now at the slab centre (one half-step of diffraction in).
+        // A field-coupled medium (thermal blooming) forms its index from this
+        // slab-centre intensity — the predictor step that keeps the symmetric
+        // split second-order; linear media ignore the intensity.
+        let dn = if medium.needs_intensity() {
+            medium.index_response(z_slab, &field.intensity())
+        } else {
+            medium.index_perturbation(z_slab)
+        };
         if dn.dim() != field.u.dim() {
             bail!(
                 "medium returned δn of shape {:?}, expected {:?}",
@@ -222,6 +255,12 @@ impl Propagator {
             );
         }
         let k = 2.0 * PI / self.wavelength;
+        // Nonlinear media grow phase along the path; assert the per-slab phase
+        // ramp stays resolved (adjacent-sample jump < π), or diffraction
+        // aliases. Linear screens are pre-validated by check_field.
+        if medium.needs_intensity() {
+            self.check_phase_sampling(&dn, k, dz)?;
+        }
         match medium.extinction(z_slab) {
             Some(alpha) => {
                 if alpha.dim() != field.u.dim() {

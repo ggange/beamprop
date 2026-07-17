@@ -16,7 +16,37 @@ use ndarray::Array2;
 pub trait Medium {
     /// Refractive-index perturbation `δn(x, y)` for slab `z_slab`,
     /// shape `[n, n]` matching the propagation grid.
+    ///
+    /// For a **nonlinear** medium whose index depends on the beam itself (M4
+    /// thermal blooming), this is not enough on its own — see
+    /// [`needs_intensity`](Self::needs_intensity) and
+    /// [`index_response`](Self::index_response). Such a medium may leave this
+    /// method as an unreachable stub.
     fn index_perturbation(&self, z_slab: usize) -> Array2<f64>;
+
+    /// Whether this medium's index depends on the propagating field, so the
+    /// propagator must route through [`index_response`](Self::index_response)
+    /// with the slab-centre intensity rather than call
+    /// [`index_perturbation`](Self::index_perturbation). Linear media (vacuum,
+    /// attenuation, a fixed turbulence screen) leave this `false`.
+    fn needs_intensity(&self) -> bool {
+        false
+    }
+
+    /// Refractive-index perturbation `δn(x, y)` for slab `z_slab` given the
+    /// beam `intensity` (`|u|²`) at the slab centre.
+    ///
+    /// The default ignores the intensity and defers to
+    /// [`index_perturbation`](Self::index_perturbation), so linear media need
+    /// not implement it. A field-coupled medium (thermal blooming) overrides
+    /// this and sets [`needs_intensity`](Self::needs_intensity) to `true`; the
+    /// propagator supplies the field *after* the leading half-step of
+    /// diffraction, i.e. the slab-centre field, which is what keeps the
+    /// symmetric split step second-order.
+    fn index_response(&self, z_slab: usize, intensity: &Array2<f64>) -> Array2<f64> {
+        let _ = intensity;
+        self.index_perturbation(z_slab)
+    }
 
     /// Power extinction coefficient `α(x, y)` (1/m) for slab `z_slab`, or
     /// `None` for a lossless slab (the default).
