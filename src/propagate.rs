@@ -243,7 +243,7 @@ impl Propagator {
         // slab-centre intensity — the predictor step that keeps the symmetric
         // split second-order; linear media ignore the intensity.
         let dn = if medium.needs_intensity() {
-            medium.index_response(z_slab, &field.intensity())
+            medium.index_response(z_slab, &field.intensity(), dz)
         } else {
             medium.index_perturbation(z_slab)
         };

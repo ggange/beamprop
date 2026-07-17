@@ -117,11 +117,17 @@ impl Medium for ThermalBlooming {
         true
     }
 
-    fn index_response(&self, _z_slab: usize, intensity: &Array2<f64>) -> Array2<f64> {
+    fn index_response(&self, _z_slab: usize, intensity: &Array2<f64>, dz: f64) -> Array2<f64> {
         let (ny, nx) = intensity.dim();
+        // The propagator hands over the field before the slab's own
+        // Beer–Lambert decay; the physical intensity at the slab midpoint
+        // carries half a slab of absorption. Without this factor the heating
+        // is a rectangle rule in absorbed power and the coupling drops to
+        // 1st order (caught by the M4 order gate).
+        let midpoint_decay = (-0.5 * self.alpha_abs * dz).exp();
         // δn coefficient combining physical-intensity scaling, the heat
         // integral, and the index drop: δn = −(index·heat·scale)·∫I_arb dx.
-        let coeff = -self.index_coeff * self.heat_coeff * self.intensity_scale;
+        let coeff = -self.index_coeff * self.heat_coeff * self.intensity_scale * midpoint_decay;
         let mut dn = Array2::zeros((ny, nx));
         let mut max_delta_t = 0.0_f64;
         for iy in 0..ny {
@@ -205,7 +211,7 @@ mod tests {
             288.15,
         )
         .unwrap();
-        let dn = bloom.index_response(0, &field.intensity());
+        let dn = bloom.index_response(0, &field.intensity(), 0.0);
         let mid = grid.n / 2;
         // Heated air thins: δn ≤ 0, and |δn| accumulates toward +x (downwind).
         assert!(dn.iter().all(|&v| v <= 0.0));

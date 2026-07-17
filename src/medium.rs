@@ -34,17 +34,22 @@ pub trait Medium {
     }
 
     /// Refractive-index perturbation `δn(x, y)` for slab `z_slab` given the
-    /// beam `intensity` (`|u|²`) at the slab centre.
+    /// beam `intensity` (`|u|²`) at the slab centre and the slab thickness
+    /// `dz` (m).
     ///
-    /// The default ignores the intensity and defers to
+    /// The default ignores both and defers to
     /// [`index_perturbation`](Self::index_perturbation), so linear media need
     /// not implement it. A field-coupled medium (thermal blooming) overrides
     /// this and sets [`needs_intensity`](Self::needs_intensity) to `true`; the
     /// propagator supplies the field *after* the leading half-step of
-    /// diffraction, i.e. the slab-centre field, which is what keeps the
-    /// symmetric split step second-order.
-    fn index_response(&self, z_slab: usize, intensity: &Array2<f64>) -> Array2<f64> {
-        let _ = intensity;
+    /// diffraction — diffractively the slab-centre field — which keeps the
+    /// symmetric split second-order. The field has **not** yet seen the slab's
+    /// own extinction; a lossy nonlinear medium must apply its own
+    /// half-slab decay (e.g. `e^(−α·dz/2)` on intensity) to stay a midpoint
+    /// rule in the absorbed power — skipping this demotes the coupling to 1st
+    /// order, which the M4 order gate catches.
+    fn index_response(&self, z_slab: usize, intensity: &Array2<f64>, dz: f64) -> Array2<f64> {
+        let _ = (intensity, dz);
         self.index_perturbation(z_slab)
     }
 
