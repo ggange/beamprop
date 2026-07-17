@@ -116,6 +116,40 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         seed: u64,
     },
+    /// Propagate a high-power Gaussian beam through steady-state thermal
+    /// blooming (M4): the beam heats the air, the heated air defocuses and
+    /// bends the beam into the wind. Writes the same data family as
+    /// `propagate` (side view, snapshots, final field, sidecars; render with
+    /// `python3 scripts/render.py`).
+    Blooming {
+        #[command(flatten)]
+        beam: BeamArgs,
+        /// Total beam power in watts.
+        #[arg(long, default_value_t = 1e4)]
+        power: f64,
+        /// Crosswind speed in m/s (blows along +x).
+        #[arg(long, default_value_t = 2.0)]
+        wind: f64,
+        /// Absorbed-power coefficient in 1/m (heats the air and depletes the
+        /// beam; scattering is not blooming-active and belongs to M2).
+        #[arg(long, default_value_t = 1e-5)]
+        alpha_abs: f64,
+        /// Ambient temperature in K.
+        #[arg(long, default_value_t = 288.15)]
+        t0: f64,
+        /// Ambient pressure in Pa.
+        #[arg(long, default_value_t = 101_325.0)]
+        p0: f64,
+        /// Total propagation distance in metres.
+        #[arg(long, default_value_t = 500.0)]
+        z: f64,
+        /// Number of split-step slabs.
+        #[arg(long, default_value_t = 200)]
+        steps: usize,
+        /// Number of transverse snapshots to record along the path.
+        #[arg(long, default_value_t = 5)]
+        frames: usize,
+    },
     /// Remove generated results (.npy, .png, .gif files and *_notes.md /
     /// *_meta.json sidecars) from the output directory. Only those are
     /// touched; other files and the directory itself are left alone.
@@ -146,6 +180,17 @@ fn main() -> Result<()> {
             realizations,
             seed,
         } => turbulence(&beam, z, screens, cn2, l0, realizations, seed),
+        Cmd::Blooming {
+            beam,
+            power,
+            wind,
+            alpha_abs,
+            t0,
+            p0,
+            z,
+            steps,
+            frames,
+        } => blooming(&beam, power, wind, alpha_abs, t0, p0, z, steps, frames),
         Cmd::Clean { out_dir } => clean(&out_dir),
     }
 }
@@ -354,6 +399,208 @@ fn turbulence(
         frames_npy.display(),
         xz_npy.display(),
         npy.display(),
+        meta_path.display(),
+        notes_path.display()
+    );
+    println!(
+        "  render images: python3 scripts/render.py {}/{}",
+        args.out_dir.display(),
+        args.out
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blooming(
+    args: &BeamArgs,
+    power: f64,
+    wind: f64,
+    alpha_abs: f64,
+    t0: f64,
+    p0: f64,
+    z_total: f64,
+    steps: usize,
+    frames: usize,
+) -> Result<()> {
+    use beamprop::airprops::AirTable;
+    use beamprop::blooming::ThermalBlooming;
+    use beamprop::validate::BloomingCase;
+
+    let grid = Grid::new(args.n, args.dx);
+    let analytic = GaussianBeam {
+        w0: args.w0,
+        wavelength: args.wavelength,
+    };
+    let air = AirTable::load()?.at(t0, p0, args.wavelength)?;
+    let case = BloomingCase {
+        alpha_abs,
+        power,
+        w: args.w0,
+        wind,
+        rho: air.rho,
+        cp: air.cp,
+        n_minus_1: air.n_minus_1,
+        t0,
+        wavelength: args.wavelength,
+    };
+    let n_phi = case.distortion_number(z_total);
+    let peclet = air.rho * air.cp * wind * args.w0 / air.kappa_t;
+    // Saturated downwind temperature rise of the launch beam (closed form).
+    let delta_t_max = case.delta_t_ref(1e3 * args.w0, 0.0);
+    println!(
+        "thermal blooming: P = {power} W, v = {wind} m/s, alpha_abs = {alpha_abs:.2e} 1/m, \
+         N_phi = {n_phi:.2}, Pe = {peclet:.0}, saturated dT = {delta_t_max:.3} K"
+    );
+
+    let mut field = Field::gaussian(grid, args.wavelength, args.w0);
+    let p_init = field.power();
+    let medium = ThermalBlooming::new(
+        grid,
+        air,
+        alpha_abs,
+        wind,
+        power,
+        p_init,
+        args.w0,
+        t0,
+    )?;
+    let mut prop = Propagator::new(grid, args.wavelength)?;
+
+    let dz = z_total / steps as f64;
+    let frame_every = (steps / frames.max(1)).max(1);
+    let mut xz = XzSliceMap::new();
+    xz.record(&field);
+    let mut snapshots = vec![field.intensity()];
+    let mut snapshot_z = vec![0.0_f64];
+    prop.propagate(&mut field, &medium, dz, 0, steps, |i, f| {
+        xz.record(f);
+        let step = i + 1;
+        if step % frame_every == 0 || step == steps {
+            snapshots.push(f.intensity());
+            snapshot_z.push(step as f64 * dz);
+        }
+    })?;
+
+    // Side view cropped to the middle half in x, as in `propagate`.
+    let full = xz.to_array();
+    let nx = full.dim().0;
+    let cropped = full.slice(ndarray::s![nx / 4..3 * nx / 4, ..]).to_owned();
+    let xz_npy = args.out_path(&format!("{}_xz.npy", args.out))?;
+    ndarray_npy::write_npy(&xz_npy, &cropped)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", xz_npy.display()))?;
+
+    let mut snap_stack = ndarray::Array3::<f64>::zeros((snapshots.len(), grid.n, grid.n));
+    for (i, s) in snapshots.iter().enumerate() {
+        snap_stack.index_axis_mut(ndarray::Axis(0), i).assign(s);
+    }
+    let frames_npy = args.out_path(&format!("{}_frames.npy", args.out))?;
+    ndarray_npy::write_npy(&frames_npy, &snap_stack)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", frames_npy.display()))?;
+    field.save_intensity_npy(args.out_path(&format!("{}_final.npy", args.out))?)?;
+
+    let frames_z = snapshot_z
+        .iter()
+        .map(|z| format!("{z}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let meta = format!(
+        "{{\n  \"case\": \"blooming\",\n  \"n\": {n},\n  \"dx\": {dx},\n  \
+         \"wavelength\": {wl},\n  \"w0\": {w0},\n  \"z\": {z_total},\n  \
+         \"steps\": {steps},\n  \"power\": {power},\n  \"wind\": {wind},\n  \
+         \"alpha_abs\": {alpha_abs},\n  \"t0\": {t0},\n  \"p0\": {p0},\n  \
+         \"n_phi\": {n_phi},\n  \"frames_z\": [{frames_z}],\n  \
+         \"xz_x_min\": {x_min},\n  \"xz_x_max\": {x_max}\n}}\n",
+        n = grid.n,
+        dx = args.dx,
+        wl = args.wavelength,
+        w0 = args.w0,
+        x_min = -grid.extent() / 4.0,
+        x_max = grid.extent() / 4.0,
+    );
+    let meta_path = args.out_path(&format!("{}_meta.json", args.out))?;
+    fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
+
+    let transmission = field.power() / p_init;
+    let t_ref = (-alpha_abs * z_total).exp();
+    let guard_frac = prop.guard_absorbed() / p_init;
+    let (cx, _) = beamprop::propagate::centroid(&field);
+    println!(
+        "  receiver: centroid x = {:.2} mm (negative = upwind), transmission {transmission:.4} \
+         (Beer-Lambert {t_ref:.4}), guard-band absorption {guard_frac:.2e}",
+        cx * 1e3
+    );
+
+    let notes = format!(
+        "# Test case: Gaussian beam through steady-state thermal blooming\n\
+         \n\
+         Collimated Gaussian beam heating the air it crosses: convection-dominated\n\
+         steady state (wind along +x), isobaric density/index response, coupled to the\n\
+         beam through the field-aware medium interface. Models, gates, and references:\n\
+         docs/MODELS.md and docs/M4_SPEC.md in the beamprop repository.\n\
+         \n\
+         ## Parameters\n\
+         \n\
+         | Quantity | Value |\n\
+         |---|---|\n\
+         | Grid | {n} x {n}, dx = {dx:.3e} m (extent {extent:.3} m) |\n\
+         | Wavelength λ | {wavelength:.3e} m |\n\
+         | Waist w0 (1/e² intensity radius) | {w0:.3e} m |\n\
+         | Rayleigh range zR | {zr:.1} m |\n\
+         | Path length z | {z_total:.1} m ({steps} slabs, dz = {dz:.2} m) |\n\
+         | Beam power P | {power:.3e} W |\n\
+         | Crosswind v (+x) | {wind} m/s |\n\
+         | Absorption α_abs | {alpha_abs:.3e} 1/m |\n\
+         | Ambient T₀, p₀ | {t0} K, {p0} Pa |\n\
+         \n\
+         ## Derived quantities\n\
+         \n\
+         | Quantity | Value |\n\
+         |---|---|\n\
+         | Distortion number N_φ | {n_phi:.2} (spec convention, docs/M4_SPEC.md) |\n\
+         | Péclet number | {peclet:.0} (convection-dominated model needs ≫ 100) |\n\
+         | Saturated downwind ΔT (launch beam) | {delta_t_max:.3} K |\n\
+         | Receiver centroid x | {cx_mm:.2} mm (negative = bent upwind) |\n\
+         | Transmission | {transmission:.4} (Beer–Lambert {t_ref:.4}) |\n\
+         | Guard-band absorbed power | {guard_frac:.2e} of initial (grid-edge artifact unless ≈ 0) |\n\
+         \n\
+         ## Files\n\
+         \n\
+         - `{out}_xz.npy` — side view: central slice I(x, 0, z), float64. First axis is\n\
+           x over the middle half of the grid ({half_extent:.3} m), second axis is z\n\
+           from 0 to {z_total:.1} m. The beam visibly bends toward −x (upwind).\n\
+         - `{out}_frames.npy` — transverse intensity snapshots along the path (z\n\
+           positions in `{out}_meta.json`); each spans the full grid, {extent:.3} m per\n\
+           side.\n\
+         - `{out}_final.npy` — receiver-plane intensity at z = {z_total:.1} m: the\n\
+           bloomed profile (upwind-shifted peak, downwind crescent).\n\
+         - `{out}_meta.json` — the run parameters.\n\
+         \n\
+         ## Rendering\n\
+         \n\
+         The solver writes data only. `python3 scripts/render.py <out-dir>/{out}`\n\
+         renders the side view `{out}_xz.png` (note: axes not to equal scale), the\n\
+         snapshot animation `{out}_prop.gif`, and `{out}_final.png`, with physical\n\
+         axes and a colorbar in I/I_max (magma colormap on (I/I_max)^0.5 to lift the\n\
+         dim wings). Intensity is in units of the initial on-axis peak; no absolute\n\
+         radiometric calibration.\n",
+        n = grid.n,
+        dx = args.dx,
+        extent = grid.extent(),
+        half_extent = grid.extent() / 2.0,
+        wavelength = args.wavelength,
+        w0 = args.w0,
+        zr = analytic.rayleigh_range(),
+        cx_mm = cx * 1e3,
+        out = args.out,
+    );
+    let notes_path = args.out_path(&format!("{}_notes.md", args.out))?;
+    fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
+
+    println!(
+        "  wrote {}, {}, {}, {} and {}",
+        xz_npy.display(),
+        frames_npy.display(),
+        format_args!("{}/{}_final.npy", args.out_dir.display(), args.out),
         meta_path.display(),
         notes_path.display()
     );

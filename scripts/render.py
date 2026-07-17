@@ -147,12 +147,20 @@ def render_turbulence(base, meta, fps):
 
 def render_propagate(base, meta, fps):
     half = meta["n"] * meta["dx"] / 2.0
-    alpha = meta["alpha"]
-    extinction = f", $\\alpha$ = {alpha:.2g} m$^{{-1}}$" if alpha > 0.0 else ""
-    params = (
-        f"z = {meta['z']:g} m, $\\lambda$ = {meta['wavelength']:.2g} m, "
-        f"$w_0$ = {meta['w0']:.2g} m{extinction}"
-    )
+    if meta["case"] == "blooming":
+        params = (
+            f"P = {meta['power']:g} W, v = {meta['wind']:g} m/s, "
+            f"$\\alpha_{{abs}}$ = {meta['alpha_abs']:.2g} m$^{{-1}}$, "
+            f"$N_\\varphi$ = {meta['n_phi']:.2f}, z = {meta['z']:g} m, "
+            f"$w_0$ = {meta['w0']:.2g} m"
+        )
+    else:
+        alpha = meta["alpha"]
+        extinction = f", $\\alpha$ = {alpha:.2g} m$^{{-1}}$" if alpha > 0.0 else ""
+        params = (
+            f"z = {meta['z']:g} m, $\\lambda$ = {meta['wavelength']:.2g} m, "
+            f"$w_0$ = {meta['w0']:.2g} m{extinction}"
+        )
 
     xz = np.load(base.parent / f"{base.name}_xz.npy")
     save_still(
@@ -199,7 +207,7 @@ def main():
     case = meta.get("case")
     if case == "turbulence":
         render_turbulence(base, meta, args.fps)
-    elif case == "propagate":
+    elif case in ("propagate", "blooming"):
         render_propagate(base, meta, args.fps)
     else:
         raise SystemExit(f"unknown case {case!r} in {base}_meta.json")
