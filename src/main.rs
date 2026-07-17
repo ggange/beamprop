@@ -454,16 +454,7 @@ fn blooming(
 
     let mut field = Field::gaussian(grid, args.wavelength, args.w0);
     let p_init = field.power();
-    let medium = ThermalBlooming::new(
-        grid,
-        air,
-        alpha_abs,
-        wind,
-        power,
-        p_init,
-        args.w0,
-        t0,
-    )?;
+    let medium = ThermalBlooming::new(grid, air, alpha_abs, wind, power, p_init, args.w0, t0)?;
     let mut prop = Propagator::new(grid, args.wavelength)?;
 
     let dz = z_total / steps as f64;

@@ -21,7 +21,10 @@ impl Grid {
     /// Panics if `n` is zero or odd, or `dx` is not a positive, finite number.
     pub fn new(n: usize, dx: f64) -> Self {
         assert!(n > 0, "grid size must be positive");
-        assert!(n.is_multiple_of(2), "grid size must be even (origin sits at n/2)");
+        assert!(
+            n.is_multiple_of(2),
+            "grid size must be even (origin sits at n/2)"
+        );
         assert!(
             dx > 0.0 && dx.is_finite(),
             "grid spacing must be positive and finite"

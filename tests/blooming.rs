@@ -60,17 +60,8 @@ fn b1_closed_form_blooming_phase() {
     let air = standard_air();
 
     let field = Field::gaussian(grid, WAVELENGTH, w);
-    let bloom = ThermalBlooming::new(
-        grid,
-        air,
-        ALPHA_ABS,
-        wind,
-        power,
-        field.power(),
-        w,
-        T0,
-    )
-    .unwrap();
+    let bloom =
+        ThermalBlooming::new(grid, air, ALPHA_ABS, wind, power, field.power(), w, T0).unwrap();
     // dz = 0: no midpoint absorption factor — a pure quadrature gate on the
     // medium's temperature integral against the closed form.
     let dn = bloom.index_response(0, &field.intensity(), 0.0).unwrap();
@@ -147,8 +138,15 @@ impl Setup {
         )
         .unwrap();
         let mut prop = Propagator::new(self.grid, WAVELENGTH).unwrap();
-        prop.propagate(&mut field, &bloom, self.z / steps as f64, 0, steps, |_, _| {})
-            .unwrap();
+        prop.propagate(
+            &mut field,
+            &bloom,
+            self.z / steps as f64,
+            0,
+            steps,
+            |_, _| {},
+        )
+        .unwrap();
         field
     }
 }
@@ -286,7 +284,10 @@ fn b2_weak_blooming_linear_limit() {
     // Coupled ≈ first-order in the weak limit.
     let rel_lo = (d_lo - f_lo).abs() / f_lo;
     println!("B2 weak-limit deviation {rel_lo:.2e}; deficits d={d_lo:.3e} f={f_lo:.3e}");
-    assert!(rel_lo < 0.01, "weak-limit coupled vs first-order {rel_lo:.3e}");
+    assert!(
+        rel_lo < 0.01,
+        "weak-limit coupled vs first-order {rel_lo:.3e}"
+    );
     // The back-reaction gap grows quadratically: gap(0.2)/gap(0.1) ≈ 4.
     let gap_lo = (d_lo - f_lo).abs();
     let gap_hi = (d_hi - f_hi).abs();
@@ -308,15 +309,16 @@ fn strong_blooming_is_stable() {
 
     let mut field = Field::gaussian(s.grid, WAVELENGTH, s.w0);
     let p0 = field.power();
-    let bloom = ThermalBlooming::new(
-        s.grid, s.air, ALPHA_ABS, s.wind, power, p0, s.w0, T0,
-    )
-    .unwrap();
+    let bloom =
+        ThermalBlooming::new(s.grid, s.air, ALPHA_ABS, s.wind, power, p0, s.w0, T0).unwrap();
     let mut prop = Propagator::new(s.grid, WAVELENGTH).unwrap();
     prop.propagate(&mut field, &bloom, s.z / steps as f64, 0, steps, |_, _| {})
         .unwrap();
 
-    assert!(field.u.iter().all(|c| c.norm().is_finite()), "non-finite field");
+    assert!(
+        field.u.iter().all(|c| c.norm().is_finite()),
+        "non-finite field"
+    );
     // Power budget: initial = final + Beer–Lambert absorbed + guard-band.
     let transmitted = (-ALPHA_ABS * s.z).exp();
     let expected = p0 * transmitted;
@@ -559,5 +561,8 @@ fn b3_smith1977_curve_quantitative() {
          cover the rollover; the gate would pass vacuously",
         samples.len()
     );
-    println!("B3 quantitative worst deviation {:.1}% (F₀={B3_F0})", 100.0 * worst);
+    println!(
+        "B3 quantitative worst deviation {:.1}% (F₀={B3_F0})",
+        100.0 * worst
+    );
 }

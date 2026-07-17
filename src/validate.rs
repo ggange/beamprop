@@ -270,7 +270,11 @@ mod tests {
         let l = 500.0;
         // Positive (blooming) and linear in power.
         let n1 = c.smith_distortion_number(l);
-        let n2 = BloomingCase { power: 2.0 * c.power, ..c }.smith_distortion_number(l);
+        let n2 = BloomingCase {
+            power: 2.0 * c.power,
+            ..c
+        }
+        .smith_distortion_number(l);
         assert!(n1 > 0.0, "N_c = {n1}");
         assert!((n2 / n1 - 2.0).abs() < 1e-12, "N_c not linear in power");
         // Inverse recovers the target.
@@ -286,7 +290,10 @@ mod tests {
         // Check N_c against the no-attenuation limit times this expansion at a
         // realistic αz (avoiding the catastrophic cancellation of very thin
         // paths, where 2/(αz)² amplifies the roundoff of 1 − e^(−αz)).
-        let c = BloomingCase { alpha_abs: 1e-5, ..sample_case() }; // αz = 5e-3
+        let c = BloomingCase {
+            alpha_abs: 1e-5,
+            ..sample_case()
+        }; // αz = 5e-3
         let l = 500.0;
         let az = c.alpha_abs * l;
         let n0 = 1.0 + c.n_minus_1;
