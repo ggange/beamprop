@@ -3,6 +3,9 @@
 # macOS directory metadata
 .DS_Store
 
+# Local AI-assistant notes (contributor guidance lives in CONTRIBUTING.md)
+/CLAUDE.md
+
 # CLI output artifacts
 /out/
 *.npy
