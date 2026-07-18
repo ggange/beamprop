@@ -14,7 +14,7 @@ jobs:
     name: build · test · lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -35,3 +35,31 @@ jobs:
 
       - name: Test
         run: cargo test --verbose
+
+  python:
+    name: python bindings · M5 gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python tooling
+        run: pip install maturin pytest numpy
+
+      - name: Build wheel
+        run: maturin build --release -m beamprop-py/Cargo.toml -o dist
+
+      - name: Install wheel
+        run: pip install dist/*.whl
+
+      - name: Run M5 binding gates
+        run: python -m pytest beamprop-py/tests -q

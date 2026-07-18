@@ -1,8 +1,9 @@
 //! `beamprop` command-line interface.
 //!
-//! The inspection interface until the M5 PyO3 bindings arrive: build a field,
-//! propagate it, dump `.npy` arrays (+ `_meta.json`/`_notes.md` sidecars).
-//! Images are rendered from those by `scripts/render.py`.
+//! Build a field, propagate it, dump `.npy` arrays (+ `_meta.json`/`_notes.md`
+//! sidecars); images are rendered from those by `scripts/render.py`. The
+//! compute loops live in `beamprop::cases`, shared with the M5 Python
+//! bindings — this binary is the file-writing shell around them.
 
 use std::fs;
 use std::path::{Path, PathBuf};

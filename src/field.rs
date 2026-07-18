@@ -65,9 +65,9 @@ impl Field {
 
     /// Write intensity to a NumPy `.npy` file (`float64`, shape `[n, n]`).
     ///
-    /// The `.npy` path is the solver's output interface: analysis and all
-    /// image rendering happen in Python/NumPy (`scripts/render.py`) until the
-    /// PyO3 bindings arrive at M5.
+    /// The `.npy` path is the solver's file-output interface: all image
+    /// rendering happens in Python/NumPy (`scripts/render.py`). Since M5 the
+    /// same data is also reachable in-process via the PyO3 bindings.
     pub fn save_intensity_npy(&self, path: impl AsRef<Path>) -> Result<()> {
         ndarray_npy::write_npy(path, &self.intensity())?;
         Ok(())

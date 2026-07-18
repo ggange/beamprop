@@ -1,0 +1,73 @@
+name: Wheels
+
+# Build abi3 wheels for the beamprop Python package on the three major
+# platforms, smoke-test each against the M5 binding gates, and upload them as
+# workflow artifacts. On version tags (v*) the wheels are also attached to the
+# GitHub release. No PyPI publishing (deliberately deferred; see
+# docs/M5_SPEC.md).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: wheel · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: macos-latest
+            target: universal2-apple-darwin
+          - os: windows-latest
+            target: x64
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build wheel (maturin)
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          args: --release -m beamprop-py/Cargo.toml -o dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install stable toolchain (CLI for the parity gate)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Smoke test wheel against the M5 gates
+        shell: bash
+        run: |
+          pip install pytest numpy
+          pip install dist/*.whl
+          python -m pytest beamprop-py/tests -q
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl
+
+  release:
+    name: attach wheels to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl

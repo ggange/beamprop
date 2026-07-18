@@ -36,6 +36,16 @@ cargo test
 `cargo fmt --check` is the one most easily forgotten: code can compile, lint,
 and test clean while still failing the format gate. Run it every time.
 
+If your change touches the Python bindings (`beamprop-py/`) or anything they
+re-export (`src/cases.rs`, the core types), also run the M5 binding gates —
+CI runs them on every push:
+
+```sh
+pip install maturin pytest numpy    # once, ideally in a venv
+maturin develop --release -m beamprop-py/Cargo.toml
+python -m pytest beamprop-py/tests -q
+```
+
 ## Documentation to keep in sync
 
 When you change or add a model, update the docs in the same PR:
