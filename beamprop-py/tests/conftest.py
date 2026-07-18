@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ def cli_binary() -> Path:
         check=True,
         capture_output=True,
     )
-    binary = REPO_ROOT / "target" / "release" / "beamprop"
+    exe = "beamprop.exe" if sys.platform == "win32" else "beamprop"
+    binary = REPO_ROOT / "target" / "release" / exe
     assert binary.exists(), f"CLI binary missing at {binary}"
     return binary
