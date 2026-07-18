@@ -203,29 +203,33 @@ struct PyMedium {
 
 #[pymethods]
 impl PyMedium {
-    /// Vacuum (or unperturbed air): δn = 0 everywhere.
+    /// Vacuum (or unperturbed air): δn = 0 everywhere. Sized to `grid` so it
+    /// matches the field it will propagate.
     #[staticmethod]
-    fn vacuum(n: usize) -> Self {
+    fn vacuum(grid: PyRef<'_, PyGrid>) -> Self {
         Self {
-            inner: Box::new(beamprop::medium::Vacuum::new(n)),
+            inner: Box::new(beamprop::medium::Vacuum::new(grid.inner.n)),
             describe: "vacuum".into(),
         }
     }
 
     /// A uniform refractive-index offset δn (pure phase, no loss).
     #[staticmethod]
-    fn constant_delta_n(n: usize, delta_n: f64) -> Self {
+    fn constant_delta_n(grid: PyRef<'_, PyGrid>, delta_n: f64) -> Self {
         Self {
-            inner: Box::new(beamprop::medium::ConstantDeltaN::new(n, delta_n)),
+            inner: Box::new(beamprop::medium::ConstantDeltaN::new(grid.inner.n, delta_n)),
             describe: format!("constant_delta_n({delta_n})"),
         }
     }
 
     /// Uniform Beer–Lambert power extinction `alpha` (1/m).
     #[staticmethod]
-    fn uniform_extinction(n: usize, alpha: f64) -> Self {
+    fn uniform_extinction(grid: PyRef<'_, PyGrid>, alpha: f64) -> Self {
         Self {
-            inner: Box::new(beamprop::medium::UniformExtinction::new(n, alpha)),
+            inner: Box::new(beamprop::medium::UniformExtinction::new(
+                grid.inner.n,
+                alpha,
+            )),
             describe: format!("uniform_extinction({alpha})"),
         }
     }
@@ -331,7 +335,10 @@ impl PyMedium {
 #[pyclass(name = "Propagator")]
 struct PyPropagator {
     inner: beamprop::propagate::Propagator,
-    initial_power: Option<f64>,
+    /// Guard-band absorbed fraction of the most recent `propagate` call — the
+    /// per-call delta of the (lifetime-accumulated) `guard_absorbed`, divided
+    /// by that call's initial power. `None` before the first call.
+    last_guard_frac: Option<f64>,
 }
 
 #[pymethods]
@@ -341,7 +348,7 @@ impl PyPropagator {
         checked_beam(wavelength, 1.0)?;
         Ok(Self {
             inner: beamprop::propagate::Propagator::new(grid.inner, wavelength).map_err(to_py)?,
-            initial_power: None,
+            last_guard_frac: None,
         })
     }
 
@@ -352,13 +359,13 @@ impl PyPropagator {
         self.inner.critical_distance()
     }
 
-    /// Power absorbed by the boundary guard band so far, as a fraction of the
-    /// initial power of the last `propagate` call (grid-edge artifact unless
-    /// ≈ 0). None before the first call.
+    /// Power absorbed by the boundary guard band during the most recent
+    /// `propagate` call, as a fraction of that call's initial power (grid-edge
+    /// artifact unless ≈ 0). Computed per call, so it is correct even when the
+    /// propagator is reused. `None` before the first call.
     #[getter]
     fn guard_frac(&self) -> Option<f64> {
-        self.initial_power
-            .map(|p0| self.inner.guard_absorbed() / p0)
+        self.last_guard_frac
     }
 
     /// Advance `field` in place through `medium` by `steps` slabs of `dz`
@@ -375,7 +382,10 @@ impl PyPropagator {
         on_step: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let mut f = field.borrow_mut();
-        self.initial_power = Some(f.inner.power());
+        let p0 = f.inner.power();
+        // guard_absorbed accumulates over the propagator's lifetime; snapshot
+        // it here so guard_frac reflects only this call (see the getter).
+        let guard_before = self.inner.guard_absorbed();
         let mut cb_err: Option<PyErr> = None;
         let result = self.inner.propagate(
             &mut f.inner,
@@ -398,7 +408,9 @@ impl PyPropagator {
         if let Some(e) = cb_err {
             return Err(e);
         }
-        result.map_err(to_py)
+        result.map_err(to_py)?;
+        self.last_guard_frac = Some((self.inner.guard_absorbed() - guard_before) / p0);
+        Ok(())
     }
 }
 

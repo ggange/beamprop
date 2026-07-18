@@ -273,6 +273,10 @@ impl TurbulentPath {
 }
 
 impl Medium for TurbulentPath {
+    fn slab_count(&self) -> Option<usize> {
+        Some(self.n_slabs())
+    }
+
     fn index_perturbation(&self, z_slab: usize) -> Array2<f64> {
         let screen = self.screens.get(z_slab / self.substeps).unwrap_or_else(|| {
             panic!(

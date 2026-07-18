@@ -218,6 +218,17 @@ impl Propagator {
         if !(dz > 0.0 && dz.is_finite()) {
             bail!("dz must be positive and finite, got {dz}");
         }
+        // A finite-slab medium (a fixed screen stack) is only defined for so
+        // many slabs; marching past it would index out of bounds. Reject the
+        // whole run up front rather than panic mid-march.
+        if let Some(max) = medium.slab_count()
+            && first_slab + n_steps > max
+        {
+            bail!(
+                "propagation of {n_steps} slabs from slab {first_slab} exceeds the medium's \
+                 {max} defined slabs"
+            );
+        }
         self.check_field(field)?;
         for i in 0..n_steps {
             self.step(field, medium, first_slab + i, dz)?;

@@ -74,6 +74,16 @@ pub trait Medium {
         let _ = z_slab;
         None
     }
+
+    /// Number of z-slabs this medium is defined for, if finite — e.g. a fixed
+    /// stack of turbulence phase screens is only valid for `screens × substeps`
+    /// slabs. `None` (the default) means the medium answers any slab index:
+    /// vacuum, a uniform screen, or a thermal-blooming field computed on the
+    /// fly from the beam. The propagator checks the march stays within this so
+    /// a too-long run is a clean error, not an out-of-bounds panic.
+    fn slab_count(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Vacuum (or unperturbed air): `δn = 0` everywhere.

@@ -68,7 +68,7 @@ class TestClosedForm:
         beam = bp.GaussianBeam(1e-2, 1e-6)
         z = 2.0 * beam.rayleigh_range
         p = bp.Propagator(g, 1e-6)
-        p.propagate(f, bp.Medium.vacuum(512), z / 200, 200)
+        p.propagate(f, bp.Medium.vacuum(g), z / 200, 200)
         wx, wy = f.beam_width()
         w_ref = beam.width_at(z)
         assert abs(wx - w_ref) / w_ref < 0.01
@@ -78,7 +78,7 @@ class TestClosedForm:
         g = bp.Grid(256, 1e-3)
         f = bp.Field.gaussian(g, 1e-6, 5e-3)
         p0 = f.power
-        bp.Propagator(g, 1e-6).propagate(f, bp.Medium.vacuum(256), 1.0, 50)
+        bp.Propagator(g, 1e-6).propagate(f, bp.Medium.vacuum(g), 1.0, 50)
         assert abs(f.power - p0) / p0 < 1e-12
 
     def test_beer_lambert_transmission(self):
@@ -140,7 +140,7 @@ class TestRoundTrip:
         f = bp.Field.gaussian(g, 1e-6, 5e-3)
         seen = []
         bp.Propagator(g, 1e-6).propagate(
-            f, bp.Medium.vacuum(64), 0.5, 10, on_step=lambda i, fld: seen.append((i, fld.power))
+            f, bp.Medium.vacuum(g), 0.5, 10, on_step=lambda i, fld: seen.append((i, fld.power))
         )
         assert [i for i, _ in seen] == list(range(10))
 
@@ -152,7 +152,7 @@ class TestRoundTrip:
             raise RuntimeError("stop here")
 
         with pytest.raises(RuntimeError, match="stop here"):
-            bp.Propagator(g, 1e-6).propagate(f, bp.Medium.vacuum(64), 0.5, 10, on_step=boom)
+            bp.Propagator(g, 1e-6).propagate(f, bp.Medium.vacuum(g), 0.5, 10, on_step=boom)
 
 
 class TestErrorMapping:
@@ -180,3 +180,46 @@ class TestErrorMapping:
         # with the small-perturbation message, not return garbage.
         with pytest.raises(ValueError, match="small-perturbation"):
             bp.run_blooming(n=256, dx=1e-3, w0=2e-2, power=1e9, alpha_abs=1e-3, z=200.0, steps=10)
+
+    def test_turbulence_underresolved_beam_raises_not_panics(self):
+        # An under-resolved beam (width < 4 samples) is rejected inside the
+        # parallel ensemble; it must surface as ValueError, not a Rust panic.
+        with pytest.raises(ValueError, match="under-resolved|resolved"):
+            bp.run_turbulence(n=128, dx=2e-3, w0=1e-3, z=500.0, screens=3, realizations=2)
+
+    def test_propagate_past_medium_slabs_raises_not_panics(self):
+        # A turbulence path has screens*substeps slabs; marching past it must
+        # be a clean ValueError, not an out-of-bounds panic mid-loop.
+        g = bp.Grid(256, 2e-3)
+        f = bp.Field.gaussian(g, 1e-6, 1e-2)
+        m = bp.Medium.turbulence(g, 1e-6, 1e-14, 1e3, 500.0, 3, seed=1)  # 3 slabs
+        with pytest.raises(ValueError, match="exceeds the medium"):
+            bp.Propagator(g, 1e-6).propagate(f, m, 500.0 / 3, 4)
+
+    def test_medium_grid_mismatch_raises(self):
+        # A linear medium sized to a different grid than the field is rejected
+        # at propagate time with a shape-mismatch ValueError.
+        g_field = bp.Grid(256, 1e-3)
+        g_other = bp.Grid(128, 1e-3)
+        f = bp.Field.gaussian(g_field, 1e-6, 5e-3)
+        with pytest.raises(ValueError, match="shape|expected"):
+            bp.Propagator(g_field, 1e-6).propagate(f, bp.Medium.vacuum(g_other), 1.0, 5)
+
+
+class TestPropagatorReuse:
+    """guard_frac must reflect only the most recent call (finding fix)."""
+
+    def test_guard_frac_is_per_call_on_reuse(self):
+        g = bp.Grid(256, 1e-3)
+        # A tightly-contained beam barely touches the guard band, so a single
+        # run's guard_frac is small; reusing the propagator must not let it
+        # accumulate across calls.
+        p = bp.Propagator(g, 1e-6)
+        f1 = bp.Field.gaussian(g, 1e-6, 5e-3)
+        p.propagate(f1, bp.Medium.vacuum(g), 1.0, 20)
+        first = p.guard_frac
+        f2 = bp.Field.gaussian(g, 1e-6, 5e-3)
+        p.propagate(f2, bp.Medium.vacuum(g), 1.0, 20)
+        second = p.guard_frac
+        # Identical runs → identical per-call fraction (no accumulation).
+        assert second == pytest.approx(first, abs=1e-18)

@@ -174,24 +174,27 @@ pub fn run_turbulence(p: &TurbulenceParams) -> Result<TurbulenceRun> {
     // Diffraction-only substeps between screens give the side view a smooth
     // z-axis (~240 columns) without changing the screen physics.
     let substeps = (240 / p.screens).max(1);
-    let results = seeded_ensemble(p.realizations, |i| {
+    // Each realization is fallible (an under-resolved or uncontained beam is
+    // rejected by the propagator); return a Result per member and surface the
+    // first failure rather than panicking inside the parallel closure.
+    let results = seeded_ensemble(p.realizations, |i| -> Result<_> {
         let path = TurbulentPath::new(grid, p.wavelength, p.cn2, p.l0, p.z, p.screens, p.seed, i)
             .with_substeps(substeps);
         let mut field = Field::gaussian(grid, p.wavelength, p.w0);
         let p0 = field.power();
-        let mut prop = Propagator::new(grid, p.wavelength).expect("valid propagator");
+        let mut prop = Propagator::new(grid, p.wavelength)?;
         let mut xz = XzSliceMap::new();
         xz.record(&field);
         prop.propagate(&mut field, &path, path.dz(), 0, path.n_slabs(), |_, f| {
             xz.record(f);
-        })
-        .expect("propagation");
-        (field.intensity(), xz.to_array(), prop.guard_absorbed() / p0)
+        })?;
+        Ok((field.intensity(), xz.to_array(), prop.guard_absorbed() / p0))
     });
     let mut frames = Vec::with_capacity(p.realizations);
     let mut xz_maps = Vec::with_capacity(p.realizations);
     let mut guard_sum = 0.0;
-    for (frame, xz_map, guard_frac) in results {
+    for result in results {
+        let (frame, xz_map, guard_frac) = result?;
         frames.push(frame);
         xz_maps.push(xz_map);
         guard_sum += guard_frac;
