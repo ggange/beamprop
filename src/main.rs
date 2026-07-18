@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
+use beamprop::cases::{
+    BloomingParams, PropagateParams, TurbulenceParams, run_blooming, run_propagate, run_turbulence,
+};
 use beamprop::field::Field;
 use beamprop::grid::Grid;
-use beamprop::medium::{UniformExtinction, kruse_extinction};
-use beamprop::propagate::{Propagator, beam_width};
 use beamprop::validate::GaussianBeam;
-use beamprop::viz::XzSliceMap;
 
 #[derive(Parser, Debug)]
 #[command(name = "beamprop", version, about)]
@@ -221,11 +221,8 @@ fn turbulence(
     realizations: usize,
     seed: u64,
 ) -> Result<()> {
-    use beamprop::montecarlo::seeded_ensemble;
-    use beamprop::turbulence::TurbulentPath;
     use beamprop::validate::{fried_r0, rytov_variance};
 
-    let grid = Grid::new(args.n, args.dx);
     let beam = GaussianBeam {
         w0: args.w0,
         wavelength: args.wavelength,
@@ -237,58 +234,29 @@ fn turbulence(
         rytov_variance(cn2, args.wavelength, z)
     );
 
-    // Diffraction-only substeps between screens give the side view a smooth
-    // z-axis (~240 columns) without changing the screen physics.
-    let substeps = (240 / screens).max(1);
-    let results = seeded_ensemble(realizations, |i| {
-        let path = TurbulentPath::new(grid, args.wavelength, cn2, l0, z, screens, seed, i)
-            .with_substeps(substeps);
-        let mut field = Field::gaussian(grid, args.wavelength, args.w0);
-        let p0 = field.power();
-        let mut prop = Propagator::new(grid, args.wavelength).expect("valid propagator");
-        let mut xz = XzSliceMap::new();
-        xz.record(&field);
-        prop.propagate(&mut field, &path, path.dz(), 0, path.n_slabs(), |_, f| {
-            xz.record(f);
-        })
-        .expect("propagation");
-        (field.intensity(), xz.to_array(), prop.guard_absorbed() / p0)
-    });
-    let mut frames = Vec::with_capacity(realizations);
-    let mut xz_maps = Vec::with_capacity(realizations);
-    let mut guard_sum = 0.0;
-    for (frame, xz_map, guard_frac) in results {
-        frames.push(frame);
-        xz_maps.push(xz_map);
-        guard_sum += guard_frac;
-    }
-    let guard_frac_mean = guard_sum / realizations as f64;
-
-    // Side view (x-z plane, beam travelling left to right), cropped to the
-    // middle half in x.
-    let xz_frames: Vec<_> = xz_maps
-        .iter()
-        .map(|m| {
-            let nx = m.dim().0;
-            m.slice(ndarray::s![nx / 4..3 * nx / 4, ..]).to_owned()
-        })
-        .collect();
+    let run = run_turbulence(&TurbulenceParams {
+        n: args.n,
+        dx: args.dx,
+        wavelength: args.wavelength,
+        w0: args.w0,
+        z,
+        screens,
+        cn2,
+        l0,
+        realizations,
+        seed,
+    })?;
+    let grid = run.grid;
+    let substeps = run.substeps;
+    let guard_frac_mean = run.guard_frac_mean;
 
     // Frame stacks + run metadata: the inputs to scripts/render.py, which
     // does all image rendering.
-    let stack = |maps: &[ndarray::Array2<f64>]| {
-        let (ny, nx) = maps[0].dim();
-        let mut s = ndarray::Array3::<f64>::zeros((maps.len(), ny, nx));
-        for (i, m) in maps.iter().enumerate() {
-            s.index_axis_mut(ndarray::Axis(0), i).assign(m);
-        }
-        s
-    };
     let frames_npy = args.out_path(&format!("{}_frames.npy", args.out))?;
-    ndarray_npy::write_npy(&frames_npy, &stack(&frames))
+    ndarray_npy::write_npy(&frames_npy, &run.frames)
         .map_err(|e| anyhow::anyhow!("writing {}: {e}", frames_npy.display()))?;
     let xz_npy = args.out_path(&format!("{}_xz_frames.npy", args.out))?;
-    ndarray_npy::write_npy(&xz_npy, &stack(&xz_frames))
+    ndarray_npy::write_npy(&xz_npy, &run.xz_frames)
         .map_err(|e| anyhow::anyhow!("writing {}: {e}", xz_npy.display()))?;
     let meta = format!(
         "{{\n  \"case\": \"turbulence\",\n  \"n\": {n},\n  \"dx\": {dx},\n  \
@@ -307,13 +275,8 @@ fn turbulence(
     fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
 
     // Long-exposure (ensemble-mean) receiver intensity.
-    let mut mean = ndarray::Array2::<f64>::zeros((grid.n, grid.n));
-    for f in &frames {
-        mean += f;
-    }
-    mean /= realizations as f64;
     let npy = args.out_path(&format!("{}_longexp.npy", args.out))?;
-    ndarray_npy::write_npy(&npy, &mean)
+    ndarray_npy::write_npy(&npy, &run.longexp)
         .map_err(|e| anyhow::anyhow!("writing {}: {e}", npy.display()))?;
 
     println!(
@@ -422,74 +385,45 @@ fn blooming(
     steps: usize,
     frames: usize,
 ) -> Result<()> {
-    use beamprop::airprops::AirTable;
-    use beamprop::blooming::ThermalBlooming;
-    use beamprop::validate::BloomingCase;
-
-    let grid = Grid::new(args.n, args.dx);
     let analytic = GaussianBeam {
         w0: args.w0,
         wavelength: args.wavelength,
     };
-    let air = AirTable::load()?.at(t0, p0, args.wavelength)?;
-    let case = BloomingCase {
-        alpha_abs,
-        power,
-        w: args.w0,
-        wind,
-        rho: air.rho,
-        cp: air.cp,
-        n_minus_1: air.n_minus_1,
-        t0,
+    let run = run_blooming(&BloomingParams {
+        n: args.n,
+        dx: args.dx,
         wavelength: args.wavelength,
-    };
-    let n_phi = case.distortion_number(z_total);
-    let peclet = air.rho * air.cp * wind * args.w0 / air.kappa_t;
-    // Saturated downwind temperature rise of the launch beam (closed form).
-    let delta_t_max = case.delta_t_ref(1e3 * args.w0, 0.0);
+        w0: args.w0,
+        power,
+        wind,
+        alpha_abs,
+        t0,
+        p0,
+        z: z_total,
+        steps,
+        frames,
+    })?;
+    let grid = run.grid;
+    let (n_phi, peclet, delta_t_max, dz) = (run.n_phi, run.peclet, run.delta_t_sat, run.dz);
     println!(
         "thermal blooming: P = {power} W, v = {wind} m/s, alpha_abs = {alpha_abs:.2e} 1/m, \
          N_phi = {n_phi:.2}, Pe = {peclet:.0}, saturated dT = {delta_t_max:.3} K"
     );
 
-    let mut field = Field::gaussian(grid, args.wavelength, args.w0);
-    let p_init = field.power();
-    let medium = ThermalBlooming::new(grid, air, alpha_abs, wind, power, p_init, args.w0, t0)?;
-    let mut prop = Propagator::new(grid, args.wavelength)?;
-
-    let dz = z_total / steps as f64;
-    let frame_every = (steps / frames.max(1)).max(1);
-    let mut xz = XzSliceMap::new();
-    xz.record(&field);
-    let mut snapshots = vec![field.intensity()];
-    let mut snapshot_z = vec![0.0_f64];
-    prop.propagate(&mut field, &medium, dz, 0, steps, |i, f| {
-        xz.record(f);
-        let step = i + 1;
-        if step % frame_every == 0 || step == steps {
-            snapshots.push(f.intensity());
-            snapshot_z.push(step as f64 * dz);
-        }
-    })?;
-
-    // Side view cropped to the middle half in x, as in `propagate`.
-    let full = xz.to_array();
-    let nx = full.dim().0;
-    let cropped = full.slice(ndarray::s![nx / 4..3 * nx / 4, ..]).to_owned();
     let xz_npy = args.out_path(&format!("{}_xz.npy", args.out))?;
-    ndarray_npy::write_npy(&xz_npy, &cropped)
+    ndarray_npy::write_npy(&xz_npy, &run.xz)
         .map_err(|e| anyhow::anyhow!("writing {}: {e}", xz_npy.display()))?;
 
-    let mut snap_stack = ndarray::Array3::<f64>::zeros((snapshots.len(), grid.n, grid.n));
-    for (i, s) in snapshots.iter().enumerate() {
-        snap_stack.index_axis_mut(ndarray::Axis(0), i).assign(s);
-    }
     let frames_npy = args.out_path(&format!("{}_frames.npy", args.out))?;
-    ndarray_npy::write_npy(&frames_npy, &snap_stack)
+    ndarray_npy::write_npy(&frames_npy, &run.snapshots)
         .map_err(|e| anyhow::anyhow!("writing {}: {e}", frames_npy.display()))?;
-    field.save_intensity_npy(args.out_path(&format!("{}_final.npy", args.out))?)?;
 
-    let frames_z = snapshot_z
+    let final_npy = args.out_path(&format!("{}_final.npy", args.out))?;
+    ndarray_npy::write_npy(&final_npy, &run.final_intensity)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", final_npy.display()))?;
+
+    let frames_z = run
+        .snapshot_z
         .iter()
         .map(|z| format!("{z}"))
         .collect::<Vec<_>>()
@@ -511,10 +445,10 @@ fn blooming(
     let meta_path = args.out_path(&format!("{}_meta.json", args.out))?;
     fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
 
-    let transmission = field.power() / p_init;
+    let transmission = run.transmission;
     let t_ref = (-alpha_abs * z_total).exp();
-    let guard_frac = prop.guard_absorbed() / p_init;
-    let (cx, _) = beamprop::propagate::centroid(&field);
+    let guard_frac = run.guard_frac;
+    let cx = run.centroid_x;
     println!(
         "  receiver: centroid x = {:.2} mm (negative = upwind), transmission {transmission:.4} \
          (Beer-Lambert {t_ref:.4}), guard-band absorption {guard_frac:.2e}",
@@ -638,63 +572,41 @@ fn propagate(
     alpha: Option<f64>,
     visibility: Option<f64>,
 ) -> Result<()> {
-    let grid = Grid::new(args.n, args.dx);
+    let run = run_propagate(&PropagateParams {
+        n: args.n,
+        dx: args.dx,
+        wavelength: args.wavelength,
+        w0: args.w0,
+        z,
+        steps,
+        frames,
+        alpha,
+        visibility,
+    })?;
+    let grid = run.grid;
     let analytic = GaussianBeam {
         w0: args.w0,
         wavelength: args.wavelength,
     };
-    let z_total = z.unwrap_or(2.0 * analytic.rayleigh_range());
-    let dz = z_total / steps as f64;
+    let (z_total, dz, alpha) = (run.z_total, run.dz, run.alpha);
+    if let Some(v) = visibility {
+        println!("visibility {v} m -> alpha = {alpha:.4e} 1/m (Kruse)");
+    }
 
-    let alpha = match (alpha, visibility) {
-        (Some(a), _) => a,
-        (None, Some(v)) => {
-            let a = kruse_extinction(args.wavelength, v);
-            println!("visibility {v} m -> alpha = {a:.4e} 1/m (Kruse)");
-            a
-        }
-        (None, None) => 0.0,
-    };
-    let medium = UniformExtinction::new(grid.n, alpha);
-
-    let mut field = Field::gaussian(grid, args.wavelength, args.w0);
-    let p0 = field.power();
-    let mut prop = Propagator::new(grid, args.wavelength)?;
-
-    let frame_every = (steps / frames.max(1)).max(1);
-    let mut xz = XzSliceMap::new();
-    xz.record(&field);
-    let mut snapshots = vec![field.intensity()];
-    let mut snapshot_z = vec![0.0_f64];
-
-    prop.propagate(&mut field, &medium, dz, 0, steps, |i, f| {
-        xz.record(f);
-        let step = i + 1;
-        if step % frame_every == 0 || step == steps {
-            snapshots.push(f.intensity());
-            snapshot_z.push(step as f64 * dz);
-        }
-    })?;
-
-    // Side view: central x-slice vs z, cropped to the middle half in x.
-    let full = xz.to_array();
-    let nx = full.dim().0;
-    let cropped = full.slice(ndarray::s![nx / 4..3 * nx / 4, ..]).to_owned();
     let xz_npy = args.out_path(&format!("{}_xz.npy", args.out))?;
-    ndarray_npy::write_npy(&xz_npy, &cropped)
+    ndarray_npy::write_npy(&xz_npy, &run.xz)
         .map_err(|e| anyhow::anyhow!("writing {}: {e}", xz_npy.display()))?;
 
-    let mut snap_stack = ndarray::Array3::<f64>::zeros((snapshots.len(), grid.n, grid.n));
-    for (i, s) in snapshots.iter().enumerate() {
-        snap_stack.index_axis_mut(ndarray::Axis(0), i).assign(s);
-    }
     let frames_npy = args.out_path(&format!("{}_frames.npy", args.out))?;
-    ndarray_npy::write_npy(&frames_npy, &snap_stack)
+    ndarray_npy::write_npy(&frames_npy, &run.snapshots)
         .map_err(|e| anyhow::anyhow!("writing {}: {e}", frames_npy.display()))?;
 
-    field.save_intensity_npy(args.out_path(&format!("{}_final.npy", args.out))?)?;
+    let final_npy = args.out_path(&format!("{}_final.npy", args.out))?;
+    ndarray_npy::write_npy(&final_npy, &run.final_intensity)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", final_npy.display()))?;
 
-    let frames_z = snapshot_z
+    let frames_z = run
+        .snapshot_z
         .iter()
         .map(|z| format!("{z}"))
         .collect::<Vec<_>>()
@@ -715,7 +627,7 @@ fn propagate(
     let meta_path = args.out_path(&format!("{}_meta.json", args.out))?;
     fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
 
-    let (wx, _) = beam_width(&field);
+    let wx = run.width_x;
     let w_ref = analytic.width_at(z_total);
     println!(
         "propagated z = {z_total:.1} m in {steps} steps (dz = {dz:.2} m, zR = {:.1} m)",
@@ -728,17 +640,17 @@ fn propagate(
         100.0 * (wx - w_ref) / w_ref
     );
     if alpha > 0.0 {
-        let t_num = field.power() / p0;
+        let t_num = run.transmission;
         let t_ref = (-alpha * z_total).exp();
         println!(
             "  transmission: {t_num:.6e} numeric vs {t_ref:.6e} Beer-Lambert ({:+.2e} rel)",
             (t_num - t_ref) / t_ref
         );
     } else {
-        let drift = (field.power() - p0).abs() / p0;
+        let drift = (run.transmission - 1.0).abs();
         println!("  power drift: {drift:.2e}");
     }
-    let guard_frac = prop.guard_absorbed() / p0;
+    let guard_frac = run.guard_frac;
     println!("  guard-band absorption: {guard_frac:.2e} of initial power");
     let extinction_row = match (alpha > 0.0, visibility) {
         (true, Some(v)) => {

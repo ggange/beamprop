@@ -28,6 +28,7 @@
 
 pub mod airprops;
 pub mod blooming;
+pub mod cases;
 pub mod field;
 pub mod grid;
 pub mod medium;
