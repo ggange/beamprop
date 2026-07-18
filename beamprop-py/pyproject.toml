@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "beamprop"
+description = "Open solver for laser beam propagation through the atmosphere: diffraction, attenuation, turbulence, and thermal blooming."
+readme = "../README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.22"]
+keywords = ["optics", "wave-optics", "beam-propagation", "atmosphere", "physics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+module-name = "beamprop"

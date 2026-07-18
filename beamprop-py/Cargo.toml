@@ -1,0 +1,24 @@
+[package]
+name = "beamprop-py"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Python bindings (PyO3) for beamprop, the open laser beam propagation solver."
+publish = false
+
+# The compiled artifact is the Python extension module; maturin renames it to
+# `beamprop` via [tool.maturin] module-name in pyproject.toml.
+[lib]
+name = "beamprop_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0.103"
+beamprop = { path = ".." }
+ndarray = "0.17.2"
+num-complex = "0.4.6"
+numpy = "0.29.0"
+pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py310"] }
+
+[build-dependencies]
+pyo3-build-config = "0.29.0"
