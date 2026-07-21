@@ -264,15 +264,25 @@ target the **F₀ = 5** dash-dot branch, WebPlotDigitizer-traced into
 `tests/data/smith1977_F5.csv` (13 points out to N ≈ 1.87). Two corrections to
 the original plan, both material:
 
-1. **Axis is Smith's `N`, not our `N_φ`.** The plan assumed a symbolic O(1)
-   conversion from `N_φ`. In fact Smith's abscissa is his *geometrical-optics*
-   number `N_c` (no wavenumber; `a = w/√2` the 1/e amplitude radius), scaled by
-   an effective-path brace `N = N_c·{(2/z²)∫Q⁻¹∫ e^(−αz'')/(ΩQ²)}`. We compute
-   `N` directly from the run via `BloomingCase::smith_distortion_number` rather
-   than converting `N_φ`. We deliberately chose a **sub-Rayleigh** geometry
-   (`F₀ = 5` ⟹ `z_R = 5z`, `Q ≤ 1.02`; `αz = 0.05`) so the brace is within a
-   few percent of the pure absorption bracket — `N ≈ N_c` to ≲4 %, negligible
-   against the ±15 % gate. Matching `F₀` is done by geometry
+1. **Axis is Smith's `N_c`, not our `N_φ`.** The plan assumed a symbolic O(1)
+   conversion from `N_φ`. In fact the abscissa of the forced-convection
+   whole-beam curves is Smith's *geometrical-optics* distortion number `N_c`
+   (no wavenumber; `a = w/√2` the 1/e amplitude radius):
+
+   ```text
+   N_c = −μ_T·I₀·α·z² / (μ·ρ·c_p·v·a) · [2/(αz) − 2/(αz)²·(1 − e^(−αz))]
+   ```
+
+   with `−μ_T = (n₀−1)/T₀`, `μ = n₀`, `I₀ = 2P/(πw²)`.
+   `BloomingCase::smith_distortion_number` implements this **verbatim**,
+   evaluating the full absorption bracket (0.9835 here; we do not use Smith's
+   `αz ≪ 1` simplification), so the run sits on the exact published axis with
+   **no conversion and no approximation**. (An earlier draft justified the axis
+   via an effective-path brace `N = N_c·{(2/z²)∫Q⁻¹∫ e^(−αz'')/(ΩQ²)}` and a
+   sub-Rayleigh `N ≈ N_c` argument — that brace is the generalization for
+   *focused / slewed* beams from a **later** section of the paper and does not
+   govern these collimated forced-convection curves; the `≲4 %` uncertainty it
+   implied does not exist.) Matching `F₀` is done by geometry
    (`w₀ = √(2·F₀·z/k)`), not by rescaling.
 2. **`I_REL` normalization.** Smith's `I_REL = I_bloomed/I_unbloomed` cancels
    the common Beer–Lambert loss (→ 1 at `N → 0`); our vacuum reference has no
@@ -281,16 +291,18 @@ the original plan, both material:
 
 Honest residual: at the high-N end (`N = 1.8`) the wave solver shows a mild
 diffractive recovery (`I_REL` rising 0.757 → 0.807) that Smith's flat `F₀ = 5`
-curve does not, i.e. it reads like a marginally higher effective Fresnel number
-there. This is the 7.2 % worst point; the descent and rollover are matched much
-more tightly (0.1 %, 0.7 %, 3.0 % at N = 0.5, 1.0, 1.5). The fallback
-(B1+B2+signatures+cross-code) was **not** needed.
+curve does not. This is the 7.2 % worst point; the descent and rollover are
+matched much more tightly (0.1 %, 0.7 %, 3.0 % at N = 0.5, 1.0, 1.5). The
+fallback (B1+B2+signatures+cross-code) was **not** needed. The mechanism is
+dissected below.
 
-What the residual is *not*: it is not the `N ≈ N_c` axis approximation (that is a
-near-uniform ≲4 % horizontal shift; it cannot produce a deviation that is 0.1 %
-at low N and grows to 7 % at high N), and it is not Smith reducing to
-geometrical optics (`F₀ = 5` is a *finite*-Fresnel curve that already carries
-diffraction — only `F₀ = ∞` is the ray limit).
+What the residual is *not*: it is not an axis-convention error (the abscissa is
+Smith's exact `N_c`, § above — and *any* x-axis rescaling is power-independent,
+so it shifts the curve uniformly and cannot produce a deviation that is ~0 % at
+low N and grows to 7 % at high N; empirically the worst deviation only drops
+below 7 % for an unphysical ≥15 % x-stretch, which then worsens the low-N fit).
+Nor is it Smith reducing to geometrical optics (`F₀ = 5` is a *finite*-Fresnel
+curve that already carries diffraction — only `F₀ = ∞` is the ray limit).
 
 A power sweep through the M5 bindings (`scripts/sweep_blooming.py`) plus a
 resolution study settle what it *is*.
@@ -344,10 +356,13 @@ finite, power-conserving, `dz`-refinement-consistent).
 - **Bent beam into the guard band:** silent wraparound — caught by the
   runtime beam-centroid assert.
 - **Convention mismatch in B3:** a wrong factor between our axis and Smith's
-  `N` reads as a uniform horizontal shift of the whole curve. Resolved by
-  computing Smith's `N` (via `N_c`) directly from run parameters rather than
-  rescaling `N_φ`, and by choosing a sub-Rayleigh geometry where `N ≈ N_c`;
-  the B1/B2 tight anchors disambiguate a real physics error from a slip.
+  `N_c` reads as a uniform horizontal shift of the whole curve. Resolved by
+  implementing Smith's forced-convection `N_c` verbatim (`smith_distortion_number`,
+  full absorption bracket) rather than rescaling `N_φ` — the abscissa is exact,
+  not a sub-Rayleigh approximation. Because any such factor is power-independent,
+  it can only shift the curve uniformly and cannot mimic the N-growing high-N
+  residual; the B1/B2 tight anchors and the near-perfect low-N fit disambiguate a
+  real physics error from a slip.
 
 ## References
 
