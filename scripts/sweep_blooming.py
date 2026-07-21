@@ -23,7 +23,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import animation
+from matplotlib import animation, patheffects
+from matplotlib.lines import Line2D
 
 import beamprop as bp
 
@@ -148,11 +149,20 @@ def render_animation(data, out_path, fps):
     # the blooming loss shows as the spot dimming and bending upwind.
     scale = finals[0].max()
 
+    # Bloom-free receiver-plane shape (same launch normalization as `finals`,
+    # see run_propagate/run_blooming both calling Field::gaussian with this
+    # w0) — the fixed reference contour drawn under every frame.
+    xs = np.linspace(*extent_cm[:2], 2 * half_px)
+    ys = np.linspace(*extent_cm[2:], 2 * half_px)
+    Xc, Yc = np.meshgrid(xs, ys)
+    vac_crop = crop(data["vac_final"], half_px)
+    vac_level = vac_crop.max() * math.exp(-2.0)  # the 1/e^2 (w0) contour
+
     fig, (ax_spot, ax_curve) = plt.subplots(
         1, 2, figsize=(12, 5.6), gridspec_kw={"width_ratios": [1, 1.15]}
     )
     fig.suptitle(
-        "Thermal blooming: the atmosphere taxes your beam "
+        "Thermal blooming "
         f"(collimated, F$_0$ = {F0:g}, z = {Z:g} m, crosswind {WIND:g} m/s)",
         fontsize=13,
     )
@@ -162,9 +172,35 @@ def render_animation(data, out_path, fps):
         origin="lower", extent=extent_cm, cmap="magma", vmin=0.0, vmax=1.0,
         aspect="equal",
     )
-    ax_spot.set_xlabel("x (cm)  —  wind →")
+    ax_spot.set_xlabel("x (cm)")
     ax_spot.set_ylabel("y (cm)")
     spot_title = ax_spot.set_title("")
+
+    # Wind arrow, drawn in the image over clean (upwind) air so it never
+    # crosses the crescent. White with a black outline so it reads over both
+    # the bright core and the dark background.
+    outline = [patheffects.withStroke(linewidth=2.5, foreground="black")]
+    arrow_y = 0.78 * extent_cm[3]
+    ax_spot.annotate(
+        "", xy=(-0.18 * extent_cm[1], arrow_y), xytext=(-0.62 * extent_cm[1], arrow_y),
+        arrowprops=dict(arrowstyle="-|>", color="white", lw=2.2,
+                        path_effects=outline),
+    )
+    ax_spot.text(-0.40 * extent_cm[1], arrow_y + 0.06 * extent_cm[3], "wind",
+                 color="white", fontsize=10, ha="center", path_effects=outline)
+
+    # Bloom-free receiver-plane shape at the same 1/e^2 level, for a direct
+    # size/shape comparison against the bloomed spot.
+    ax_spot.contour(Xc, Yc, vac_crop, levels=[vac_level], colors="white",
+                    linewidths=1.6, linestyles="dashed")
+    ref_handle = Line2D([], [], color="white", lw=1.6, ls="dashed",
+                        path_effects=outline, label="bloom-free beam (1/e² radius)")
+    leg = ax_spot.legend(handles=[ref_handle], loc="lower right", frameon=True,
+                         labelcolor="white", fontsize=9)
+    leg.get_frame().set_facecolor("black")
+    leg.get_frame().set_alpha(0.4)
+    leg.get_frame().set_edgecolor("none")
+
     cbar = fig.colorbar(im, ax=ax_spot, fraction=0.046, pad=0.03)
     ticks_i = np.array([0.0, 0.05, 0.2, 0.5, 1.0])
     cbar.set_ticks(ticks_i**GAMMA)
