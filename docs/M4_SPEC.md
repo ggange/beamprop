@@ -292,25 +292,43 @@ at low N and grows to 7 % at high N), and it is not Smith reducing to
 geometrical optics (`F₀ = 5` is a *finite*-Fresnel curve that already carries
 diffraction — only `F₀ = ∞` is the ray limit).
 
-A dense post-hoc power sweep through the M5 bindings
-(`scripts/sweep_blooming.py`, 40 runs out to `N = 3`) confirms the recovery is a
-smooth, **strictly monotonic** rise past the `N ≈ 1` minimum (to `I_REL ≈ 0.94`
-at `N = 3`), not a single-point artifact of the digitized curve's flat tail. An
-"effective Fresnel number" reading was proposed (the receiver beam does defocus
-monotonically over this range — centered second-moment width `2.9 → 4.7 cm`
-from `N = 0.1 → 3`) and tested against Smith's digitized `F₀ = 10` and `F₀ = 20`
-branches: **the test does not support it**. If the beam behaved like a rising
-effective `F₀`, deviation from the `F₀ = 10`/`20` curves should *shrink* with N;
-instead it grows monotonically (deviation from `F₀ = 10`: 0.2 % → 6.2 % over
-`N ≈ 0.35 → 1.0`) while deviation from the nominal `F₀ = 5` curve stays smallest
-throughout the whole range the higher-`F₀` curves cover (both stop near
-`N ≈ 1.2`, short of the `N = 1.5–1.8` region where the residual is largest, so
-the mechanism there remains untested). **The mechanism behind the high-N
-residual is open** — a candidate hypothesis was tried and did not survive
-contact with more reference data; do not repeat the effective-Fresnel-number
-explanation without new evidence. The residual stays well inside the ±15 % gate
-and never touches the descent or the rollover minimum — the observables B3
-actually anchors.
+A power sweep through the M5 bindings (`scripts/sweep_blooming.py`) plus a
+resolution study settle what it *is*.
+
+**It is not numerical.** At both `F₀ = 5` and `F₀ = 20`, high-N `I_REL` is
+converged to ≤ 0.04 % under halving `dx`, doubling the step count, and doubling
+the domain, with guard-band absorption at machine zero (`~1e-13`); the receiver
+peak sits at the upwind crescent edge (`x ≈ −2.5 cm` at `F₀ = 5, N = 1.8`;
+`−4.1 cm` at `F₀ = 20`) at every resolution. No aliasing, no domain leakage.
+
+**It is the off-axis crescent cusp.** As `N` grows the on-axis irradiance
+collapses monotonically (`I_REL` on axis 0.90 → 0.19 over `N = 0.13 → 1.8`) —
+the whole-beam defocus+tilt sweeping energy off the axis — while the *global*
+peak migrates upwind and recovers (0.758 → 0.806). Both our `I_REL` and Smith's
+report this global peak (Smith's ≈ 0.75 sits far above our on-axis 0.19), so the
+comparison is like-for-like: the residual is a real disagreement about the cusp,
+not a definitional mismatch. The cusp is a caustic-like re-concentration the
+ray-folding thermal lens forms on the cool upwind side — resolving it is exactly
+what a full-wave field march does and a reduced-order **whole-beam** steady-state
+theory (Smith's) does only approximately.
+
+**It tracks the strength of that caustic.** Re-running the solver on Smith's own
+`F₀ = 10` and `F₀ = 20` branches localizes the disagreement: over `N ∈ [0.3,
+1.15]` the solver matches the digitized curves to **1.1 % (F₀ = 5), 2.0 %
+(F₀ = 10), 5.3 % (F₀ = 20)** — the gap grows with `F₀` and `N`, i.e. with the
+strength of the caustic recovery, our full-wave peak recovering somewhat *less*
+than the whole-beam prediction. That is the regime where a low-moment whole-beam
+expansion is least faithful (strong, non-quadratic erf-shaped phase), so a
+divergence there follows from the formulation difference, not a solver error. The
+larger 7 % at `F₀ = 5, N ≈ 1.8` is additionally inflated by digitization of
+Smith's flat `F₀ = 5` dash-dot tail, which does not recover at all — inconsistent
+with the recovery that both his own `F₀ = 10/20` curves (minima at `N ≈ 0.73`,
+`0.58`, then rising) and our solver exhibit, and with the monotonic-in-`F₀`
+recovery trend. (A tried-and-rejected "rising effective Fresnel number" reading:
+deviation from the `F₀ = 10/20` curves *grows* rather than shrinks with `N`, so
+the beam is not simply behaving like a higher `F₀`.) The residual stays well
+inside the ±15 % gate and never touches the descent or the rollover minimum,
+which both formulations match to ~1 % — the observables B3 actually anchors.
 
 ### Stability gate
 
