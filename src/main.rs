@@ -37,8 +37,10 @@ struct BeamArgs {
     /// Vacuum wavelength in metres.
     #[arg(long, default_value_t = 1.0e-6)]
     wavelength: f64,
-    /// Gaussian 1/e² waist radius w0 in metres.
-    #[arg(long, default_value_t = 1.0e-2)]
+    /// Gaussian 1/e² waist radius w0 in metres. Default is the Smith 1977
+    /// F₀=5 waist w0 = √(2·F₀·z/k) at z=500 m, λ=1 µm — the blooming default
+    /// run then reproduces the M4 B3 validation geometry end-to-end.
+    #[arg(long, default_value_t = 2.8209e-2)]
     w0: f64,
     /// Output basename (within --out-dir).
     #[arg(long, default_value = "beam")]
@@ -125,15 +127,19 @@ enum Cmd {
     Blooming {
         #[command(flatten)]
         beam: BeamArgs,
-        /// Total beam power in watts.
-        #[arg(long, default_value_t = 1e4)]
+        /// Total beam power in watts. Default places the default geometry at
+        /// Smith number N_c ≈ 1 (N_φ ≈ 8.9) — the blooming rollover, inside the
+        /// M4 B3 validated range N_c ∈ [0.5, 1.8].
+        #[arg(long, default_value_t = 2600.0)]
         power: f64,
         /// Crosswind speed in m/s (blows along +x).
         #[arg(long, default_value_t = 2.0)]
         wind: f64,
         /// Absorbed-power coefficient in 1/m (heats the air and depletes the
-        /// beam; scattering is not blooming-active and belongs to M2).
-        #[arg(long, default_value_t = 1e-5)]
+        /// beam; scattering is not blooming-active and belongs to M2). Default
+        /// matches the α used by every M4 validation gate and the power sweep
+        /// (the Smith 1977 F₀=5 regime; see tests/blooming.rs, scripts/sweep_blooming.py).
+        #[arg(long, default_value_t = 1e-4)]
         alpha_abs: f64,
         /// Ambient temperature in K.
         #[arg(long, default_value_t = 288.15)]
