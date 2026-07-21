@@ -286,6 +286,32 @@ there. This is the 7.2 % worst point; the descent and rollover are matched much
 more tightly (0.1 %, 0.7 %, 3.0 % at N = 0.5, 1.0, 1.5). The fallback
 (B1+B2+signatures+cross-code) was **not** needed.
 
+What the residual is *not*: it is not the `N ≈ N_c` axis approximation (that is a
+near-uniform ≲4 % horizontal shift; it cannot produce a deviation that is 0.1 %
+at low N and grows to 7 % at high N), and it is not Smith reducing to
+geometrical optics (`F₀ = 5` is a *finite*-Fresnel curve that already carries
+diffraction — only `F₀ = ∞` is the ray limit).
+
+A dense post-hoc power sweep through the M5 bindings
+(`scripts/sweep_blooming.py`, 40 runs out to `N = 3`) confirms the recovery is a
+smooth, **strictly monotonic** rise past the `N ≈ 1` minimum (to `I_REL ≈ 0.94`
+at `N = 3`), not a single-point artifact of the digitized curve's flat tail. An
+"effective Fresnel number" reading was proposed (the receiver beam does defocus
+monotonically over this range — centered second-moment width `2.9 → 4.7 cm`
+from `N = 0.1 → 3`) and tested against Smith's digitized `F₀ = 10` and `F₀ = 20`
+branches: **the test does not support it**. If the beam behaved like a rising
+effective `F₀`, deviation from the `F₀ = 10`/`20` curves should *shrink* with N;
+instead it grows monotonically (deviation from `F₀ = 10`: 0.2 % → 6.2 % over
+`N ≈ 0.35 → 1.0`) while deviation from the nominal `F₀ = 5` curve stays smallest
+throughout the whole range the higher-`F₀` curves cover (both stop near
+`N ≈ 1.2`, short of the `N = 1.5–1.8` region where the residual is largest, so
+the mechanism there remains untested). **The mechanism behind the high-N
+residual is open** — a candidate hypothesis was tried and did not survive
+contact with more reference data; do not repeat the effective-Fresnel-number
+explanation without new evidence. The residual stays well inside the ±15 % gate
+and never touches the descent or the rollover minimum — the observables B3
+actually anchors.
+
 ### Stability gate
 
 The strong-blooming boundedness test from § Stability above (`N_φ ≈ 20`,
