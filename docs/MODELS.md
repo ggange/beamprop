@@ -239,6 +239,61 @@ References:
 - E. W. Lemmon et al., J. Phys. Chem. Ref. Data **33**, 111 (2004) — NIST air
   data gating the property table's `κ_t` (see `docs/M4_SPEC.md`).
 
+## M6a — Optical breakdown threshold (0-D kernel)
+
+### Electron-avalanche rate balance
+
+At a point in dry air the electron density obeys the avalanche balance
+
+```text
+dn_e/dt = (ν_i(I, p) − ν_att(p) − ν_diff(p))·n_e + S_mpi(I, p)
+```
+
+with cascade ionization from inverse-bremsstrahlung heating
+
+```text
+ν_i(I, p) = (e²·I)/(m_e·c·ε₀·U_i) · ν_m/(ν_m² + ω²),   ν_m = K_m·p,   ω = 2πc/λ
+```
+
+attachment `ν_att = K_a·p`, free-electron diffusion loss
+`ν_diff = D_e(p)/Λ²` with `D_e ∝ 1/p` over the geometry-pinned diffusion length
+`Λ` (T&T 20 µm focus as a sphere, `Λ = r/π` — **pinned, never fit**), and a
+swappable multiphoton seed `S_mpi = σ_K·I^K·N` (off by default; the seed is one
+electron in the focal volume). Breakdown at `n_e ≥ n_bd = 10²³ m⁻³`.
+
+The linear-per-slice ODE is advanced by its exact exponential solution
+`n_e' = n_e·e^{βdt} + S·expm1(βdt)/β` (`β = ν_i − ν_loss`). Threshold intensity
+is found by log-bisection; a pressure sweep gives `I_thr(p)`.
+
+Implemented in `src/breakdown0d.rs`.
+
+Gate: at 1064 nm `ω ≈ 1.77×10¹⁵ rad/s ≫ ν_m`, so `ν_i ∝ I·p` and the
+**high-pressure branch** (cascade and attachment ∝ p dominate diffusion ∝ 1/p,
+so the branch is Λ-independent) gives `I_thr ∝ p^-n` with `n < 1`, matching the
+measured trend. Fitted over the pinned gate range **300–2000 Torr** (8
+log-spaced points, 6 ns FWHM), the model gives **n = 0.716** against an asserted
+band of `n ∈ [0.4, 1.0]`; the level at 760 Torr is **6.3×10¹¹ W/cm²**, the right
+order for ns air breakdown at 1064 nm. The range is part of the gate: solving
+the avalanche criterion gives `I_thr = K_a/A + (ν_diff + G)/(A·p)`, so `n → 1`
+where diffusion and the growth requirement dominate and `n → 0` as `p → ∞` and
+`I_thr → K_a/A`. This high-p slope is the parameter-free physics gate
+(integrator sub-gates are unit tests of the exact-exponential solver, not
+physics validation). Absolute threshold level is **not** gated (3–10× inter-lab
+scatter). External comparison against the digitized Thiyagarajan & Thompson
+curve is pending the CSV (design-doc T2). Full model and constants:
+`docs/M6A_SPEC.md`.
+
+References:
+- Yu. P. Raizer, *Gas Discharge Physics*, Springer (1991) — cascade ionization
+  and the inverse-bremsstrahlung heating rate.
+- N. Kroll, K. M. Watson, *Theoretical study of ionization of air by intense
+  laser pulses*, Phys. Rev. A **5**, 1883 (1972).
+- C. G. Morgan, *Laser-induced breakdown of gases*, Rep. Prog. Phys. **38**,
+  621 (1975) — regime map and threshold scaling.
+- A. Thiyagarajan, J. B. Thompson, *Optical breakdown threshold investigation
+  of 1064 nm laser induced air plasmas*, J. Appl. Phys. **111**, 073302 (2012)
+  — the threshold-vs-pressure anchor (external gate, pending digitization).
+
 ## Rendering (not physics)
 
 The solver writes data only (`.npy` arrays + `_meta.json`/`_notes.md`

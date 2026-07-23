@@ -49,6 +49,36 @@ pub fn observed_order(err_h: f64, err_half: f64) -> f64 {
     (err_h / err_half).log2()
 }
 
+/// Least-squares slope `n` of a power law `y ∝ x^n`, fitted to `(x, y)` pairs
+/// in log-log space. The generic form behind any power-law trend gate (M6a's
+/// threshold-vs-pressure branch is the first user).
+///
+/// The fitted exponent is only meaningful over the range actually sampled — a
+/// curve that crosses between regimes has no single slope, so callers must
+/// restrict the points to one branch before fitting.
+///
+/// Returns `None` for fewer than two points, or if all `x` coincide.
+pub fn loglog_slope(curve: &[(f64, f64)]) -> Option<f64> {
+    if curve.len() < 2 {
+        return None;
+    }
+    let n = curve.len() as f64;
+    let (mut sx, mut sy, mut sxx, mut sxy) = (0.0, 0.0, 0.0, 0.0);
+    for &(x_raw, y_raw) in curve {
+        let x = x_raw.ln();
+        let y = y_raw.ln();
+        sx += x;
+        sy += y;
+        sxx += x * x;
+        sxy += x * y;
+    }
+    let denom = n * sxx - sx * sx;
+    if denom.abs() < f64::EPSILON {
+        return None;
+    }
+    Some((n * sxy - sx * sy) / denom)
+}
+
 // ------------------------------------------------------------------------
 // M3 references: Kolmogorov turbulence statistics (plane-wave forms).
 // ------------------------------------------------------------------------
