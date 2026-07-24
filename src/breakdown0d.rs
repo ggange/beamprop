@@ -20,19 +20,25 @@
 //! `U_i`. Both scale `∝ p`, so their difference gives `I_thr(p)` a constant
 //! high-pressure plateau on top of the `1/p` avalanche term.
 //!
-//! The absolute threshold *level* depends on several order-of-magnitude
-//! constants (`U_i`, `D_e`, `Λ`, `n_bd`) and is deliberately **not** validated;
-//! published thresholds scatter 3–10× across labs. The gated observable is the
-//! threshold *slope* `I_thr(p) ∝ p^-n`, `n = 0.800` at the default constants.
+//! The mean electron energy is **not** an input: the default
+//! [`CascadeModel::SelfConsistentClimb`] eliminates it by solving the climb
+//! `dε/dt = heating − δ_eff·ν_m·ε` exactly, leaving `δ_eff` as the only free
+//! constant.
 //!
-//! **Known gap, narrowed but open.** Thiyagarajan & Thompson measure
-//! `n = 0.33`. Without the inelastic term the model's floor was exactly
-//! `n = 1` and the measurement was unreachable at any parameter value; with it
-//! the literature range of the lumped loss constant spans `n ∈ [0.413, 1.139]`,
-//! leaving the measurement 1.25× below the envelope's edge rather than 5.3×
-//! away. The envelope is not widened to cover it. The prime suspect for the
-//! remainder is `⟨ε⟩` being held constant instead of solved self-consistently.
-//! External gates live in `tests/validation.rs`; analysis in `docs/M6A_SPEC.md`.
+//! The absolute threshold *level* depends on several order-of-magnitude
+//! constants (`U_i`, `D_e`, `Λ`, `n_bd`, `δ_eff`) and is deliberately **not**
+//! validated; published thresholds scatter 3–10× across labs, and this model
+//! sits ~7× above T&T — as a *flat* offset, so the shape is right and only the
+//! normalization is off.
+//!
+//! The gated observable is the threshold *slope* `I_thr(p) ∝ p^-n`. The model
+//! gives **`n = 0.356`** against Thiyagarajan & Thompson's measured **0.329**,
+//! an 8% agreement reached by two model corrections and no tuning — see
+//! `tt2012_threshold_slope_matches_measurement` in `tests/validation.rs`.
+//! Getting there took the whole ladder: without the inelastic-loss term the
+//! model's flattest reachable slope was exactly `n = 1`, and with the loss
+//! evaluated at an assumed fixed `⟨ε⟩` it was 0.800. Analysis and the full
+//! history are in `docs/M6A_SPEC.md`.
 
 use std::f64::consts::PI;
 
@@ -61,6 +67,46 @@ const MAX_EXPONENT: f64 = 700.0;
 const I_BRACKET_LO: f64 = 1e12;
 const I_BRACKET_HI: f64 = 1e22;
 
+/// How the inelastic energy loss enters the cascade rate.
+///
+/// The two variants are the parameter-light limits of the same energy balance,
+/// and they **bracket** the measured threshold slope: 0.800 and 0.356 against
+/// T&T's 0.329. See `docs/M6A_SPEC.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CascadeModel {
+    /// Loss evaluated at a fixed mean electron energy `⟨ε⟩`:
+    /// `ν_i = max(0, heating − δ_eff·ν_m·⟨ε⟩)/U_i`.
+    ///
+    /// `⟨ε⟩` is a free constant, literature-bounded to ≈2–5 eV. Retained as
+    /// the steeper end of the bracket (`n = 0.800`) and for the unit tests that
+    /// need a cascade rate linear in intensity; not the default.
+    FixedMeanEnergy,
+    /// `⟨ε⟩` eliminated by solving the climb exactly.
+    ///
+    /// An electron's energy obeys `dε/dt = heating − δ_eff·ν_m·ε`, a linear
+    /// ODE with solution `ε(t) = ε_∞(1 − e^{−t/t_r})`, `ε_∞ = heating/(δ_eff·ν_m)`
+    /// and `t_r = 1/(δ_eff·ν_m)`. Ionization happens when the climb reaches
+    /// `U_i`, so
+    ///
+    /// ```text
+    /// ν_i = δ_eff·ν_m / ln(ε_∞/(ε_∞ − U_i)),    zero if ε_∞ ≤ U_i
+    /// ```
+    ///
+    /// No free `⟨ε⟩` at all, and still exactly `∝ p` (the scaling the external
+    /// `E_eff` gate confirms). **The default**: it gives `n = 0.356` against a
+    /// measured 0.329, the closest M6a gets to the data, with `δ_eff` unchanged
+    /// from before this model existed.
+    ///
+    /// Its known idealization is the flip side of its strength: putting every
+    /// electron on the *mean* trajectory makes the threshold sharp at
+    /// `ε_∞ = U_i`, since the climb time diverges logarithmically there. A real
+    /// energy distribution has a tail that ionizes earlier and would soften
+    /// that. Treating the 8% agreement as luck-adjacent is the honest reading —
+    /// which is why `the_two_cascade_models_bracket_the_measurement` records
+    /// that the data sits *between* the two limits rather than at either.
+    SelfConsistentClimb,
+}
+
 /// A dry-air optical-breakdown point model at one wavelength.
 ///
 /// Construct with [`AirBreakdown::air_1064nm`] for the pinned M6a case, or
@@ -77,11 +123,14 @@ pub struct AirBreakdown {
     k_m: f64,
     /// Free-electron diffusion coefficient at `P_REF` (m²/s); scales as `1/p`.
     d_e_ref: f64,
-    /// Inelastic energy-loss rate per electron per unit pressure,
-    /// `L′ = δ_eff·K_m·⟨ε⟩` (W·Pa⁻¹). Subtracted from the IB heating before it
-    /// can drive ionization — this is what gives the threshold a high-pressure
-    /// plateau. Lumped from literature ranges; **never tuned to data**.
-    l_inel_per_pa: f64,
+    /// Fractional electron energy loss per collision, `δ_eff` (dimensionless).
+    /// Literature ≈ 0.01–0.05 for air above ~1 eV; **never tuned to data**.
+    delta_eff: f64,
+    /// Mean electron energy `⟨ε⟩` (J), used only by
+    /// [`CascadeModel::FixedMeanEnergy`]. Literature ≈ 2–5 eV.
+    mean_energy: f64,
+    /// Which limit of the energy balance drives the cascade.
+    cascade_model: CascadeModel,
     /// Diffusion length `Λ` (m), from the focal geometry — **pinned, not fit**.
     lambda_diff: f64,
     /// Dissociative-attachment rate coefficient `e + O₂ → O⁻ + O` (m³/s).
@@ -149,7 +198,9 @@ impl AirBreakdown {
             // value chosen to improve agreement. The ~12× spread in these
             // ranges is why the external slope gate is an envelope test rather
             // than a point comparison. See docs/M6A_SPEC.md.
-            l_inel_per_pa: 0.02 * 3.9e7 * 3.0 * E_CHARGE,
+            delta_eff: 0.02,
+            mean_energy: 3.0 * E_CHARGE,
+            cascade_model: CascadeModel::SelfConsistentClimb,
             lambda_diff,
             // Attachment from measured rate coefficients, not an s⁻¹Pa⁻¹ fudge
             // (Kossyi et al. 1992; Itikawa 2009). The three-body channel is the
@@ -193,8 +244,26 @@ impl AirBreakdown {
     /// default sits at the centre of those ranges and the gate never selects a
     /// value that improves agreement.
     pub fn with_inelastic_loss(mut self, delta_eff: f64, mean_energy_ev: f64) -> Self {
-        self.l_inel_per_pa = delta_eff * self.k_m * mean_energy_ev * E_CHARGE;
+        self.delta_eff = delta_eff;
+        self.mean_energy = mean_energy_ev * E_CHARGE;
         self
+    }
+
+    /// Select which limit of the energy balance drives the cascade — see
+    /// [`CascadeModel`]. The default is [`CascadeModel::FixedMeanEnergy`].
+    pub fn with_cascade_model(mut self, cascade_model: CascadeModel) -> Self {
+        self.cascade_model = cascade_model;
+        self
+    }
+
+    /// Equilibrium electron energy `ε_∞ = heating/(δ_eff·ν_m)` (J) — the energy
+    /// at which inelastic losses balance inverse-bremsstrahlung heating.
+    ///
+    /// Independent of pressure to the `(ν_m/ω)²` correction, since heating and
+    /// loss both scale `∝ p`. [`CascadeModel::SelfConsistentClimb`] ionizes only
+    /// where this exceeds `U_i`, which is what fixes its threshold plateau.
+    pub fn equilibrium_energy(&self, intensity: f64, pressure: f64) -> f64 {
+        self.heating_power(intensity, pressure) / (self.delta_eff * self.k_m * pressure)
     }
 
     /// Inverse-bremsstrahlung heating power absorbed per electron (W).
@@ -212,7 +281,7 @@ impl AirBreakdown {
     /// Vibrational and electronic excitation of N₂/O₂ drain the electron on its
     /// climb to `U_i`. Scales `∝ p` because it goes as the collision frequency.
     pub fn inelastic_loss_power(&self, pressure: f64) -> f64 {
-        self.l_inel_per_pa * pressure
+        self.delta_eff * self.k_m * pressure * self.mean_energy
     }
 
     /// Cascade (avalanche) ionization frequency `ν_i(I, p)` (s⁻¹).
@@ -229,8 +298,24 @@ impl AirBreakdown {
     /// not linear: there is a finite intensity below which no cascade runs at
     /// all. That offset is what gives `I_thr(p)` its high-pressure plateau.
     pub fn cascade_rate(&self, intensity: f64, pressure: f64) -> f64 {
-        let net = self.heating_power(intensity, pressure) - self.inelastic_loss_power(pressure);
-        net.max(0.0) / self.u_ion
+        match self.cascade_model {
+            CascadeModel::FixedMeanEnergy => {
+                let net =
+                    self.heating_power(intensity, pressure) - self.inelastic_loss_power(pressure);
+                net.max(0.0) / self.u_ion
+            }
+            CascadeModel::SelfConsistentClimb => {
+                let eps_inf = self.equilibrium_energy(intensity, pressure);
+                if eps_inf <= self.u_ion {
+                    // Losses cap the electron below the ionization potential:
+                    // the climb never completes, however long the pulse.
+                    return 0.0;
+                }
+                // t_climb = t_r·ln(ε_∞/(ε_∞ − U_i)), t_r = 1/(δ_eff·ν_m).
+                let nu_relax = self.delta_eff * self.k_m * pressure;
+                nu_relax / (eps_inf / (eps_inf - self.u_ion)).ln()
+            }
+        }
     }
 
     /// Total loss frequency `ν_att + ν_diff` (s⁻¹).
@@ -546,10 +631,11 @@ mod tests {
 
     #[test]
     fn cascade_is_affine_in_intensity_and_linear_in_pressure() {
+        // FixedMeanEnergy only: SelfConsistentClimb is nonlinear in I by design.
         // Both heating and inelastic loss carry the same factor p, so at fixed
         // intensity ν_i ∝ p EXACTLY — which is the scaling the external E_eff
         // gate confirms, and it survives the inelastic term untouched.
-        let m = model();
+        let m = model().with_cascade_model(CascadeModel::FixedMeanEnergy);
         let p = 300.0 * TORR;
         let i = 1e17;
         // Linear only to the (ν_m/ω)² correction of the IB Lorentzian, ~1e-6.
@@ -578,7 +664,7 @@ mod tests {
         // which heating cannot outrun excitation losses and no cascade runs at
         // all. This offset is what gives I_thr(p) a high-pressure plateau; the
         // model could not produce one without it.
-        let m = model();
+        let m = model().with_cascade_model(CascadeModel::FixedMeanEnergy);
         let p = P_REF;
         let i_cut = m.inelastic_loss_power(p) / (m.heating_power(1.0, p));
         assert!(i_cut > 0.0 && i_cut.is_finite());
@@ -615,7 +701,9 @@ mod tests {
         let mut ns = Vec::new();
         for delta in [0.01, 0.02, 0.05] {
             for ev in [2.0, 3.0, 5.0] {
-                let m = AirBreakdown::air_1064nm().with_inelastic_loss(delta, ev);
+                let m = AirBreakdown::air_1064nm()
+                    .with_cascade_model(CascadeModel::FixedMeanEnergy)
+                    .with_inelastic_loss(delta, ev);
                 let c = m.pressure_sweep(GATE_P_LO, GATE_P_HI, 8, 6e-9, 400);
                 assert_eq!(c.len(), 8, "sweep lost points at δ={delta}, ⟨ε⟩={ev}");
                 ns.push(-loglog_slope(&c).unwrap());
@@ -633,6 +721,61 @@ mod tests {
             hi < 1.5,
             "envelope top {hi:.3} did not improve on n = 1.737"
         );
+    }
+
+    #[test]
+    fn self_consistent_climb_eliminates_the_mean_energy() {
+        // The whole point of the self-consistent variant: ⟨ε⟩ is not an input.
+        // Solving dε/dt = heating − δ_eff·ν_m·ε removes it, leaving only δ_eff.
+        // If ⟨ε⟩ ever leaks back into this path, this fails.
+        let sweep = |ev: f64| {
+            AirBreakdown::air_1064nm()
+                .with_inelastic_loss(0.02, ev)
+                .with_cascade_model(CascadeModel::SelfConsistentClimb)
+                .pressure_sweep(GATE_P_LO, GATE_P_HI, 8, 6e-9, 400)
+        };
+        let (a, b) = (sweep(2.0), sweep(5.0));
+        assert_eq!(a.len(), 8);
+        let (sa, sb) = (loglog_slope(&a).unwrap(), loglog_slope(&b).unwrap());
+        assert!(
+            (sa - sb).abs() < 1e-9,
+            "⟨ε⟩ still affects the self-consistent path: {sa:.6} vs {sb:.6}"
+        );
+        // And it must keep ν_i ∝ p, which the external E_eff gate confirms.
+        let m = AirBreakdown::air_1064nm().with_cascade_model(CascadeModel::SelfConsistentClimb);
+        let (p, i) = (500.0 * TORR, 2e16);
+        let ratio = m.cascade_rate(i, 2.0 * p) / m.cascade_rate(i, p);
+        assert!(
+            (ratio - 2.0).abs() < 1e-3,
+            "self-consistent ν_i is no longer ∝ p: {ratio:.6}"
+        );
+    }
+
+    #[test]
+    fn the_two_cascade_models_bracket_the_measurement() {
+        // The two limits of the same energy balance sit either side of T&T's
+        // n = 0.329: FixedMeanEnergy (⟨ε⟩ free, literature-bounded) is too
+        // steep at 0.800; SelfConsistentClimb (⟨ε⟩ eliminated) gives 0.356.
+        // Recording the bracket keeps either from being quietly "improved"
+        // into the other's territory.
+        let slope_of = |model| {
+            let c = AirBreakdown::air_1064nm()
+                .with_cascade_model(model)
+                .pressure_sweep(GATE_P_LO, GATE_P_HI, 8, 6e-9, 400);
+            assert_eq!(c.len(), 8);
+            -loglog_slope(&c).unwrap()
+        };
+        let fixed = slope_of(CascadeModel::FixedMeanEnergy);
+        let selfc = slope_of(CascadeModel::SelfConsistentClimb);
+        assert!(
+            (0.78..=0.82).contains(&fixed),
+            "FixedMeanEnergy slope moved: {fixed:.3}, expected ≈0.800"
+        );
+        assert!(
+            (0.34..=0.37).contains(&selfc),
+            "SelfConsistentClimb slope moved: {selfc:.3}, expected ≈0.356"
+        );
+        assert!(selfc < fixed, "the two models no longer bracket");
     }
 
     #[test]
@@ -654,9 +797,10 @@ mod tests {
         //
         // Those two bracketed the model to n ∈ [1, 2] BEFORE the inelastic-loss
         // term existed (observed then: n = 1.737). The term adds a third,
-        // pressure-independent contribution L′/h — a genuine plateau — which
-        // drags the slope below that old floor, to n = 0.800 at the default
-        // constants. So this test now gates the *combined* form:
+        // pressure-independent contribution — a genuine plateau — which drags
+        // the slope below that old floor, to n = 0.356 with the default
+        // SelfConsistentClimb (0.800 with FixedMeanEnergy). So this test now
+        // gates the *combined* form:
         //
         //     I_thr(p) = L′/h + U_i·(ν_diff + ν_att + G)/(h·p)
         //

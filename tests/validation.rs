@@ -989,33 +989,41 @@ fn tt2012_effective_field_rises_with_pressure() {
 /// to −1.74 — further from the data. The old near-agreement was an artifact of
 /// a wrong constant.
 ///
-/// **The gap has narrowed 4× but is not closed, and the remainder is real.**
+/// **PASSING** — the first external slope agreement M6a has had, and it took
+/// two model corrections to get here rather than any tuning.
 ///
-/// The diagnosis that produced the inelastic-loss term: because the cascade is
-/// `ν_i ∝ I·p` (confirmed externally by
-/// `tt2012_effective_field_rises_with_pressure`), a threshold set by a fixed
-/// growth requirement gives `I_thr = G/(A·p) ∝ p^-1` exactly when losses are
-/// negligible. `n = 1` was therefore the old model's flat *floor* — diffusion
-/// only steepens it — and the measured 0.33 lay below what it could reach.
-/// Subtracting the inelastic energy loss from the heating before it drives
-/// ionization adds a pressure-independent term `L′/h`, a genuine plateau, and
-/// moves the model from `n = 1.737` to `n = 0.800`.
+/// Measured `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`. The
+/// kernel gives **`p^-0.356`** — 8% — with `δ_eff = 0.02` unchanged from the
+/// commit that predates the self-consistent model, so this is a prediction and
+/// not a fit.
 ///
-/// What remains: sweeping the **literature ranges** of the one lumped constant
-/// (`δ_eff ≈ 0.01–0.05`, `⟨ε⟩ ≈ 2–5 eV`) gives an envelope of
-/// `n ∈ [0.413, 1.139]`, and the measured 0.329 sits just *below* its lower
-/// edge — 1.25× from the most favourable literature value, versus 5.3× before
-/// the term existed. The envelope is deliberately **not** widened to swallow
-/// the measurement, and `L′` stays at the centre of its range.
+/// How it got here, because the route matters more than the number:
+/// 1. `ν_i ∝ I·p` (externally confirmed by
+///    `tt2012_effective_field_rises_with_pressure`) plus a fixed growth
+///    requirement forces `I_thr ∝ p^-1` when losses vanish. `n = 1` was the
+///    original model's flat *floor* and the measurement lay below it —
+///    unreachable at any parameter value.
+/// 2. Subtracting inelastic excitation losses from the heating before it drives
+///    ionization adds a pressure-independent plateau term and moved the model
+///    to `n = 0.800`, still 2.4× off.
+/// 3. Eliminating the free `⟨ε⟩` — solving the climb ODE `dε/dt = heating −
+///    δ_eff·ν_m·ε` exactly instead of evaluating the loss at an assumed mean
+///    energy — moved it to `n = 0.356`.
 ///
-/// Candidates for the residual, none yet tested: `⟨ε⟩` is treated as a
-/// constant when it should be solved self-consistently from the same energy
-/// balance (it rises with pressure, which would flatten `n` further); the
-/// breakdown criterion `n_bd` is pressure-independent here; and the digitized
-/// curve's own slope carries uncertainty from the low-pressure points where
-/// T&T quote ±2.5. A self-consistent `⟨ε⟩(p)` is the obvious next rung.
+/// The gate is an **envelope** test, not a point comparison, because `δ_eff`
+/// remains free within its literature range (0.01–0.05). That range gives
+/// `n ∈ [0.154, 0.583]`, which contains the measurement; the assertion is
+/// containment plus a factor-1.5 band on the literature-central value. Widening
+/// the range to manufacture containment is forbidden by the same rule that pins
+/// `Λ`.
+///
+/// Still NOT claimed: the absolute level, which is ~7× high (gated separately
+/// as a flat offset within the inter-lab scatter), and any suggestion that the
+/// self-consistent model is *more* correct in general — it idealizes every
+/// electron onto the mean trajectory, so its sharp threshold is luck as much as
+/// physics. `the_two_cascade_models_bracket_the_measurement` records that the
+/// two limits straddle the data.
 #[test]
-#[ignore = "narrowed 5.3x -> 1.25x by the inelastic-loss term; measured n=0.33 still just below the literature envelope [0.413, 1.139] (see docs/M6A_SPEC.md)"]
 fn tt2012_threshold_slope_matches_measurement() {
     let Some(e_b) = load_tt_curve("tt2012_E_B_vs_pressure.csv") else {
         return;
@@ -1028,15 +1036,37 @@ fn tt2012_threshold_slope_matches_measurement() {
     assert!(high.len() >= 5, "too few points: {}", high.len());
     // I ∝ E², so the intensity exponent is twice the field exponent.
     let measured_n = -2.0 * beamprop::validate::loglog_slope(&high).expect("E_B slope");
-    let model_n = 0.800; // src/breakdown0d.rs, same 300–2000 Torr window
-    let envelope_lo = 0.413; // δ_eff = 0.05, ⟨ε⟩ = 5 eV — most favourable literature value
-    // Gated against the EDGE of the literature envelope, not the default:
-    // the honest question is whether any defensible constant reaches the data.
+    // Model slopes across the LITERATURE range of the one remaining free
+    // constant, δ_eff ∈ [0.01, 0.05]. ⟨ε⟩ is absent by construction here.
+    let m = beamprop::breakdown0d::AirBreakdown::air_1064nm()
+        .with_cascade_model(beamprop::breakdown0d::CascadeModel::SelfConsistentClimb);
+    let slope_at = |delta: f64| {
+        let c = m.with_inelastic_loss(delta, 3.0).pressure_sweep(
+            TT_P_LO * TORR,
+            TT_P_HI * TORR,
+            8,
+            6e-9,
+            400,
+        );
+        assert_eq!(c.len(), 8, "model sweep lost points at δ_eff = {delta}");
+        -beamprop::validate::loglog_slope(&c).expect("model slope")
+    };
+    let (env_hi, env_lo) = (slope_at(0.01), slope_at(0.05));
+    let central = slope_at(0.02);
+
+    // The measurement must lie inside the literature envelope.
     assert!(
-        (envelope_lo / measured_n).abs() < 1.1,
-        "kernel I_thr ∝ p^-{model_n:.3} (envelope floor p^-{envelope_lo:.3}) vs \
-         measured p^-{measured_n:.3} — envelope floor still {:.2}× too steep",
-        envelope_lo / measured_n
+        env_lo <= measured_n && measured_n <= env_hi,
+        "measured n = {measured_n:.3} outside the δ_eff literature envelope \
+         [{env_lo:.3}, {env_hi:.3}]"
+    );
+    // And the literature-CENTRAL value must be close, so containment is not
+    // carried by the extremes of a wide range.
+    assert!(
+        (central / measured_n).max(measured_n / central) < 1.5,
+        "central-δ_eff slope p^-{central:.3} vs measured p^-{measured_n:.3} \
+         ({:.2}× apart)",
+        (central / measured_n).max(measured_n / central)
     );
 }
 
@@ -1048,18 +1078,27 @@ fn tt2012_threshold_slope_matches_measurement() {
 /// so mixing the two conventions is a factor-2 error — one this file made and
 /// this test exists to prevent recurring.
 ///
-/// The substantive point is the *shape* of the ratio. Before the
-/// inelastic-loss term the model crossed the data near 900 Torr (3.10× down to
-/// 0.33×) — a 9× swing that was the slope error in absolute clothing. With the
-/// term the ratio is a much flatter, uniformly-high offset: **4.69× at 380 Torr
-/// to 2.41× at 1896 Torr**, i.e. the model sits above the data everywhere by an
-/// amount inside the 3–10× inter-lab scatter this project declines to gate.
+/// The substantive point is the *shape* of the ratio, and it has now gone
+/// **flat**: 6.4–7.4× across the whole window, varying by only 1.16×. The
+/// history is the argument —
 ///
-/// So this asserts a bounded, monotone offset — never a level agreement. The
-/// residual downward trend is the remaining slope gap (model n = 0.800 vs
-/// measured 0.329) and is gated separately.
+/// | model | ratio at 380 → 1896 Torr | |
+/// |---|---|---|
+/// | no inelastic loss | 3.10× → 0.33× | crosses the data; 9× swing |
+/// | fixed `⟨ε⟩` | 4.69× → 2.41× | still drifting |
+/// | self-consistent | **6.85× → 7.07×** | flat |
+///
+/// A flat ratio means the model reproduces the *shape* of `I_thr(p)` and is
+/// wrong only by a constant multiplier — exactly what is expected when the
+/// slope is right and the absolute normalization (which depends on `U_i`,
+/// `n_bd`, `Λ`, `δ_eff`) carries order-of-magnitude uncertainty. The earlier
+/// drifts were the slope error showing up in absolute clothing.
+///
+/// So this gates **flatness**, plus containment in the 3–10× inter-lab scatter
+/// band the project declines to gate on level. It is deliberately not a level
+/// agreement: 7× is real and sits at the top of that band.
 #[test]
-fn tt2012_level_ratio_is_a_bounded_offset() {
+fn tt2012_level_ratio_is_flat_within_scatter() {
     let Some(e_b) = load_tt_curve("tt2012_E_B_vs_pressure.csv") else {
         return;
     };
@@ -1081,30 +1120,28 @@ fn tt2012_level_ratio_is_a_bounded_offset() {
         .collect();
     assert!(ratios.len() >= 5, "too few points: {}", ratios.len());
 
-    // The model is still steeper than the data, so the ratio falls — but it no
-    // longer crosses: it stays above unity across the whole window.
-    let (first, last) = (ratios[0].1, ratios[ratios.len() - 1].1);
+    let lo = ratios.iter().map(|r| r.1).fold(f64::MAX, f64::min);
+    let hi = ratios.iter().map(|r| r.1).fold(0.0f64, f64::max);
+
+    // FLATNESS is the real assertion: shape reproduced, normalization off by a
+    // constant. A drifting ratio would mean the slope has regressed.
     assert!(
-        ratios.iter().all(|&(_, r)| r > 1.0),
-        "model no longer sits above the data everywhere: {ratios:?}"
+        hi / lo < 1.35,
+        "level ratio is no longer flat ({lo:.2}×–{hi:.2}×, spread {:.2}×) — \
+         a drift here means the threshold slope has regressed",
+        hi / lo
     );
+    // Contained in the inter-lab scatter the project declines to gate on level.
     assert!(
-        last < first,
-        "ratio should still fall with pressure (residual slope gap): \
-         {first:.2}× → {last:.2}×"
-    );
-    // Bounded within the scatter the project declines to gate. A tighter band
-    // would be over-claiming; a looser one would stop catching regressions.
-    assert!(
-        (1.5..=8.0).contains(&first) && (1.5..=8.0).contains(&last),
-        "offset left the ungated inter-lab scatter band: {first:.2}× → {last:.2}×"
+        (3.0..=10.0).contains(&lo) && (3.0..=10.0).contains(&hi),
+        "offset left the ungated 3–10× inter-lab scatter band: {lo:.2}×–{hi:.2}×"
     );
     // Guard the unit convention: had E_B been read as a peak amplitude, every
     // measured intensity would halve and every ratio would double.
     assert!(
-        (3.5..=6.0).contains(&first),
-        "ratio at the low-pressure end is {first:.2}×, expected ≈4.7× — check \
-         whether E_B was converted with the RMS form I = ε₀cE² (correct) or \
-         the peak form ½ε₀cE² (wrong, doubles this number)"
+        (5.5..=8.5).contains(&hi),
+        "top ratio is {hi:.2}×, expected ≈7× — check whether E_B was converted \
+         with the RMS form I = ε₀cE² (correct) or the peak form ½ε₀cE² (wrong, \
+         doubles this number)"
     );
 }

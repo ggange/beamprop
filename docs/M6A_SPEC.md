@@ -95,20 +95,48 @@ plateau, which is exactly the behaviour the data shows and which the previous
 model could not produce at any parameter value (its floor was `n = 1`). Here
 `n → 0` as `p → ∞` and `n → 1` at low `p`, so `n ∈ (0, 1)`.
 
-**Honesty about its status.** This introduces one new constant, and the
-literature ranges (`δ_eff ≈ 0.01–0.05` for air above ~1 eV, `⟨ε⟩ ≈ 2–5 eV`)
-span ~12× in `L′`. So the model's prediction is an **envelope, not a point**:
-across that range **the code** gives `n ∈ [0.413, 1.139]`, against a measured
-`n = 0.329`. (A closed-form estimate suggests a wider `[0.19, 0.89]`; the code
-is steeper because the Gaussian pulse raises the threshold above the analytic
-full-FWHM value, pushing it further from the plateau. Trust the code.)
+**Two limits of the same balance.** `⟨ε⟩` above is an assumption, and it can
+be removed. The electron energy obeys a linear ODE,
 
-So the measurement sits **just below** the envelope's lower edge — 1.25× from
-the most favourable literature value, against 5.3× before this term existed.
-The gate is an envelope test and it is **still red**: the envelope is not
-widened to swallow the measurement. That is weaker than a parameter-free
-prediction and is labelled as such. **`L′` is set from the centre of the literature range and is never
-adjusted to improve agreement**; the pinned-`Λ` rule applies to it verbatim.
+```text
+dε/dt = heating − δ_eff·ν_m·ε      =>   ε(t) = ε_∞(1 − e^{−t/t_r})
+ε_∞   = heating/(δ_eff·ν_m)         (pressure-independent: both terms ∝ p)
+t_r   = 1/(δ_eff·ν_m)
+```
+
+Ionization occurs when the climb reaches `U_i`, so `t_climb = t_r·ln(ε_∞/(ε_∞ −
+U_i))` and
+
+```text
+ν_i = δ_eff·ν_m / ln(ε_∞/(ε_∞ − U_i)),     zero if ε_∞ ≤ U_i
+```
+
+with **no `⟨ε⟩` anywhere** and still exactly `∝ p`. Both forms are implemented
+as `CascadeModel::{FixedMeanEnergy, SelfConsistentClimb}`; the self-consistent
+one is the **default**.
+
+| model | free constants | slope `n` |
+|---|---|---|
+| no inelastic loss | — | 1.737 |
+| `FixedMeanEnergy` | `δ_eff`, `⟨ε⟩` | 0.800 |
+| **`SelfConsistentClimb`** | `δ_eff` | **0.356** |
+| *measured (T&T)* | | *0.329* |
+
+**Honesty about its status.** `δ_eff` remains free within its literature range
+(0.01–0.05), which gives `n ∈ [0.154, 0.583]` — containing the measurement — so
+the external gate is an **envelope** test plus a factor-1.5 band on the
+literature-central value, not a point comparison. `δ_eff = 0.02` was fixed
+before the self-consistent model existed, so the 8% agreement is a prediction
+rather than a fit; widening the range to manufacture containment is forbidden
+by the same rule that pins `Λ`.
+
+Two things are deliberately *not* claimed. The absolute level is ~7× above T&T
+— gated only as a *flat* offset inside the inter-lab scatter, which says the
+shape is right and the normalization is not. And the self-consistent model is
+not asserted to be more correct in general: putting every electron on the mean
+trajectory makes its threshold artificially sharp at `ε_∞ = U_i`, and a real
+energy distribution would soften it. The measurement sitting *between* the two
+limits is the more trustworthy statement, and it is gated as such.
 
 ### Diffusion loss `ν_diff` — Λ is pinned, never fit (D5)
 
@@ -228,10 +256,12 @@ I_thr(p) = L′/h + U_i·[ν_att(p) + ν_diff(p) + G] / (h·p)
 **This closed form is a scaling tool, not the model.** It assumes the cascade
 runs at its peak rate for the whole of `τ`, whereas the code integrates a
 Gaussian pulse whose intensity is near peak for only part of it, so the code's
-threshold is higher (`6.4×10¹¹` vs `≈4.1×10¹¹ W/cm²` at 760 Torr). The offset
-is pressure-independent, so the exponents below are unaffected — but never
-quote the closed form as a level, and note that being further above the plateau
-makes the code's slope *steeper* than the closed form predicts (0.800 vs 0.521).
+threshold is higher than the closed form. The offset is pressure-independent,
+so the exponents below are unaffected — but never quote the closed form as a
+level, and note that being further above the plateau makes the code's slope
+*steeper* than the closed form predicts. This bit twice: for `FixedMeanEnergy`
+the closed form said 0.521 and the code gives 0.800; for `SelfConsistentClimb`
+it said 0.060 and the code gives 0.356. **Trust the code.**
 
 Attachment is negligible at these densities (`6.7×10⁷` against `4.9×10⁹ s⁻¹`
 for diffusion at 1 atm), leaving three terms whose exponents are **exact**:
@@ -244,9 +274,10 @@ diffusion-limited:             I_thr = U_i·ν_diff/(h·p)         ∝ p^-2
 
 Any mixture falls between them, and the gate asserts **`n ∈ (0, 1)`** — the
 plateau must be doing work, since without `L′` the model cannot get below
-`n = 1` at all. Observed: `n = 0.800`, level at 760 Torr `6.4×10¹¹ W/cm²`
-(not gated). The literature envelope of `L′` is pinned separately at
-`n ∈ [0.413, 1.139]`.
+`n = 1` at all. Observed with the default `SelfConsistentClimb`: **`n = 0.356`**,
+level at 760 Torr `1.32×10¹² W/cm²` (not gated). With `FixedMeanEnergy`:
+`n = 0.800`. Both literature envelopes are pinned separately —
+`[0.154, 0.583]` and `[0.413, 1.139]` respectively.
 
 **The bracket is not universal, and the qualifier is load-bearing.** It holds
 only while attachment is negligible. Three-body attachment is `∝ p²` and
@@ -297,60 +328,26 @@ fitted, so any disagreement is a statement about the rate model.
 2. **`E_eff` rises with pressure — PASSES.** Predicted `p^+0.642`, measured
    `p^+0.695`. The sign is the physics: `E_eff` only rises because `ν_m ≪ ω`
    makes the IB factor grow ∝ p faster than the threshold field falls.
-3. **Threshold pressure-slope — still FAILS, but narrowed 4×.** Measured
-   `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.33`. The kernel gave
-   `p^-1.74` before the inelastic-loss term and gives `p^-0.80` after it; the
-   literature envelope of the lumped loss constant spans `n ∈ [0.413, 1.139]`,
-   so the measurement now sits **1.25× below the envelope's edge** instead of
-   5.3× away. Still committed **red** (`#[ignore]`d with its reason). The
-   envelope is *not* widened to cover the measurement.
+3. **Threshold pressure-slope — now PASSES.** Measured `E_B ∝ p^-0.164` over
+   300–2000 Torr, i.e. `I_thr ∝ p^-0.329`; the kernel gives **`p^-0.356`**, an
+   8% agreement. It took two model corrections and no tuning to get there:
 
-**A wrong diagnosis, recorded because the correction is the finding.** The gap
-first looked like a factor of 2 caused by two-body vs three-body attachment.
-Implementing attachment from measured rate coefficients showed the opposite:
-real attachment is ~150× *smaller* than the constant it replaced, hence
-negligible, and the corrected model moved from `p^-0.72` to `p^-1.74` — further
-from the data. The near-agreement had been propped up by a wrong number.
+   | stage | slope `n` | vs measured |
+   |---|---|---|
+   | original (no inelastic loss) | 1.737 | 5.3× — and unreachable at *any* parameter value, since `n = 1` was the model's floor |
+   | + inelastic loss at fixed `⟨ε⟩` | 0.800 | 2.4× |
+   | + `⟨ε⟩` eliminated (self-consistent climb) | **0.356** | **1.08×** |
 
-**What is left is structural, and that is the interesting part.** With
-attachment negligible the model is bracketed by its own closed forms:
+   Gated as an envelope over `δ_eff`'s literature range (`n ∈ [0.154, 0.583]`,
+   containing the measurement) plus a factor-1.5 band on the central value.
 
-```text
-growth-limited (losses → 0):   I_thr = G/(A·p)       ∝ p^-1
-diffusion-limited:             I_thr = ν_diff/(A·p)  ∝ p^-2
-```
-
-so `n ∈ [1, 2]` while attachment is negligible. The sharper statement is that
-`n = 1` — the growth-limited `I_thr = G/(A·p)` — is the **flattest the model
-can be** without a loss that grows faster than `p`: diffusion only steepens it.
-The measured `n = 0.33` lies below that floor. Only a super-linear loss can
-flatten past it, and three-body attachment at its *measured* coefficient does
-not reach the window (that regime starts near 10⁴ Torr); forcing it would take
-`k₃` ≈ 100× the measured value, which is fabrication rather than re-pinning. It
-would take the cascade coefficient itself to fall with pressure, `A ∝ p^-0.67`,
-which is what an effective ionization energy `U_i` growing with collision
-frequency would produce (inelastic losses per ionization scale ∝ p, and the
-literature's "effective" `U_i` is known to exceed the true ionization potential).
-
-That term is now implemented (see *Inelastic energy loss* above) and closes
-most of the gap; the residue is the open question M6a hands forward.
-
-On the absolute level: converting `E_B` to intensity requires the RMS form
-`I = ε₀·c·E_rms²` (**not** `½ε₀cE²`, which applies to a peak amplitude — the
-`E_eff` ratio established `E_B` is RMS), giving `2.06×10¹¹ W/cm²` measured at
-760 Torr against `6.4×10¹¹` modelled. Across the range the model now sits
-uniformly *above* the data by a bounded factor:
-
-| p (Torr) | 380 | 569 | 759 | 950 | 1420 | 1896 |
-|---|---|---|---|---|---|---|
-| model/measured, with `L` | 4.69 | 3.90 | 3.09 | 3.15 | 2.74 | 2.41 |
-| model/measured, before `L` | 3.10 | 1.95 | 1.19 | 0.96 | 0.53 | 0.33 |
-
-The earlier model *crossed* the data (a 9× swing that was the slope error in
-absolute clothing); the current one is a roughly constant 2.4–4.7× offset,
-inside the inter-lab scatter this spec declines to gate. The remaining downward
-drift is the residual slope gap. The level is still not gated, and the slope
-remains the observable that matters.
+**What this does and does not settle.** The *shape* of `I_thr(p)` is now
+reproduced; the *level* is not, sitting ~7× above T&T. But that offset is
+**flat** (6.4–7.4× across the window, spread 1.16×), which is the signature of
+a correct shape with an uncertain normalization — `U_i`, `n_bd`, `Λ` and
+`δ_eff` all scale it. Earlier models had *drifting* ratios (3.10× → 0.33×
+without the loss term, 4.69× → 2.41× with fixed `⟨ε⟩`), and that drift was the
+slope error showing up in absolute clothing. Level remains ungated.
 
 **The line on fixing it.** Re-pinning a constant from independent data is
 legitimate; so is adding a term the physics demands. Tuning any constant until

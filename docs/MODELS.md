@@ -289,12 +289,13 @@ I_thr(p) = L′/h + U_i·(ν_att + ν_diff + G)/(h·p),   G = ln(n_bd/n_seed)/τ
 Attachment is negligible here, so the exponent runs between two **exact**
 limits — plateau-dominated `n → 0` and diffusion-dominated `n → 2` — with the
 growth-limited `p^-1` in between. Fitted over the pinned range **300–2000
-Torr** (8 log-spaced points, 6 ns FWHM) the model gives **n = 0.800**, and the
+Torr** (8 log-spaced points, 6 ns FWHM) the model gives **n = 0.356**, and the
 gate asserts `n ∈ (0, 1)`: the plateau must be doing work, since without `L`
 the model is stuck at `n ≥ 1`. Sweeping the literature ranges of `L′`
-(δ_eff ≈ 0.01–0.05, ⟨ε⟩ ≈ 2–5 eV) gives an envelope `n ∈ [0.413, 1.139]`, which
-is separately pinned so it cannot drift. The level at 760 Torr is
-**6.4×10¹¹ W/cm²**. Absolute threshold level is **not** gated (3–10× inter-lab
+(δ_eff ≈ 0.01–0.05) gives an envelope `n ∈ [0.154, 0.583]`, separately pinned so
+it cannot drift. The level at 760 Torr is **1.32×10¹² W/cm²**, and the
+`FixedMeanEnergy` variant gives `n = 0.800` as the other end of the bracket.
+Absolute threshold level is **not** gated (3–10× inter-lab
 scatter). Integrator sub-gates are unit tests of the exact-exponential solver,
 not physics validation.
 
@@ -308,11 +309,13 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   1.05 ± 0.01 over 46–1858 Torr. Non-circular anchor.
 - **`E_eff(p)` slope — passes.** Predicted `p^+0.642`, measured `p^+0.695`;
   the positive sign confirms the `ν_m ≪ ω` branch.
-- **`I_thr(p)` slope — still red, but narrowed 4×** (`#[ignore]`d with its
-  reason). Measured `p^-0.33`; the kernel gave `p^-1.74` before the
-  inelastic-loss term and `p^-0.80` after, with a literature envelope of
-  `n ∈ [0.413, 1.139]` — the measurement is 1.25× below its edge, not 5.3×
-  away. The envelope is not widened to cover it. This first looked
+- **`I_thr(p)` slope — PASSES to 8%.** Measured `p^-0.329`, kernel `p^-0.356`.
+  The route: `p^-1.74` originally (where `n = 1` was a hard floor and the
+  measurement was unreachable at any parameter value), `p^-0.80` once inelastic
+  losses were subtracted from the heating, `p^-0.356` once `⟨ε⟩` was eliminated
+  by solving the climb ODE exactly. `δ_eff = 0.02` predates the self-consistent
+  model, so this is a prediction, not a fit. Gated as containment in the
+  `δ_eff` literature envelope plus a factor-1.5 band on the central value. This first looked
   like a 2× attachment problem; implementing attachment from measured rate
   coefficients showed real attachment is ~150× *smaller* than the
   order-of-magnitude constant it replaced, moving the model from `p^-0.72` to
