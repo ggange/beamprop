@@ -174,6 +174,13 @@ gives
 I_thr(p) = [ν_att(p) + ν_diff(p) + G] / (A·p),      A ≡ ν_i/(I·p)
 ```
 
+**This closed form is a scaling tool, not the model.** It assumes the cascade
+runs at its peak rate for the whole of `τ`, whereas the code integrates a
+Gaussian pulse whose intensity is near peak for only part of it. The analytic
+form therefore sits ~2× *below* the code's bisection (`1.25×10¹¹` vs
+`2.45×10¹¹ W/cm²` at 760 Torr). The offset is pressure-independent, so the
+exponents below are unaffected — but never quote the closed form as a level.
+
 With attachment from measured rate coefficients it is negligible at these
 densities (`6.7×10⁷` against `4.9×10⁹ s⁻¹` for diffusion at 1 atm), leaving two
 terms whose exponents are **exact**:
@@ -183,11 +190,18 @@ growth-limited (losses → 0):   I_thr = G/(A·p)       ∝ p^-1
 diffusion-limited:             I_thr = ν_diff/(A·p)  ∝ p^-2      (ν_diff ∝ 1/p)
 ```
 
-Any mixture must fall strictly between them, so the gate asserts
-**`n ∈ [1, 2]`** — a bracket forced by the model's structure, not a fitted band.
-`Λ` moves where inside the interval the model lands, never outside it, which is
-what makes this independent of the quantity D5 forbade tuning. Observed:
-`n = 1.737`, level at 760 Torr `2.4×10¹¹ W/cm²` (not gated).
+Any mixture falls strictly between them, so the gate asserts **`n ∈ [1, 2]`** —
+a bracket derived from closed forms rather than fitted, with `Λ` deciding only
+where inside the interval the model lands. Observed: `n = 1.737`, level at
+760 Torr `2.45×10¹¹ W/cm²` (not gated).
+
+**The bracket is not universal, and the qualifier is load-bearing.** It holds
+only while attachment is negligible. Three-body attachment is `∝ p²` and
+contributes `I_thr ∝ +p`, so far above this window the model does leave the
+interval: measured on this code, the slope is `−0.81` over 2000–10000 Torr and
+turns *positive* above ~10⁴ Torr. That is precisely why the gate range is
+pinned rather than open-ended, and it is also the honest limit on the
+"unreachable" claim below.
 
 The range still matters and is pinned to **300–2000 Torr**, bracketing T&T's
 measurement range. Fitting the full 10–2000 Torr sweep mixes in the low-p
@@ -250,9 +264,13 @@ growth-limited (losses → 0):   I_thr = G/(A·p)       ∝ p^-1
 diffusion-limited:             I_thr = ν_diff/(A·p)  ∝ p^-2
 ```
 
-so `n ∈ [1, 2]` is **forced by the model's structure**. No choice of `Λ`,
-`D_e`, `K_a` or `n_bd` can reach the measured `n = 0.33` — it is outside the
-reachable interval, so this cannot be repaired by re-pinning any constant. It
+so `n ∈ [1, 2]` while attachment is negligible. The sharper statement is that
+`n = 1` — the growth-limited `I_thr = G/(A·p)` — is the **flattest the model
+can be** without a loss that grows faster than `p`: diffusion only steepens it.
+The measured `n = 0.33` lies below that floor. Only a super-linear loss can
+flatten past it, and three-body attachment at its *measured* coefficient does
+not reach the window (that regime starts near 10⁴ Torr); forcing it would take
+`k₃` ≈ 100× the measured value, which is fabrication rather than re-pinning. It
 would take the cascade coefficient itself to fall with pressure, `A ∝ p^-0.67`,
 which is what an effective ionization energy `U_i` growing with collision
 frequency would produce (inelastic losses per ionization scale ∝ p, and the
@@ -260,11 +278,22 @@ literature's "effective" `U_i` is known to exceed the true ionization potential)
 
 That is new physics, not a constant to re-pin, and it is the open question M6a
 hands forward. The absolute level is *not* the problem, and the attachment
-correction in fact **improved** it: measured `1.0×10¹¹ W/cm²` (RMS) vs modelled
-`2.4×10¹¹` is 2.4×, down from 6×, and well inside the inter-lab scatter this
-spec declines to gate. Level and slope moved in opposite directions, which is
-itself evidence the remaining gap is in the pressure *scaling* of the cascade
-rather than in its magnitude.
+correction improved it. Converting `E_B` to intensity requires the RMS form
+`I = ε₀·c·E_rms²` (**not** `½ε₀cE²`, which applies to a peak amplitude — the
+`E_eff` ratio established `E_B` is RMS), giving `2.06×10¹¹ W/cm²` measured at
+760 Torr against `2.45×10¹¹` modelled.
+
+But the level agreement at that one pressure is a **crossing, not a fit**, and
+quoting it alone would be misleading. Across the measured range the ratio
+sweeps monotonically through unity:
+
+| p (Torr) | 380 | 569 | 759 | 950 | 1420 | 1896 |
+|---|---|---|---|---|---|---|
+| model/measured | 3.10 | 1.95 | 1.19 | 0.96 | 0.53 | 0.33 |
+
+That 9× swing *is* the slope disagreement expressed in level terms; it is not
+independent evidence of anything. The level is still not gated (inter-lab
+scatter), and the slope remains the observable that matters.
 
 **The line on fixing it.** Re-pinning a constant from independent data is
 legitimate; so is adding a term the physics demands. Tuning any constant until

@@ -22,10 +22,13 @@
 //! `n ∈ [1, 2]` between its growth-limited (`p^-1`) and diffusion-limited
 //! (`p^-2`) closed forms.
 //!
-//! **Known gap.** Thiyagarajan & Thompson measure `n = 0.33` — outside that
-//! interval, so no re-pinning of any constant here can reach it. Closing it
-//! needs the cascade coefficient itself to fall with pressure. The external
-//! gates live in `tests/validation.rs`; the analysis is in `docs/M6A_SPEC.md`.
+//! **Known gap.** Thiyagarajan & Thompson measure `n = 0.33`. The flattest the
+//! model can be without a super-linear loss is exactly `n = 1` (the
+//! growth-limited `I_thr = G/(A·p)`), so the measurement lies below the model's
+//! floor. Only a loss growing faster than `p` can flatten it further, and at
+//! the measured three-body coefficient that regime starts near 10⁴ Torr, far
+//! above the data. The external gates live in `tests/validation.rs`; the
+//! analysis is in `docs/M6A_SPEC.md`.
 
 use std::f64::consts::PI;
 
@@ -528,9 +531,16 @@ mod tests {
         //   * diffusion-limited          : I_thr = ν_diff/(A·p)   ∝ p^-2
         //     (ν_diff = D_e,ref·(P_REF/p)/Λ² ∝ 1/p)
         //
-        // Any mixture must fall strictly between them, so n ∈ [1, 2] is forced
-        // by the model's structure — nothing here is tunable. Λ moves where in
-        // the interval it lands, never outside it. Observed: n = 1.74.
+        // Any mixture falls strictly between them, so n ∈ [1, 2] — Λ moves
+        // where in the interval the model lands, never outside it. Observed:
+        // n = 1.74.
+        //
+        // The bracket is NOT universal, and the qualifier is load-bearing: it
+        // holds only while attachment is negligible. Three-body attachment is
+        // ∝ p², contributing I_thr ∝ +p, so far above this window the model
+        // does leave the interval — measured on this code, the slope is −0.81
+        // over 2000–10000 Torr and turns positive above ~10^4 Torr. That is why
+        // the gate range is pinned rather than open-ended.
         //
         // This is the model's own consistency, NOT agreement with experiment:
         // T&T measure n = 0.33, outside this interval entirely. That gap is the

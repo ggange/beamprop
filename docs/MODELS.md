@@ -278,9 +278,8 @@ diffusion-limited `I_thr = ν_diff/(A·p) ∝ p^-2` — so any mixture is bracke
 `n ∈ [1, 2]`. That bracket is the gate: it is forced by the model's structure
 rather than fitted, and `Λ` moves only where inside it the model lands. Fitted
 over the pinned range **300–2000 Torr** (8 log-spaced points, 6 ns FWHM), the
-model gives **n = 1.737**; the level at 760 Torr is **2.4×10¹¹ W/cm²**, within
-2.4× of T&T's measured 1.0×10¹¹ (correcting attachment improved the level even
-as it worsened the slope). Absolute threshold level is **not**
+model gives **n = 1.737**; the level at 760 Torr is **2.45×10¹¹ W/cm²**, the
+right order for ns air breakdown at 1064 nm. Absolute threshold level is **not**
 gated (3–10× inter-lab scatter). Integrator sub-gates are unit tests of the
 exact-exponential solver, not physics validation.
 
@@ -300,12 +299,21 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   coefficients showed real attachment is ~150× *smaller* than the
   order-of-magnitude constant it replaced, moving the model from `p^-0.72` to
   `p^-1.74` — the earlier near-agreement was an artifact of a wrong constant.
-  Since the model is bracketed at `n ∈ [1, 2]`, **no re-pinning of any constant
-  can reach 0.33**; it would take the cascade coefficient itself to fall with
-  pressure (`A ∝ p^-0.67`), as an effective `U_i` growing with collision
-  frequency would produce. That is new physics and is M6a's open question.
-  Level is fine and improved by the correction (1.0×10¹¹ measured vs 2.4×10¹¹
-  modelled, was 6.3×10¹¹), well inside the ungated scatter.
+  Since `ν_i ∝ I·p`, a threshold set by a fixed growth requirement gives
+  `I_thr ∝ p^-1` exactly when losses vanish — `n = 1` is the model's **flat
+  floor**, and diffusion only steepens it, so the measured 0.33 lies below what
+  the model can produce. Only a loss growing faster than `p` flattens past it;
+  three-body attachment qualifies but at its measured coefficient that regime
+  starts near 10⁴ Torr, so reaching 0.33 in-window would need `k₃` ≈ 100× the
+  measured value. The defensible route is the cascade coefficient itself
+  falling with pressure (`A ∝ p^-0.67`), as an effective `U_i` growing with
+  collision frequency would produce. That is new physics and is M6a's open
+  question.
+  On level, the model *crosses* the data near 900 Torr — model/measured runs
+  3.10× at 380 Torr to 0.33× at 1896 Torr — which is the same slope
+  disagreement seen in absolute terms, not independent evidence. Converting
+  `E_B` to intensity uses `I = ε₀cE_rms²`, since the `E_eff` ratio establishes
+  `E_B` is an RMS amplitude.
 
 Full model and constants: `docs/M6A_SPEC.md`.
 

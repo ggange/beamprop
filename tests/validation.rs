@@ -989,17 +989,27 @@ fn tt2012_effective_field_rises_with_pressure() {
 /// to −1.74 — further from the data. The old near-agreement was an artifact of
 /// a wrong constant.
 ///
-/// What remains is structural. With attachment negligible the model is bounded
-/// by its own closed forms at `n ∈ [1, 2]` (growth-limited `p^-1` to
-/// diffusion-limited `p^-2`), so **no choice of `Λ`, `D_e` or `K_a` can reach
-/// the measured 0.33** — it is outside the model's reachable interval. Getting
-/// there requires the cascade coefficient itself to fall with pressure,
-/// `A ∝ p^-0.67`, which is what an effective ionization energy `U_i` that grows
-/// with collision frequency would produce (inelastic losses per ionization
-/// scale ∝ p). That is a new physics term, not a constant to re-pin, and it is
-/// the open question this milestone hands to M6b/M6c.
+/// What remains is structural. Because the cascade is `ν_i ∝ I·p` (itself
+/// confirmed externally by `tt2012_effective_field_rises_with_pressure`), a
+/// threshold set by a fixed growth requirement gives `I_thr = G/(A·p) ∝ p^-1`
+/// **exactly** when losses are negligible. That `n = 1` is the model's flat
+/// floor: diffusion (`∝ 1/p`) only steepens it toward `p^-2`, and the measured
+/// `n = 0.33` lies below the floor.
+///
+/// Only a loss growing *faster* than `p` can flatten past it. Three-body
+/// attachment is such a term (`∝ p²`), but at its measured coefficient that
+/// regime begins near 10⁴ Torr — far above this data — so reaching `n = 0.33`
+/// inside 300–2000 Torr would take `k₃` roughly 100× the measured value. That
+/// is not a re-pinning, it is a fabrication.
+///
+/// The defensible route is the cascade coefficient itself falling with
+/// pressure, `A ∝ p^-0.67`, which is what an effective ionization energy `U_i`
+/// growing with collision frequency would produce (inelastic losses per
+/// ionization scale ∝ p, and the literature's effective `U_i` is known to
+/// exceed the true potential). That is a new physics term, not a constant to
+/// re-pin, and it is the open question this milestone hands forward.
 #[test]
-#[ignore = "structural model gap: measured n=0.33 lies outside the model's reachable n∈[1,2] (see docs/M6A_SPEC.md)"]
+#[ignore = "structural model gap: measured n=0.33 is below the model's flat floor of n=1 (see docs/M6A_SPEC.md)"]
 fn tt2012_threshold_slope_matches_measurement() {
     let Some(e_b) = load_tt_curve("tt2012_E_B_vs_pressure.csv") else {
         return;
@@ -1018,5 +1028,64 @@ fn tt2012_threshold_slope_matches_measurement() {
         "kernel I_thr ∝ p^-{model_n:.3} vs measured p^-{measured_n:.3} \
          ({:.2}× too steep)",
         model_n / measured_n
+    );
+}
+
+/// **External check on the level, and on the unit convention behind it.**
+///
+/// Converting T&T's `E_B` to intensity needs the RMS form `I = ε₀·c·E_rms²`;
+/// the peak form `½ε₀cE²` would halve it. The `E_eff` ratio (see
+/// `tt2012_collision_frequency_matches_literature`) establishes `E_B` is RMS,
+/// so mixing the two conventions is a factor-2 error — one this file made and
+/// this test exists to prevent recurring.
+///
+/// The substantive point is that the model **crosses** the data near 900 Torr
+/// rather than sitting near it: model/measured runs 3.10× at 380 Torr down to
+/// 0.33× at 1896 Torr. Quoting the near-unity value at 760 Torr as "agreement"
+/// would be cherry-picking a crossing. The swing is the slope disagreement in
+/// absolute clothing, not independent evidence, so this is asserted as a
+/// *trend* — monotonically decreasing, straddling unity — and never as a level
+/// agreement. The absolute level stays ungated (3–10× inter-lab scatter).
+#[test]
+fn tt2012_level_ratio_crosses_rather_than_agrees() {
+    let Some(e_b) = load_tt_curve("tt2012_E_B_vs_pressure.csv") else {
+        return;
+    };
+    const EPS0: f64 = 8.854_187_812_8e-12;
+    const C: f64 = 299_792_458.0;
+    let m = beamprop::breakdown0d::AirBreakdown::air_1064nm();
+
+    let ratios: Vec<(f64, f64)> = e_b
+        .iter()
+        .filter(|(p, _)| (TT_P_LO..=TT_P_HI).contains(p))
+        .map(|&(p_torr, e_mv)| {
+            let e_rms = e_mv * 1e6 * 100.0; // 10⁶ V/cm → V/m
+            let i_meas = EPS0 * C * e_rms * e_rms;
+            let i_model = m
+                .threshold_intensity(6e-9, p_torr * TORR, 400)
+                .expect("threshold in bracket");
+            (p_torr, i_model / i_meas)
+        })
+        .collect();
+    assert!(ratios.len() >= 5, "too few points: {}", ratios.len());
+
+    // Monotonically falling: the model is steeper than the data everywhere.
+    assert!(
+        ratios.windows(2).all(|w| w[1].1 < w[0].1),
+        "model/measured is not monotonic in pressure: {ratios:?}"
+    );
+    // And it straddles unity — a crossing, not an offset.
+    let (first, last) = (ratios[0].1, ratios[ratios.len() - 1].1);
+    assert!(
+        first > 1.5 && last < 0.7,
+        "expected a crossing across the window, got {first:.2}× → {last:.2}×"
+    );
+    // Guard the unit convention: had E_B been read as a peak amplitude, every
+    // measured intensity would halve and the ratio would double.
+    assert!(
+        (2.5..=4.0).contains(&first),
+        "ratio at the low-pressure end is {first:.2}×, expected ≈3.1× — check \
+         whether E_B was converted with the RMS form I = ε₀cE² (correct) or \
+         the peak form ½ε₀cE² (wrong, doubles this number)"
     );
 }
