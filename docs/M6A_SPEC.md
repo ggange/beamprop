@@ -176,6 +176,51 @@ NOT gated (inter-lab scatter). That external comparison is **pending the CSV**
 slope check above is a *model-consistency* check, explicitly labeled as
 not-yet-external-validation.
 
+### External gates — Thiyagarajan & Thompson 2012 (digitized 2026-07-24)
+
+The T&T figure plots **two** curves against pressure: the breakdown threshold
+field `E_B` and the effective field `E_eff`. Both are digitized into
+`tests/data/tt2012_*.csv`. Together they give three checks, and the kernel
+passes two.
+
+The paper pins every experimental input the kernel takes — 1064 nm, 6 ± 1 ns
+FWHM, **20 µm radius** focus, dry air, 10–2000 Torr — which is exactly what
+`AirBreakdown::air_1064nm()` uses. No geometry is assumed and nothing is
+fitted, so any disagreement is a statement about the rate model.
+
+1. **Collision frequency `K_m` — PASSES to 5%.** By definition
+   `E_eff/E_B = ν_m/√(ν_m²+ω²)`, so the ratio of the paper's own two curves
+   measures `ν_m` using nothing from this crate except `ω = 2πc/λ`. This is
+   the **independent, non-circular anchor** the fallback clause below demanded:
+   `K_m` entered the kernel from Raizer-lineage literature and is here checked
+   against measurement. Implied `K_m = 4.21×10⁷` vs the kernel's `3.90×10⁷
+   s⁻¹Pa⁻¹`, and the ratio is *flat* at 1.05 ± 0.01 across 46–1858 Torr — a
+   constant ratio over a 40× span is `ν_m ∝ p` and `ν_m ≪ ω` together, i.e. the
+   entire IB Lorentzian branch. It also settles a convention the axis label
+   does not state: **`E_B` is an RMS amplitude**, since reading it as a peak
+   puts the ratio off by a flat √2.
+2. **`E_eff` rises with pressure — PASSES.** Predicted `p^+0.642`, measured
+   `p^+0.695`. The sign is the physics: `E_eff` only rises because `ν_m ≪ ω`
+   makes the IB factor grow ∝ p faster than the threshold field falls.
+3. **Threshold pressure-slope — FAILS, by ~2×.** Measured `E_B ∝ p^-0.164`
+   over 300–2000 Torr, i.e. `I_thr ∝ p^-0.33`; the kernel gives `p^-0.72`. The
+   measured curve reaches its high-pressure plateau *earlier* than the model's
+   `I_thr → K_a/A` asymptote does.
+
+The failing gate is committed **red** (`#[ignore]`d with its reason, so the
+suite stays green while the gap stays visible and named). The suspected cause
+is the attachment term: `ν_att = K_a·p` is two-body, while air at these
+densities is dominated by **three-body** attachment (`e + O₂ + M`, ∝ p²), which
+would flatten the high-p branch as observed. Note the absolute level is *not*
+the problem — measured `1.0×10¹¹ W/cm²` (RMS) vs modelled `6.3×10¹¹` is 6×,
+inside the inter-lab scatter this spec already declines to gate.
+
+**The line on fixing it.** Re-pinning `K_a` from independent attachment data,
+or replacing it with the three-body form because that is what the physics says,
+is legitimate. Tuning `K_a` until the slope lands inside the band is the
+curve-fitting the pinned-`Λ` rule exists to forbid, and is not permitted here
+either.
+
 ### Integrator unit tests (NOT physics validation — labeled as such)
 
 Closed-form limits of the rate ODE, each exact:

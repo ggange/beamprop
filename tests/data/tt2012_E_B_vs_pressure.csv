@@ -1,0 +1,45 @@
+# Digitized from A. Thiyagarajan, J. B. Thompson, "Optical breakdown threshold
+# investigation of 1064 nm laser induced air plasmas", J. Appl. Phys. 111,
+# 073302 (2012) -- the measured breakdown threshold electric field E_B curve of
+# the figure plotting E_B and E_eff against pressure p.
+# Traced with WebPlotDigitizer (curve digitized point-by-point, not by eye).
+#
+# E_B is the RMS field amplitude, not the peak. This is not stated in the axis
+# label; it is established by the paper's own two curves, whose ratio
+# E_eff/E_B must equal nu_m/sqrt(nu_m^2+omega^2). Read as RMS that ratio
+# reproduces the literature air collision frequency to 5% across 46-1858 Torr;
+# read as peak it is off by a flat factor of sqrt(2). See tests/validation.rs,
+# tt2012_collision_frequency_matches_literature.
+#
+# Setup (paper): Nd:YAG Spectra-Physics Indi 40, 1064 nm, 6 +/- 1 ns FWHM,
+# 250-450 mJ (42-75 MW), 1 cm beam, 1.0 mrad divergence, focused by an
+# objective lens to a 20 um RADIUS spot in dry air, 10 to 2000 Torr.
+#
+# Every experimental input the beamprop kernel takes is fixed by that sentence:
+# AirBreakdown::air_1064nm() uses r_focus = 20 um, Lambda = r/pi, V_focal =
+# 4/3 pi r^3, tau = 6 ns, and sweeps 10-2000 Torr. Nothing is fitted, and no
+# geometry is assumed -- so a disagreement with these curves is a statement
+# about the rate model, not about the setup.
+#
+# Uncertainty grows towards low pressure (+/- 2.5 in E_B units at the lowest
+# points); the gate fits only p >= 300 Torr, where it is smallest.
+#
+# One digitization misclick was removed: (17.84 Torr, 6.10), which fell to a
+# fifth of both its neighbours (33.6 and 23.4) -- an off-curve grab, not data.
+#
+# columns: pressure_torr, E_B_MV_per_cm   (E_B in 10^6 V/cm, RMS)
+pressure_torr,E_B_MV_per_cm
+11.034991897396058,33.60774616581463
+20.001559512739874,23.35067515003334
+34.97778818623374,18.767573349633253
+50.37339024468936,16.941959324294288
+76.12846701830046,15.139475438986441
+104.72558253693325,13.468687486108024
+170.7504999912953,12.312388864192043
+247.03418388361246,10.911452545010002
+380.23132001102374,10.244012558346299
+569.3158887576182,8.912883418537453
+759.0463171219602,8.811402533896421
+949.5075786993484,8.059985552344965
+1420.217663693441,7.781590353411869
+1895.5970944114943,7.885155034452101
