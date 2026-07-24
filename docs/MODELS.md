@@ -249,11 +249,21 @@ At a point in dry air the electron density obeys the avalanche balance
 dn_e/dt = (ν_i(I, p) − ν_att(p) − ν_diff(p))·n_e + S_mpi(I, p)
 ```
 
-with cascade ionization from inverse-bremsstrahlung heating
+with cascade ionization driven by the **net** power — inverse-bremsstrahlung
+heating minus the inelastic excitation losses the electron pays climbing to
+`U_i`:
 
 ```text
-ν_i(I, p) = (e²·I)/(m_e·c·ε₀·U_i) · ν_m/(ν_m² + ω²),   ν_m = K_m·p,   ω = 2πc/λ
+ν_i(I, p)     = max(0, heating − L)/U_i
+heating(I, p) = (e²·I)/(m_e·c·ε₀) · ν_m/(ν_m² + ω²),   ν_m = K_m·p,   ω = 2πc/λ
+L(p)          = δ_eff·ν_m·⟨ε⟩ ≡ L′·p
 ```
+
+Both terms scale `∝ p`, so their difference gives `I_thr(p) = L′/h + …/p` — a
+constant high-pressure **plateau** on top of the `1/p` avalanche term. Without
+`L` the model's flattest reachable slope is exactly `p^-1`; the plateau is what
+lets it approach the measured trend at all. `L′ = δ_eff·K_m·⟨ε⟩` is one lumped
+constant taken from the centre of its literature range and never tuned.
 
 attachment from measured rate coefficients (dissociative `k₂·n_O₂ ∝ p` plus
 three-body `k₃·n_O₂·n ∝ p²`, the latter dominant at atmospheric density, and
@@ -271,17 +281,22 @@ is found by log-bisection; a pressure sweep gives `I_thr(p)`.
 Implemented in `src/breakdown0d.rs`.
 
 Gate (internal, model self-consistency): solving the avalanche criterion gives
-`I_thr = [ν_att + ν_diff + G]/(A·p)` with `A ≡ ν_i/(I·p)` and growth
-requirement `G = ln(n_bd/n_seed)/τ`. Attachment being negligible leaves two
-terms with **exact** exponents — growth-limited `I_thr = G/(A·p) ∝ p^-1` and
-diffusion-limited `I_thr = ν_diff/(A·p) ∝ p^-2` — so any mixture is bracketed at
-`n ∈ [1, 2]`. That bracket is the gate: it is forced by the model's structure
-rather than fitted, and `Λ` moves only where inside it the model lands. Fitted
-over the pinned range **300–2000 Torr** (8 log-spaced points, 6 ns FWHM), the
-model gives **n = 1.737**; the level at 760 Torr is **2.45×10¹¹ W/cm²**, the
-right order for ns air breakdown at 1064 nm. Absolute threshold level is **not**
-gated (3–10× inter-lab scatter). Integrator sub-gates are unit tests of the
-exact-exponential solver, not physics validation.
+
+```text
+I_thr(p) = L′/h + U_i·(ν_att + ν_diff + G)/(h·p),   G = ln(n_bd/n_seed)/τ
+```
+
+Attachment is negligible here, so the exponent runs between two **exact**
+limits — plateau-dominated `n → 0` and diffusion-dominated `n → 2` — with the
+growth-limited `p^-1` in between. Fitted over the pinned range **300–2000
+Torr** (8 log-spaced points, 6 ns FWHM) the model gives **n = 0.800**, and the
+gate asserts `n ∈ (0, 1)`: the plateau must be doing work, since without `L`
+the model is stuck at `n ≥ 1`. Sweeping the literature ranges of `L′`
+(δ_eff ≈ 0.01–0.05, ⟨ε⟩ ≈ 2–5 eV) gives an envelope `n ∈ [0.413, 1.139]`, which
+is separately pinned so it cannot drift. The level at 760 Torr is
+**6.4×10¹¹ W/cm²**. Absolute threshold level is **not** gated (3–10× inter-lab
+scatter). Integrator sub-gates are unit tests of the exact-exponential solver,
+not physics validation.
 
 External gates (Thiyagarajan & Thompson 2012, digitized into
 `tests/data/tt2012_*.csv`; the paper's setup — 1064 nm, 6 ns FWHM, 20 µm radius
@@ -293,8 +308,11 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   1.05 ± 0.01 over 46–1858 Torr. Non-circular anchor.
 - **`E_eff(p)` slope — passes.** Predicted `p^+0.642`, measured `p^+0.695`;
   the positive sign confirms the `ν_m ≪ ω` branch.
-- **`I_thr(p)` slope — FAILS structurally and is committed red** (`#[ignore]`d
-  with its reason). Measured `p^-0.33`, kernel `p^-1.74`. This first looked
+- **`I_thr(p)` slope — still red, but narrowed 4×** (`#[ignore]`d with its
+  reason). Measured `p^-0.33`; the kernel gave `p^-1.74` before the
+  inelastic-loss term and `p^-0.80` after, with a literature envelope of
+  `n ∈ [0.413, 1.139]` — the measurement is 1.25× below its edge, not 5.3×
+  away. The envelope is not widened to cover it. This first looked
   like a 2× attachment problem; implementing attachment from measured rate
   coefficients showed real attachment is ~150× *smaller* than the
   order-of-magnitude constant it replaced, moving the model from `p^-0.72` to
@@ -309,11 +327,11 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   falling with pressure (`A ∝ p^-0.67`), as an effective `U_i` growing with
   collision frequency would produce. That is new physics and is M6a's open
   question.
-  On level, the model *crosses* the data near 900 Torr — model/measured runs
-  3.10× at 380 Torr to 0.33× at 1896 Torr — which is the same slope
-  disagreement seen in absolute terms, not independent evidence. Converting
-  `E_B` to intensity uses `I = ε₀cE_rms²`, since the `E_eff` ratio establishes
-  `E_B` is an RMS amplitude.
+  On level, the model now sits uniformly above the data by a bounded amount —
+  model/measured runs 4.69× at 380 Torr to 2.41× at 1896 Torr, inside the
+  ungated inter-lab scatter (before the inelastic term it *crossed* the data,
+  3.10× → 0.33×). Converting `E_B` to intensity uses `I = ε₀cE_rms²`, since the
+  `E_eff` ratio establishes `E_B` is an RMS amplitude.
 
 Full model and constants: `docs/M6A_SPEC.md`.
 

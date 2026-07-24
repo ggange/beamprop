@@ -15,20 +15,24 @@
 //! model, constants, and — importantly — which checks are physics gates versus
 //! integrator unit tests are pinned in `docs/M6A_SPEC.md`.
 //!
+//! Cascade ionization is driven by the **net** power — inverse-bremsstrahlung
+//! heating minus the inelastic excitation losses the electron pays climbing to
+//! `U_i`. Both scale `∝ p`, so their difference gives `I_thr(p)` a constant
+//! high-pressure plateau on top of the `1/p` avalanche term.
+//!
 //! The absolute threshold *level* depends on several order-of-magnitude
 //! constants (`U_i`, `D_e`, `Λ`, `n_bd`) and is deliberately **not** validated;
 //! published thresholds scatter 3–10× across labs. The gated observable is the
-//! threshold *slope* `I_thr(p)`, which the model's structure brackets to
-//! `n ∈ [1, 2]` between its growth-limited (`p^-1`) and diffusion-limited
-//! (`p^-2`) closed forms.
+//! threshold *slope* `I_thr(p) ∝ p^-n`, `n = 0.800` at the default constants.
 //!
-//! **Known gap.** Thiyagarajan & Thompson measure `n = 0.33`. The flattest the
-//! model can be without a super-linear loss is exactly `n = 1` (the
-//! growth-limited `I_thr = G/(A·p)`), so the measurement lies below the model's
-//! floor. Only a loss growing faster than `p` can flatten it further, and at
-//! the measured three-body coefficient that regime starts near 10⁴ Torr, far
-//! above the data. The external gates live in `tests/validation.rs`; the
-//! analysis is in `docs/M6A_SPEC.md`.
+//! **Known gap, narrowed but open.** Thiyagarajan & Thompson measure
+//! `n = 0.33`. Without the inelastic term the model's floor was exactly
+//! `n = 1` and the measurement was unreachable at any parameter value; with it
+//! the literature range of the lumped loss constant spans `n ∈ [0.413, 1.139]`,
+//! leaving the measurement 1.25× below the envelope's edge rather than 5.3×
+//! away. The envelope is not widened to cover it. The prime suspect for the
+//! remainder is `⟨ε⟩` being held constant instead of solved self-consistently.
+//! External gates live in `tests/validation.rs`; analysis in `docs/M6A_SPEC.md`.
 
 use std::f64::consts::PI;
 
@@ -73,6 +77,11 @@ pub struct AirBreakdown {
     k_m: f64,
     /// Free-electron diffusion coefficient at `P_REF` (m²/s); scales as `1/p`.
     d_e_ref: f64,
+    /// Inelastic energy-loss rate per electron per unit pressure,
+    /// `L′ = δ_eff·K_m·⟨ε⟩` (W·Pa⁻¹). Subtracted from the IB heating before it
+    /// can drive ionization — this is what gives the threshold a high-pressure
+    /// plateau. Lumped from literature ranges; **never tuned to data**.
+    l_inel_per_pa: f64,
     /// Diffusion length `Λ` (m), from the focal geometry — **pinned, not fit**.
     lambda_diff: f64,
     /// Dissociative-attachment rate coefficient `e + O₂ → O⁻ + O` (m³/s).
@@ -135,6 +144,12 @@ impl AirBreakdown {
             u_ion,
             k_m: 3.9e7,
             d_e_ref: 2.0e-1,
+            // δ_eff = 0.02, ⟨ε⟩ = 3 eV — the CENTRE of the literature ranges
+            // (δ_eff ≈ 0.01–0.05 for air above ~1 eV, ⟨ε⟩ ≈ 2–5 eV), not a
+            // value chosen to improve agreement. The ~12× spread in these
+            // ranges is why the external slope gate is an envelope test rather
+            // than a point comparison. See docs/M6A_SPEC.md.
+            l_inel_per_pa: 0.02 * 3.9e7 * 3.0 * E_CHARGE,
             lambda_diff,
             // Attachment from measured rate coefficients, not an s⁻¹Pa⁻¹ fudge
             // (Kossyi et al. 1992; Itikawa 2009). The three-body channel is the
@@ -168,15 +183,54 @@ impl AirBreakdown {
         Self::new(1064e-9, 12.06, lambda_diff, 288.0, focal_volume).unwrap()
     }
 
+    /// Rebuild with a different inelastic-loss parameterisation, from the two
+    /// physical quantities it lumps: the fractional energy loss per collision
+    /// `δ_eff` and the mean electron energy `⟨ε⟩` (eV).
+    ///
+    /// Exists so the external gate can sweep the **literature ranges**
+    /// (`δ_eff ≈ 0.01–0.05`, `⟨ε⟩ ≈ 2–5 eV`) and test that the measurement
+    /// falls inside the resulting envelope. It is not a tuning knob: the
+    /// default sits at the centre of those ranges and the gate never selects a
+    /// value that improves agreement.
+    pub fn with_inelastic_loss(mut self, delta_eff: f64, mean_energy_ev: f64) -> Self {
+        self.l_inel_per_pa = delta_eff * self.k_m * mean_energy_ev * E_CHARGE;
+        self
+    }
+
+    /// Inverse-bremsstrahlung heating power absorbed per electron (W).
+    ///
+    /// `P = (e²·I)/(m_e·c·ε₀) · ν_m/(ν_m²+ω²)` with `ν_m = k_m·p`. In the
+    /// optical regime `ν_m ≪ ω` this is `∝ I·p`.
+    pub fn heating_power(&self, intensity: f64, pressure: f64) -> f64 {
+        let nu_m = self.k_m * pressure;
+        let p_abs = E_CHARGE * E_CHARGE * intensity / (M_E * C_LIGHT * EPS0);
+        p_abs * nu_m / (nu_m * nu_m + self.omega * self.omega)
+    }
+
+    /// Inelastic energy-loss power per electron (W), `L = L′·p`.
+    ///
+    /// Vibrational and electronic excitation of N₂/O₂ drain the electron on its
+    /// climb to `U_i`. Scales `∝ p` because it goes as the collision frequency.
+    pub fn inelastic_loss_power(&self, pressure: f64) -> f64 {
+        self.l_inel_per_pa * pressure
+    }
+
     /// Cascade (avalanche) ionization frequency `ν_i(I, p)` (s⁻¹).
     ///
-    /// `ν_i = (e²·I)/(m_e·c·ε₀·U_i) · ν_m/(ν_m²+ω²)` with `ν_m = k_m·p`. In the
-    /// optical regime `ν_m ≪ ω` this is `∝ I·p` — the parameter-free scaling
-    /// the slope gate rests on.
+    /// Driven by the **net** power — heating minus inelastic loss — since an
+    /// electron that cannot outrun its excitation losses never reaches `U_i`:
+    ///
+    /// ```text
+    /// ν_i = max(0, heating(I,p) − L(p)) / U_i
+    /// ```
+    ///
+    /// Both terms scale `∝ p`, so `ν_i ∝ p` at fixed `I` (which is what the
+    /// external `E_eff` gate confirms), while the `I`-dependence is *affine*,
+    /// not linear: there is a finite intensity below which no cascade runs at
+    /// all. That offset is what gives `I_thr(p)` its high-pressure plateau.
     pub fn cascade_rate(&self, intensity: f64, pressure: f64) -> f64 {
-        let nu_m = self.k_m * pressure;
-        let heating = E_CHARGE * E_CHARGE * intensity / (M_E * C_LIGHT * EPS0 * self.u_ion);
-        heating * nu_m / (nu_m * nu_m + self.omega * self.omega)
+        let net = self.heating_power(intensity, pressure) - self.inelastic_loss_power(pressure);
+        net.max(0.0) / self.u_ion
     }
 
     /// Total loss frequency `ν_att + ν_diff` (s⁻¹).
@@ -491,15 +545,48 @@ mod tests {
     // --- Model behaviour + physics-gate observable ---------------------------
 
     #[test]
-    fn cascade_scales_linearly_with_intensity_and_pressure() {
-        // In the optical regime ν_m ≪ ω, ν_i ∝ I·p (the slope-gate basis).
+    fn cascade_is_affine_in_intensity_and_linear_in_pressure() {
+        // Both heating and inelastic loss carry the same factor p, so at fixed
+        // intensity ν_i ∝ p EXACTLY — which is the scaling the external E_eff
+        // gate confirms, and it survives the inelastic term untouched.
         let m = model();
         let p = 300.0 * TORR;
-        let base = m.cascade_rate(1e17, p);
-        // Intensity scaling is exact; pressure scaling is linear only to the
-        // (ν_m/ω)² correction of the IB Lorentzian, ~1e-6 at these pressures.
-        assert!((m.cascade_rate(2e17, p) / base - 2.0).abs() < 1e-12);
-        assert!((m.cascade_rate(1e17, 2.0 * p) / base - 2.0).abs() < 1e-4);
+        let i = 1e17;
+        // Linear only to the (ν_m/ω)² correction of the IB Lorentzian, ~1e-6.
+        assert!((m.cascade_rate(i, 2.0 * p) / m.cascade_rate(i, p) - 2.0).abs() < 1e-4);
+
+        // In intensity the rate is AFFINE, not linear: equal intensity steps
+        // give equal rate steps, but the line does not pass through the origin.
+        let (a, b, c) = (
+            m.cascade_rate(i, p),
+            m.cascade_rate(2.0 * i, p),
+            m.cascade_rate(3.0 * i, p),
+        );
+        assert!(((b - a) / (c - b) - 1.0).abs() < 1e-12, "not affine in I");
+        // ν_i = k·(I − I₀) with I₀ > 0, so doubling I more than doubles ν_i.
+        // Exactly 2.0 would mean the inelastic offset had gone missing.
+        assert!(
+            b / a > 2.0,
+            "ν_i/I is linear through the origin ({:.6}) — inelastic offset missing",
+            b / a
+        );
+    }
+
+    #[test]
+    fn cascade_shuts_off_below_the_inelastic_loss() {
+        // The new physics in one assertion: there is a finite intensity below
+        // which heating cannot outrun excitation losses and no cascade runs at
+        // all. This offset is what gives I_thr(p) a high-pressure plateau; the
+        // model could not produce one without it.
+        let m = model();
+        let p = P_REF;
+        let i_cut = m.inelastic_loss_power(p) / (m.heating_power(1.0, p));
+        assert!(i_cut > 0.0 && i_cut.is_finite());
+        assert_eq!(m.cascade_rate(0.5 * i_cut, p), 0.0);
+        assert!(m.cascade_rate(2.0 * i_cut, p) > 0.0);
+        // At the cut the two powers balance by construction.
+        let net = m.heating_power(i_cut, p) - m.inelastic_loss_power(p);
+        assert!(net.abs() < 1e-12 * m.inelastic_loss_power(p));
     }
 
     #[test]
@@ -512,6 +599,40 @@ mod tests {
         // Just above threshold breaks down; just below does not.
         assert!(m.breaks_down(it * 1.2, fwhm, p, 400));
         assert!(!m.breaks_down(it * 0.8, fwhm, p, 400));
+    }
+
+    #[test]
+    fn inelastic_loss_envelope_brackets_the_slope() {
+        // MODEL-CONSISTENCY GATE over the LITERATURE RANGE of the one lumped
+        // constant the inelastic term adds (δ_eff ≈ 0.01–0.05, ⟨ε⟩ ≈ 2–5 eV,
+        // ~12× in L′). The model's slope is an envelope, not a point, and this
+        // pins that envelope so it cannot drift silently:
+        //
+        //   δ=0.01 ⟨ε⟩=2 → n=1.139     δ=0.05 ⟨ε⟩=5 → n=0.413
+        //
+        // Measured is n = 0.329 — just BELOW the envelope. The envelope is NOT
+        // widened to swallow it; see tests/validation.rs for that gate.
+        let mut ns = Vec::new();
+        for delta in [0.01, 0.02, 0.05] {
+            for ev in [2.0, 3.0, 5.0] {
+                let m = AirBreakdown::air_1064nm().with_inelastic_loss(delta, ev);
+                let c = m.pressure_sweep(GATE_P_LO, GATE_P_HI, 8, 6e-9, 400);
+                assert_eq!(c.len(), 8, "sweep lost points at δ={delta}, ⟨ε⟩={ev}");
+                ns.push(-loglog_slope(&c).unwrap());
+            }
+        }
+        let lo = ns.iter().cloned().fold(f64::MAX, f64::min);
+        let hi = ns.iter().cloned().fold(0.0f64, f64::max);
+        assert!(
+            (0.39..=0.44).contains(&lo) && (1.11..=1.17).contains(&hi),
+            "literature envelope moved: n ∈ [{lo:.3}, {hi:.3}], expected ≈[0.413, 1.139]"
+        );
+        // The whole envelope must sit below the no-inelastic-loss floor of 1.74
+        // — that improvement is the point of the term.
+        assert!(
+            hi < 1.5,
+            "envelope top {hi:.3} did not improve on n = 1.737"
+        );
     }
 
     #[test]
@@ -531,16 +652,22 @@ mod tests {
         //   * diffusion-limited          : I_thr = ν_diff/(A·p)   ∝ p^-2
         //     (ν_diff = D_e,ref·(P_REF/p)/Λ² ∝ 1/p)
         //
-        // Any mixture falls strictly between them, so n ∈ [1, 2] — Λ moves
-        // where in the interval the model lands, never outside it. Observed:
-        // n = 1.74.
+        // Those two bracketed the model to n ∈ [1, 2] BEFORE the inelastic-loss
+        // term existed (observed then: n = 1.737). The term adds a third,
+        // pressure-independent contribution L′/h — a genuine plateau — which
+        // drags the slope below that old floor, to n = 0.800 at the default
+        // constants. So this test now gates the *combined* form:
         //
-        // The bracket is NOT universal, and the qualifier is load-bearing: it
-        // holds only while attachment is negligible. Three-body attachment is
-        // ∝ p², contributing I_thr ∝ +p, so far above this window the model
-        // does leave the interval — measured on this code, the slope is −0.81
-        // over 2000–10000 Torr and turns positive above ~10^4 Torr. That is why
-        // the gate range is pinned rather than open-ended.
+        //     I_thr(p) = L′/h + U_i·(ν_diff + ν_att + G)/(h·p)
+        //
+        // whose exponent runs from 0 (plateau-dominated) to 2 (diffusion), and
+        // the assertion is that the default sits in the plateau-influenced
+        // regime n ∈ (0, 1) rather than the old loss-only regime n ≥ 1.
+        //
+        // Neither bracket is universal: they hold only while attachment is
+        // negligible. Three-body attachment is ∝ p², contributing I_thr ∝ +p,
+        // so far above this window the model leaves them entirely — the slope
+        // turns positive above ~10^4 Torr. That is why the range is pinned.
         //
         // This is the model's own consistency, NOT agreement with experiment:
         // T&T measure n = 0.33, outside this interval entirely. That gap is the
@@ -555,9 +682,9 @@ mod tests {
         );
         let slope = loglog_slope(&curve).unwrap();
         assert!(
-            (-2.0..=-1.0).contains(&slope),
-            "high-p threshold slope {slope:.3} over {:.0}–{:.0} Torr; the growth-limited (p^-1) \
-             and diffusion-limited (p^-2) closed forms bracket it to n∈[1,2]",
+            (-1.0..0.0).contains(&slope),
+            "high-p threshold slope {slope:.3} over {:.0}–{:.0} Torr; with the inelastic-loss \
+             plateau the model must sit in n∈(0,1), below the loss-only floor of n=1",
             GATE_P_LO / TORR,
             GATE_P_HI / TORR
         );

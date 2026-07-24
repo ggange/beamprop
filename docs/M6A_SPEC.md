@@ -45,9 +45,13 @@ ionization frequency is the energy-absorption rate divided by the effective
 ionization energy `U_i` (Zel'dovich & Raizer; Kroll & Watson 1972; Morgan 1975):
 
 ```text
-ν_i(I, p) = (e²·I) / (m_e·c·ε₀·U_i) · ν_m / (ν_m² + ω²)
-ν_m(p)    = K_m · p          (electron-neutral collisions ∝ neutral density)
+heating(I, p) = (e²·I) / (m_e·c·ε₀) · ν_m / (ν_m² + ω²)
+ν_m(p)        = K_m · p      (electron-neutral collisions ∝ neutral density)
 ```
+
+This is the **gross** heating. The ionization rate uses the *net* power, after
+the inelastic losses of the next section:
+`ν_i = max(0, heating − L)/U_i`.
 
 The Lorentzian `ν_m/(ν_m²+ω²)` is the standard IB absorption factor. It has two
 limits, and **which limit we are in sets the parameter-free gate below**:
@@ -59,6 +63,52 @@ At 1064 nm, `ω = 2πc/λ ≈ 1.77×10¹⁵ rad/s`, while `ν_m` at 1 atm is `~4
 — so **`ν_m ≪ ω` across the entire 10–2000 Torr range**, and `ν_i ∝ I·p`
 throughout. There is no IB (`ν_m = ω`) minimum in range; the low-pressure
 threshold rise comes from diffusion loss, not from the Lorentzian.
+
+### Inelastic energy loss `L` — why the cascade coefficient falls with pressure
+
+*(Added 2026-07-24, before the code, per the rule at the top of this document.
+This is the term the first external-gate failure demanded; the reasoning that
+led here is under "External gates" below.)*
+
+An electron cannot convert all its inverse-bremsstrahlung heating into
+ionization: on the climb to `U_i` it loses energy to vibrational and electronic
+excitation of N₂ and O₂. The cascade rate is driven by the **net** power:
+
+```text
+ν_i(I, p) = max(0, heating(I,p) − L(p)) / U_i
+heating(I,p) = (e²·I)/(m_e·c·ε₀) · ν_m/(ν_m²+ω²) ≈ h·I·p
+L(p) = δ_eff · ν_m(p) · ⟨ε⟩ ≡ L′·p          (∝ p, since ν_m ∝ p)
+```
+
+`δ_eff` is the standard fractional energy loss per collision and `⟨ε⟩` the mean
+electron energy; only their product enters, as the single lumped constant
+`L′ = δ_eff·K_m·⟨ε⟩` (W·Pa⁻¹ per electron).
+
+**Why this is the right shape.** Both terms carry the same factor `p`, so
+
+```text
+I_thr(p) = L′/h + U_i·(ν_diff + ν_att + G)/(h·p)
+```
+
+— a **constant plus a 1/p term**. The constant is a genuine high-pressure
+plateau, which is exactly the behaviour the data shows and which the previous
+model could not produce at any parameter value (its floor was `n = 1`). Here
+`n → 0` as `p → ∞` and `n → 1` at low `p`, so `n ∈ (0, 1)`.
+
+**Honesty about its status.** This introduces one new constant, and the
+literature ranges (`δ_eff ≈ 0.01–0.05` for air above ~1 eV, `⟨ε⟩ ≈ 2–5 eV`)
+span ~12× in `L′`. So the model's prediction is an **envelope, not a point**:
+across that range **the code** gives `n ∈ [0.413, 1.139]`, against a measured
+`n = 0.329`. (A closed-form estimate suggests a wider `[0.19, 0.89]`; the code
+is steeper because the Gaussian pulse raises the threshold above the analytic
+full-FWHM value, pushing it further from the plateau. Trust the code.)
+
+So the measurement sits **just below** the envelope's lower edge — 1.25× from
+the most favourable literature value, against 5.3× before this term existed.
+The gate is an envelope test and it is **still red**: the envelope is not
+widened to swallow the measurement. That is weaker than a parameter-free
+prediction and is labelled as such. **`L′` is set from the centre of the literature range and is never
+adjusted to improve agreement**; the pinned-`Λ` rule applies to it verbatim.
 
 ### Diffusion loss `ν_diff` — Λ is pinned, never fit (D5)
 
@@ -120,6 +170,7 @@ volume, `n_e0 = 1/V_focal`.
 | U_i | 12.06 eV → 1.932e-18 J | effective ionization energy (O₂ IP); prefactor only, does **not** affect the slope gate |
 | K_m | 3.9e7 s⁻¹·Pa⁻¹ | ν_m/p for air ≈ 5.3×10⁹ s⁻¹·Torr⁻¹ rescaled to Pa |
 | D_e,ref | 2.0e-1 m²/s at p_ref | free-electron diffusion, order-of-magnitude; sets absolute low-p rise only |
+| L′ | 3.75e-13 W·Pa⁻¹ | `δ_eff·K_m·⟨ε⟩` at the literature centre (δ_eff = 0.02, ⟨ε⟩ = 3 eV); sets the high-p plateau |
 | k₂ | 1.0e-17 m³/s | dissociative attachment `e + O₂ → O⁻ + O` (Itikawa 2009) |
 | k₃ | 1.0e-43 m⁶/s | three-body attachment `e + O₂ + M → O₂⁻ + M` (Kossyi 1992); dominant channel |
 | f_O₂ | 0.21 | O₂ number fraction of dry air |
@@ -171,29 +222,31 @@ Solving the avalanche criterion — cascade must outrun losses *and* clear the
 gives
 
 ```text
-I_thr(p) = [ν_att(p) + ν_diff(p) + G] / (A·p),      A ≡ ν_i/(I·p)
+I_thr(p) = L′/h + U_i·[ν_att(p) + ν_diff(p) + G] / (h·p)
 ```
 
 **This closed form is a scaling tool, not the model.** It assumes the cascade
 runs at its peak rate for the whole of `τ`, whereas the code integrates a
-Gaussian pulse whose intensity is near peak for only part of it. The analytic
-form therefore sits ~2× *below* the code's bisection (`1.25×10¹¹` vs
-`2.45×10¹¹ W/cm²` at 760 Torr). The offset is pressure-independent, so the
-exponents below are unaffected — but never quote the closed form as a level.
+Gaussian pulse whose intensity is near peak for only part of it, so the code's
+threshold is higher (`6.4×10¹¹` vs `≈4.1×10¹¹ W/cm²` at 760 Torr). The offset
+is pressure-independent, so the exponents below are unaffected — but never
+quote the closed form as a level, and note that being further above the plateau
+makes the code's slope *steeper* than the closed form predicts (0.800 vs 0.521).
 
-With attachment from measured rate coefficients it is negligible at these
-densities (`6.7×10⁷` against `4.9×10⁹ s⁻¹` for diffusion at 1 atm), leaving two
-terms whose exponents are **exact**:
+Attachment is negligible at these densities (`6.7×10⁷` against `4.9×10⁹ s⁻¹`
+for diffusion at 1 atm), leaving three terms whose exponents are **exact**:
 
 ```text
-growth-limited (losses → 0):   I_thr = G/(A·p)       ∝ p^-1
-diffusion-limited:             I_thr = ν_diff/(A·p)  ∝ p^-2      (ν_diff ∝ 1/p)
+plateau (inelastic-limited):   I_thr → L′/h                     ∝ p^0
+growth-limited:                I_thr = U_i·G/(h·p)              ∝ p^-1
+diffusion-limited:             I_thr = U_i·ν_diff/(h·p)         ∝ p^-2
 ```
 
-Any mixture falls strictly between them, so the gate asserts **`n ∈ [1, 2]`** —
-a bracket derived from closed forms rather than fitted, with `Λ` deciding only
-where inside the interval the model lands. Observed: `n = 1.737`, level at
-760 Torr `2.45×10¹¹ W/cm²` (not gated).
+Any mixture falls between them, and the gate asserts **`n ∈ (0, 1)`** — the
+plateau must be doing work, since without `L′` the model cannot get below
+`n = 1` at all. Observed: `n = 0.800`, level at 760 Torr `6.4×10¹¹ W/cm²`
+(not gated). The literature envelope of `L′` is pinned separately at
+`n ∈ [0.413, 1.139]`.
 
 **The bracket is not universal, and the qualifier is load-bearing.** It holds
 only while attachment is negligible. Three-body attachment is `∝ p²` and
@@ -244,10 +297,13 @@ fitted, so any disagreement is a statement about the rate model.
 2. **`E_eff` rises with pressure — PASSES.** Predicted `p^+0.642`, measured
    `p^+0.695`. The sign is the physics: `E_eff` only rises because `ν_m ≪ ω`
    makes the IB factor grow ∝ p faster than the threshold field falls.
-3. **Threshold pressure-slope — FAILS, structurally.** Measured
-   `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.33`; the kernel
-   gives `p^-1.74`. Committed **red** (`#[ignore]`d with its reason, so the
-   suite stays green while the gap stays named).
+3. **Threshold pressure-slope — still FAILS, but narrowed 4×.** Measured
+   `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.33`. The kernel gave
+   `p^-1.74` before the inelastic-loss term and gives `p^-0.80` after it; the
+   literature envelope of the lumped loss constant spans `n ∈ [0.413, 1.139]`,
+   so the measurement now sits **1.25× below the envelope's edge** instead of
+   5.3× away. Still committed **red** (`#[ignore]`d with its reason). The
+   envelope is *not* widened to cover the measurement.
 
 **A wrong diagnosis, recorded because the correction is the finding.** The gap
 first looked like a factor of 2 caused by two-body vs three-body attachment.
@@ -276,24 +332,25 @@ which is what an effective ionization energy `U_i` growing with collision
 frequency would produce (inelastic losses per ionization scale ∝ p, and the
 literature's "effective" `U_i` is known to exceed the true ionization potential).
 
-That is new physics, not a constant to re-pin, and it is the open question M6a
-hands forward. The absolute level is *not* the problem, and the attachment
-correction improved it. Converting `E_B` to intensity requires the RMS form
+That term is now implemented (see *Inelastic energy loss* above) and closes
+most of the gap; the residue is the open question M6a hands forward.
+
+On the absolute level: converting `E_B` to intensity requires the RMS form
 `I = ε₀·c·E_rms²` (**not** `½ε₀cE²`, which applies to a peak amplitude — the
 `E_eff` ratio established `E_B` is RMS), giving `2.06×10¹¹ W/cm²` measured at
-760 Torr against `2.45×10¹¹` modelled.
-
-But the level agreement at that one pressure is a **crossing, not a fit**, and
-quoting it alone would be misleading. Across the measured range the ratio
-sweeps monotonically through unity:
+760 Torr against `6.4×10¹¹` modelled. Across the range the model now sits
+uniformly *above* the data by a bounded factor:
 
 | p (Torr) | 380 | 569 | 759 | 950 | 1420 | 1896 |
 |---|---|---|---|---|---|---|
-| model/measured | 3.10 | 1.95 | 1.19 | 0.96 | 0.53 | 0.33 |
+| model/measured, with `L` | 4.69 | 3.90 | 3.09 | 3.15 | 2.74 | 2.41 |
+| model/measured, before `L` | 3.10 | 1.95 | 1.19 | 0.96 | 0.53 | 0.33 |
 
-That 9× swing *is* the slope disagreement expressed in level terms; it is not
-independent evidence of anything. The level is still not gated (inter-lab
-scatter), and the slope remains the observable that matters.
+The earlier model *crossed* the data (a 9× swing that was the slope error in
+absolute clothing); the current one is a roughly constant 2.4–4.7× offset,
+inside the inter-lab scatter this spec declines to gate. The remaining downward
+drift is the residual slope gap. The level is still not gated, and the slope
+remains the observable that matters.
 
 **The line on fixing it.** Re-pinning a constant from independent data is
 legitimate; so is adding a term the physics demands. Tuning any constant until
