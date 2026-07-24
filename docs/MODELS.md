@@ -309,13 +309,17 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   1.05 ± 0.01 over 46–1858 Torr. Non-circular anchor.
 - **`E_eff(p)` slope — passes.** Predicted `p^+0.642`, measured `p^+0.695`;
   the positive sign confirms the `ν_m ≪ ω` branch.
-- **`I_thr(p)` slope — PASSES to 8%.** Measured `p^-0.329`, kernel `p^-0.356`.
-  The route: `p^-1.74` originally (where `n = 1` was a hard floor and the
-  measurement was unreachable at any parameter value), `p^-0.80` once inelastic
-  losses were subtracted from the heating, `p^-0.356` once `⟨ε⟩` was eliminated
-  by solving the climb ODE exactly. `δ_eff = 0.02` predates the self-consistent
-  model, so this is a prediction, not a fit. Gated as containment in the
-  `δ_eff` literature envelope plus a factor-1.5 band on the central value. This first looked
+- **`I_thr(p)` slope — PASSES as envelope containment.** Measured `p^-0.329`;
+  kernel `p^-0.356` at literature-central constants. The route: `p^-1.74`
+  originally (where `n = 1` was a hard floor and the measurement was
+  unreachable at any parameter value), `p^-0.80` once inelastic losses were
+  subtracted from the heating, `p^-0.356` once `⟨ε⟩` was eliminated by solving
+  the climb ODE exactly. Nothing was tuned (`δ_eff = 0.02` predates the model),
+  but the central-value agreement is **not claimed as sharp**: the sensitivity
+  audit in `docs/M6A_SPEC.md` shows ungated constants sweep the model across
+  `n ≈ 0.21–0.57` (`D_e` ×2, generation prefactor `ln 2`), so the gated claim
+  is containment in that envelope plus a factor-1.5 regression pin on the
+  coded value. This first looked
   like a 2× attachment problem; implementing attachment from measured rate
   coefficients showed real attachment is ~150× *smaller* than the
   order-of-magnitude constant it replaced, moving the model from `p^-0.72` to

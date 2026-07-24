@@ -32,13 +32,17 @@
 //! normalization is off.
 //!
 //! The gated observable is the threshold *slope* `I_thr(p) ∝ p^-n`. The model
-//! gives **`n = 0.356`** against Thiyagarajan & Thompson's measured **0.329**,
-//! an 8% agreement reached by two model corrections and no tuning — see
-//! `tt2012_threshold_slope_matches_measurement` in `tests/validation.rs`.
-//! Getting there took the whole ladder: without the inelastic-loss term the
-//! model's flattest reachable slope was exactly `n = 1`, and with the loss
-//! evaluated at an assumed fixed `⟨ε⟩` it was 0.800. Analysis and the full
-//! history are in `docs/M6A_SPEC.md`.
+//! gives **`n = 0.356`** at its literature-central constants against
+//! Thiyagarajan & Thompson's measured **0.329** — but the gated claim is
+//! **envelope containment, not that 8% number**: the slope is genuinely
+//! sensitive to constants this project deliberately does not gate (`D_e` ×2
+//! moves it across 0.21–0.57, and the `1/t_climb` vs `ln2/t_climb`
+//! generation-model ambiguity moves it to 0.47), so the central-value
+//! agreement is partly luck and is documented as such. What is *not* luck:
+//! without the inelastic-loss term the model's flattest reachable slope was
+//! exactly `n = 1` (measurement unreachable at any parameter value), and no
+//! constant was ever adjusted against the data. Analysis, sensitivity table,
+//! and the full history are in `docs/M6A_SPEC.md`.
 
 use std::f64::consts::PI;
 

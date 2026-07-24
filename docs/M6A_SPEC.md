@@ -54,7 +54,7 @@ the inelastic losses of the next section:
 `ν_i = max(0, heating − L)/U_i`.
 
 The Lorentzian `ν_m/(ν_m²+ω²)` is the standard IB absorption factor. It has two
-limits, and **which limit we are in sets the parameter-free gate below**:
+limits, and which limit we are in sets the sign structure the gates rest on:
 
 - `ν_m ≪ ω` (low-collision / optical regime): `ν_i ∝ I·ν_m ∝ I·p`.
 - `ν_m ≫ ω` (collision-limited): `ν_i ∝ I/ν_m ∝ I/p`.
@@ -124,11 +124,41 @@ one is the **default**.
 
 **Honesty about its status.** `δ_eff` remains free within its literature range
 (0.01–0.05), which gives `n ∈ [0.154, 0.583]` — containing the measurement — so
-the external gate is an **envelope** test plus a factor-1.5 band on the
-literature-central value, not a point comparison. `δ_eff = 0.02` was fixed
-before the self-consistent model existed, so the 8% agreement is a prediction
-rather than a fit; widening the range to manufacture containment is forbidden
-by the same rule that pins `Λ`.
+the external gate is an **envelope** test plus a factor-1.5 regression pin on
+the literature-central value, not a point comparison. `δ_eff = 0.02` was fixed
+before the self-consistent model existed, so nothing was tuned; but see the
+sensitivity audit below before reading the central-value agreement as sharp.
+Widening any range to manufacture containment is forbidden by the same rule
+that pins `Λ`.
+
+**Sensitivity audit (2026-07-24)** — run after the gate first went green,
+because a passing gate earns *more* scrutiny, not less. Verified first that an
+independent Python reimplementation (from these equations, not the Rust)
+reproduces `n = 0.3563` to four digits, and that the value is stable under
+discretization (0.346–0.356) and T&T's ±1 ns pulse uncertainty (0.352–0.362).
+Then each ungated constant was perturbed:
+
+| perturbation | n |
+|---|---|
+| baseline (literature-central) | 0.356 |
+| `n_bd` ×0.1 / ×10 | 0.353 / 0.360 |
+| pulse FWHM 5 / 7 ns | 0.362 / 0.352 |
+| `D_e` ×0.5 / ×2 | **0.213 / 0.569** |
+| generation prefactor `ln 2` | **0.469** |
+
+Two findings demote the headline. **(a)** The slope is *not* `Λ/D_e`-robust in
+the current balance: `ν_diff = 4.9×10⁹` vs `G = 3.7×10⁹ s⁻¹` at 760 Torr —
+comparable, not sub-dominant — so the order-of-magnitude `D_e` sweeps the slope
+across most of the envelope. Any older text claiming the high-p branch is
+"Λ-independent" described the pre-plateau model and is withdrawn. **(b)** The
+derivation's `ν_i = 1/t_climb` carries an order-unity generation-model
+ambiguity (`ln 2/t_climb` under discrete doubling is equally defensible), worth
+30% on the slope by itself.
+
+Conclusion: the model family's uncertainty band from its own ungated constants
+is roughly `n ∈ [0.21, 0.57]`. The measured 0.329 sits comfortably inside, and
+that containment — not the 8% central agreement, which is partly luck — is the
+claim the gate makes.
 
 Two things are deliberately *not* claimed. The absolute level is ~7× above T&T
 — gated only as a *flat* offset inside the inter-lab scatter, which says the
@@ -235,7 +265,7 @@ profile `I(t) = I_pk·exp(−4 ln2 (t/τ_FWHM)²)` over `[−2τ, 2τ]` and trac
 
 ## Gates
 
-### Physics gate (the real one, parameter-free)
+### Physics gate
 
 **Log-log slope of `I_thr(p)` over the pinned range 300–2000 Torr** — the
 high-pressure branch only.
@@ -294,20 +324,20 @@ diffusion branch that D5 excluded.
 This gate is the model's **self-consistency**, not agreement with experiment —
 T&T measure `n = 0.33`, outside the interval entirely. See the external gates.
 
-**When the digitized Thiyagarajan & Thompson (J. Appl. Phys. 111, 073302
-(2012)) curve is available**, the gate additionally asserts the model matches
-the measured `I_thr ∝ p^-n` trend within a factor-2 band. Absolute agreement is
-NOT gated (inter-lab scatter). That external comparison is **pending the CSV**
-(design-doc T2, the user's homework — needs the paper figure); until then the
-slope check above is a *model-consistency* check, explicitly labeled as
-not-yet-external-validation.
+The external comparison against the digitized Thiyagarajan & Thompson (J.
+Appl. Phys. 111, 073302 (2012)) curves is no longer pending — it is
+implemented; see the next section. Absolute agreement remains NOT gated
+(inter-lab scatter). The slope check above stays as the internal
+model-consistency layer beneath it.
 
 ### External gates — Thiyagarajan & Thompson 2012 (digitized 2026-07-24)
 
 The T&T figure plots **two** curves against pressure: the breakdown threshold
 field `E_B` and the effective field `E_eff`. Both are digitized into
-`tests/data/tt2012_*.csv`. Together they give three checks, and the kernel
-passes two.
+`tests/data/tt2012_*.csv`. They yield four gates — collision frequency,
+`E_eff` sign, level-ratio flatness, and slope-envelope containment — and all
+four now pass, none `#[ignore]`d. The history below records what each stage
+passed and failed, because the failures drove the model corrections.
 
 The paper pins every experimental input the kernel takes — 1064 nm, 6 ± 1 ns
 FWHM, **20 µm radius** focus, dry air, 10–2000 Torr — which is exactly what
@@ -328,9 +358,11 @@ fitted, so any disagreement is a statement about the rate model.
 2. **`E_eff` rises with pressure — PASSES.** Predicted `p^+0.642`, measured
    `p^+0.695`. The sign is the physics: `E_eff` only rises because `ν_m ≪ ω`
    makes the IB factor grow ∝ p faster than the threshold field falls.
-3. **Threshold pressure-slope — now PASSES.** Measured `E_B ∝ p^-0.164` over
-   300–2000 Torr, i.e. `I_thr ∝ p^-0.329`; the kernel gives **`p^-0.356`**, an
-   8% agreement. It took two model corrections and no tuning to get there:
+3. **Threshold pressure-slope — now PASSES as envelope containment.**
+   Measured `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`; the
+   kernel gives `p^-0.356` at literature-central constants. The central-value
+   agreement is not claimed as sharp — see the sensitivity audit above — but
+   the route here took two model corrections and no tuning:
 
    | stage | slope `n` | vs measured |
    |---|---|---|

@@ -956,8 +956,10 @@ fn tt2012_collision_frequency_matches_literature() {
 }
 
 /// **External gate (passing).** `E_eff ∝ p^+n` with `n > 0`: the effective field
-/// *rises* with pressure. Predicted `+0.642` from `E_eff ∝ √I_thr · p` with the
-/// kernel's `I_thr ∝ p^-0.716`; measured `+0.695`.
+/// *rises* with pressure — the SIGN is what is being gated. Quantitatively
+/// `E_eff ∝ √I_thr · p`, so the exponent is `1 − n_thr/2` for whatever `n_thr`
+/// holds locally; it is range-dependent because `n_thr` is not constant over
+/// the full 10–2000 Torr sweep this curve spans. Measured `+0.695`.
 ///
 /// The sign is the physics: it only rises because `ν_m ≪ ω` makes the
 /// inverse-bremsstrahlung factor grow ∝ p faster than the threshold field
@@ -989,13 +991,18 @@ fn tt2012_effective_field_rises_with_pressure() {
 /// to −1.74 — further from the data. The old near-agreement was an artifact of
 /// a wrong constant.
 ///
-/// **PASSING** — the first external slope agreement M6a has had, and it took
-/// two model corrections to get here rather than any tuning.
+/// **PASSING** — as an envelope-containment gate, and the wording is precise
+/// on purpose: what is gated is that the measurement lies inside the model's
+/// uncertainty envelope, NOT the 8% central-value agreement.
 ///
 /// Measured `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`. The
-/// kernel gives **`p^-0.356`** — 8% — with `δ_eff = 0.02` unchanged from the
-/// commit that predates the self-consistent model, so this is a prediction and
-/// not a fit.
+/// kernel gives `p^-0.356` at literature-central constants, with `δ_eff = 0.02`
+/// unchanged from the commit that predates the self-consistent model — so
+/// nothing was tuned. But a sensitivity audit (2026-07-24, recorded in
+/// docs/M6A_SPEC.md) shows the slope leans on ungated order-of-magnitude
+/// constants: `D_e` ×0.5/×2 spans n = 0.21–0.57, and the `1/t_climb` vs
+/// `ln2/t_climb` generation ambiguity gives 0.47. The 8% is therefore partly
+/// luck; containment is the claim that survives the audit.
 ///
 /// How it got here, because the route matters more than the number:
 /// 1. `ν_i ∝ I·p` (externally confirmed by
@@ -1010,12 +1017,13 @@ fn tt2012_effective_field_rises_with_pressure() {
 ///    δ_eff·ν_m·ε` exactly instead of evaluating the loss at an assumed mean
 ///    energy — moved it to `n = 0.356`.
 ///
-/// The gate is an **envelope** test, not a point comparison, because `δ_eff`
-/// remains free within its literature range (0.01–0.05). That range gives
-/// `n ∈ [0.154, 0.583]`, which contains the measurement; the assertion is
-/// containment plus a factor-1.5 band on the literature-central value. Widening
-/// the range to manufacture containment is forbidden by the same rule that pins
-/// `Λ`.
+/// The assertions: containment of the measurement in the `δ_eff` literature
+/// envelope `n ∈ [0.154, 0.583]`, plus a factor-1.5 regression pin on the
+/// coded central value. Widening any range to manufacture containment is
+/// forbidden by the same rule that pins `Λ`. Note the model's *other*
+/// uncertain constants (`D_e`, the generation prefactor) also span this same
+/// envelope, so containment is a joint statement about the model family, not
+/// evidence that δ_eff is measured.
 ///
 /// Still NOT claimed: the absolute level, which is ~7× high (gated separately
 /// as a flat offset within the inter-lab scatter), and any suggestion that the
