@@ -977,18 +977,29 @@ fn tt2012_effective_field_rises_with_pressure() {
 /// **External gate (currently FAILING — a real model gap, not a flaky test).**
 ///
 /// Over 300–2000 Torr the measured breakdown field goes as `E_B ∝ p^-0.164`,
-/// i.e. `I_thr ∝ p^-0.33` (since `I ∝ E²`). The kernel gives `I_thr ∝ p^-0.72`
-/// — twice as pressure-sensitive. The measured curve reaches its high-pressure
-/// plateau earlier than the model's `I_thr → K_a/A` asymptote does, which
-/// points at the attachment term: `ν_att = K_a·p` is two-body, whereas air at
-/// these densities is dominated by three-body attachment (`e + O₂ + M`, ∝ p²).
+/// i.e. `I_thr ∝ p^-0.33` (since `I ∝ E²`). The kernel gives `I_thr ∝ p^-1.74`
+/// — five times as pressure-sensitive.
 ///
-/// This is left red deliberately. Re-pinning `K_a` from independent attachment
-/// data, or switching to the three-body form because that is what the physics
-/// says, is legitimate; tuning `K_a` until the slope lands in the band is the
-/// curve-fitting the M6a spec forbids. See docs/M6A_SPEC.md.
+/// The first diagnosis was wrong and is worth recording. The gap looked like a
+/// factor of 2 attributable to the attachment term being two-body rather than
+/// three-body. Implementing attachment from measured rate coefficients
+/// (Kossyi 1992, Itikawa 2009) showed the opposite: real attachment in air is
+/// ~150× *smaller* than the order-of-magnitude `K_a` it replaced, so it is
+/// negligible against diffusion, and correcting it moved the model from −0.72
+/// to −1.74 — further from the data. The old near-agreement was an artifact of
+/// a wrong constant.
+///
+/// What remains is structural. With attachment negligible the model is bounded
+/// by its own closed forms at `n ∈ [1, 2]` (growth-limited `p^-1` to
+/// diffusion-limited `p^-2`), so **no choice of `Λ`, `D_e` or `K_a` can reach
+/// the measured 0.33** — it is outside the model's reachable interval. Getting
+/// there requires the cascade coefficient itself to fall with pressure,
+/// `A ∝ p^-0.67`, which is what an effective ionization energy `U_i` that grows
+/// with collision frequency would produce (inelastic losses per ionization
+/// scale ∝ p). That is a new physics term, not a constant to re-pin, and it is
+/// the open question this milestone hands to M6b/M6c.
 #[test]
-#[ignore = "known model gap: kernel over-predicts threshold pressure-sensitivity ~2x (see docs/M6A_SPEC.md)"]
+#[ignore = "structural model gap: measured n=0.33 lies outside the model's reachable n∈[1,2] (see docs/M6A_SPEC.md)"]
 fn tt2012_threshold_slope_matches_measurement() {
     let Some(e_b) = load_tt_curve("tt2012_E_B_vs_pressure.csv") else {
         return;
@@ -1001,7 +1012,7 @@ fn tt2012_threshold_slope_matches_measurement() {
     assert!(high.len() >= 5, "too few points: {}", high.len());
     // I ∝ E², so the intensity exponent is twice the field exponent.
     let measured_n = -2.0 * beamprop::validate::loglog_slope(&high).expect("E_B slope");
-    let model_n = 0.716; // src/breakdown0d.rs, same 300–2000 Torr window
+    let model_n = 1.737; // src/breakdown0d.rs, same 300–2000 Torr window
     assert!(
         (model_n / measured_n).abs() < 1.5,
         "kernel I_thr ∝ p^-{model_n:.3} vs measured p^-{measured_n:.3} \

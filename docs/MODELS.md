@@ -255,7 +255,10 @@ with cascade ionization from inverse-bremsstrahlung heating
 ν_i(I, p) = (e²·I)/(m_e·c·ε₀·U_i) · ν_m/(ν_m² + ω²),   ν_m = K_m·p,   ω = 2πc/λ
 ```
 
-attachment `ν_att = K_a·p`, free-electron diffusion loss
+attachment from measured rate coefficients (dissociative `k₂·n_O₂ ∝ p` plus
+three-body `k₃·n_O₂·n ∝ p²`, the latter dominant at atmospheric density, and
+both negligible here — `6.7×10⁷` vs `4.9×10⁹ s⁻¹` for diffusion at 1 atm),
+free-electron diffusion loss
 `ν_diff = D_e(p)/Λ²` with `D_e ∝ 1/p` over the geometry-pinned diffusion length
 `Λ` (T&T 20 µm focus as a sphere, `Λ = r/π` — **pinned, never fit**), and a
 swappable multiphoton seed `S_mpi = σ_K·I^K·N` (off by default; the seed is one
@@ -267,19 +270,19 @@ is found by log-bisection; a pressure sweep gives `I_thr(p)`.
 
 Implemented in `src/breakdown0d.rs`.
 
-Gate: at 1064 nm `ω ≈ 1.77×10¹⁵ rad/s ≫ ν_m`, so `ν_i ∝ I·p` and the
-**high-pressure branch** (cascade and attachment ∝ p dominate diffusion ∝ 1/p,
-so the branch is Λ-independent) gives `I_thr ∝ p^-n` with `n < 1`, matching the
-measured trend. Fitted over the pinned gate range **300–2000 Torr** (8
-log-spaced points, 6 ns FWHM), the model gives **n = 0.716** against an asserted
-band of `n ∈ [0.4, 1.0]`; the level at 760 Torr is **6.3×10¹¹ W/cm²**, the right
-order for ns air breakdown at 1064 nm. The range is part of the gate: solving
-the avalanche criterion gives `I_thr = K_a/A + (ν_diff + G)/(A·p)`, so `n → 1`
-where diffusion and the growth requirement dominate and `n → 0` as `p → ∞` and
-`I_thr → K_a/A`. This high-p slope is the parameter-free physics gate
-(integrator sub-gates are unit tests of the exact-exponential solver, not
-physics validation). Absolute threshold level is **not** gated (3–10× inter-lab
-scatter).
+Gate (internal, model self-consistency): solving the avalanche criterion gives
+`I_thr = [ν_att + ν_diff + G]/(A·p)` with `A ≡ ν_i/(I·p)` and growth
+requirement `G = ln(n_bd/n_seed)/τ`. Attachment being negligible leaves two
+terms with **exact** exponents — growth-limited `I_thr = G/(A·p) ∝ p^-1` and
+diffusion-limited `I_thr = ν_diff/(A·p) ∝ p^-2` — so any mixture is bracketed at
+`n ∈ [1, 2]`. That bracket is the gate: it is forced by the model's structure
+rather than fitted, and `Λ` moves only where inside it the model lands. Fitted
+over the pinned range **300–2000 Torr** (8 log-spaced points, 6 ns FWHM), the
+model gives **n = 1.737**; the level at 760 Torr is **2.4×10¹¹ W/cm²**, within
+2.4× of T&T's measured 1.0×10¹¹ (correcting attachment improved the level even
+as it worsened the slope). Absolute threshold level is **not**
+gated (3–10× inter-lab scatter). Integrator sub-gates are unit tests of the
+exact-exponential solver, not physics validation.
 
 External gates (Thiyagarajan & Thompson 2012, digitized into
 `tests/data/tt2012_*.csv`; the paper's setup — 1064 nm, 6 ns FWHM, 20 µm radius
@@ -291,11 +294,18 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   1.05 ± 0.01 over 46–1858 Torr. Non-circular anchor.
 - **`E_eff(p)` slope — passes.** Predicted `p^+0.642`, measured `p^+0.695`;
   the positive sign confirms the `ν_m ≪ ω` branch.
-- **`I_thr(p)` slope — FAILS by ~2× and is committed red** (`#[ignore]`d with
-  its reason). Measured `p^-0.33`, kernel `p^-0.72`: the model over-predicts
-  pressure-sensitivity because `ν_att = K_a·p` is two-body, whereas air at
-  these densities is dominated by three-body attachment (∝ p²). Level is fine
-  (1.0×10¹¹ vs 6.3×10¹¹ W/cm², inside the ungated scatter).
+- **`I_thr(p)` slope — FAILS structurally and is committed red** (`#[ignore]`d
+  with its reason). Measured `p^-0.33`, kernel `p^-1.74`. This first looked
+  like a 2× attachment problem; implementing attachment from measured rate
+  coefficients showed real attachment is ~150× *smaller* than the
+  order-of-magnitude constant it replaced, moving the model from `p^-0.72` to
+  `p^-1.74` — the earlier near-agreement was an artifact of a wrong constant.
+  Since the model is bracketed at `n ∈ [1, 2]`, **no re-pinning of any constant
+  can reach 0.33**; it would take the cascade coefficient itself to fall with
+  pressure (`A ∝ p^-0.67`), as an effective `U_i` growing with collision
+  frequency would produce. That is new physics and is M6a's open question.
+  Level is fine and improved by the correction (1.0×10¹¹ measured vs 2.4×10¹¹
+  modelled, was 6.3×10¹¹), well inside the ungated scatter.
 
 Full model and constants: `docs/M6A_SPEC.md`.
 

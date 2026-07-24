@@ -17,9 +17,15 @@
 //!
 //! The absolute threshold *level* depends on several order-of-magnitude
 //! constants (`U_i`, `D_e`, `Λ`, `n_bd`) and is deliberately **not** validated;
-//! published thresholds scatter 3–10× across labs. The threshold *slope*
-//! `I_thr(p)` depends only on the parameter-free `ν_i ∝ p` scaling in the
-//! optical (`ν_m ≪ ω`) regime, and that slope is the physics gate.
+//! published thresholds scatter 3–10× across labs. The gated observable is the
+//! threshold *slope* `I_thr(p)`, which the model's structure brackets to
+//! `n ∈ [1, 2]` between its growth-limited (`p^-1`) and diffusion-limited
+//! (`p^-2`) closed forms.
+//!
+//! **Known gap.** Thiyagarajan & Thompson measure `n = 0.33` — outside that
+//! interval, so no re-pinning of any constant here can reach it. Closing it
+//! needs the cascade coefficient itself to fall with pressure. The external
+//! gates live in `tests/validation.rs`; the analysis is in `docs/M6A_SPEC.md`.
 
 use std::f64::consts::PI;
 
@@ -66,8 +72,13 @@ pub struct AirBreakdown {
     d_e_ref: f64,
     /// Diffusion length `Λ` (m), from the focal geometry — **pinned, not fit**.
     lambda_diff: f64,
-    /// Two-body attachment-frequency slope `ν_att = k_att·p` (s⁻¹·Pa⁻¹).
-    k_att: f64,
+    /// Dissociative-attachment rate coefficient `e + O₂ → O⁻ + O` (m³/s).
+    k_att_2body: f64,
+    /// Three-body attachment rate coefficient `e + O₂ + M → O₂⁻ + M` (m⁶/s).
+    /// Dominant channel in air at atmospheric density; scales as `p²`.
+    k_att_3body: f64,
+    /// O₂ fraction of dry air by number.
+    f_o2: f64,
     /// Multiphoton cross-section coefficient `σ_K` for `S = σ_K·I^K·N`
     /// (SI; swappable, docs Open Question 2).
     sigma_k: f64,
@@ -122,7 +133,15 @@ impl AirBreakdown {
             k_m: 3.9e7,
             d_e_ref: 2.0e-1,
             lambda_diff,
-            k_att: 1.0e5,
+            // Attachment from measured rate coefficients, not an s⁻¹Pa⁻¹ fudge
+            // (Kossyi et al. 1992; Itikawa 2009). The three-body channel is the
+            // dominant one at atmospheric density. Both are ~150x smaller than
+            // the order-of-magnitude constant they replaced, which makes
+            // attachment negligible against diffusion and the growth
+            // requirement — see docs/M6A_SPEC.md.
+            k_att_2body: 1.0e-17,
+            k_att_3body: 1.0e-43,
+            f_o2: 0.21,
             // MPI source off by default: the seed electron (n_e0 = 1/V_focal)
             // is the initial condition, and the avalanche multiplies it. The
             // continuous multiphoton source is the swappable term (docs Open
@@ -157,8 +176,16 @@ impl AirBreakdown {
         heating * nu_m / (nu_m * nu_m + self.omega * self.omega)
     }
 
-    /// Total loss frequency `ν_att + ν_diff` (s⁻¹). Attachment `∝ p`; diffusion
-    /// `∝ 1/p` (free-electron `D_e ∝ 1/p` over the fixed diffusion length `Λ`).
+    /// Total loss frequency `ν_att + ν_diff` (s⁻¹).
+    ///
+    /// Attachment has two channels, both from measured rate coefficients:
+    /// dissociative `k₂·n_O₂ ∝ p` and three-body `k₃·n_O₂·n ∝ p²`, the latter
+    /// dominant at atmospheric density. Diffusion goes as `1/p` (free-electron
+    /// `D_e ∝ 1/p` over the fixed diffusion length `Λ`).
+    ///
+    /// At 760 Torr the balance is attachment 6.7e7, diffusion 4.9e9 — i.e.
+    /// **attachment is negligible here**, and the threshold is set by diffusion
+    /// and by the finite-pulse growth requirement.
     ///
     /// Like the other rate methods this is a bare pure function and assumes
     /// `pressure > 0`; `p = 0` gives an infinite diffusion loss and `p < 0` a
@@ -166,7 +193,9 @@ impl AirBreakdown {
     /// [`threshold_intensity`](Self::threshold_intensity) is where pressure is
     /// validated.
     pub fn loss_rate(&self, pressure: f64) -> f64 {
-        let nu_att = self.k_att * pressure;
+        let n_neutral = self.n_over_p * pressure;
+        let n_o2 = self.f_o2 * n_neutral;
+        let nu_att = self.k_att_2body * n_o2 + self.k_att_3body * n_o2 * n_neutral;
         let d_e = self.d_e_ref * (P_REF / pressure);
         let nu_diff = d_e / (self.lambda_diff * self.lambda_diff);
         nu_att + nu_diff
@@ -327,7 +356,8 @@ mod tests {
         // Suppress losses and source for this limit by evaluating advance with
         // a model whose loss and MPI are zero: build a bespoke one.
         let bare = AirBreakdown {
-            k_att: 0.0,
+            k_att_2body: 0.0,
+            k_att_3body: 0.0,
             d_e_ref: 0.0,
             sigma_k: 0.0,
             ..m
@@ -372,7 +402,8 @@ mod tests {
         let p = 760.0 * TORR;
         let s = 1e30; // m⁻³ s⁻¹
         let balanced = AirBreakdown {
-            k_att: 0.0,
+            k_att_2body: 0.0,
+            k_att_3body: 0.0,
             d_e_ref: 0.0,
             ..m
         };
@@ -415,7 +446,8 @@ mod tests {
         let sigma_k = s / (i0.powi(m.k_photons) * m.n_over_p * p);
         let bal = AirBreakdown {
             u_ion: f64::INFINITY, // no cascade → β = −loss; cancel loss too
-            k_att: 0.0,
+            k_att_2body: 0.0,
+            k_att_3body: 0.0,
             d_e_ref: 0.0,
             sigma_k,
             ..m
@@ -480,23 +512,29 @@ mod tests {
     }
 
     #[test]
-    fn high_pressure_threshold_slope_is_cascade_limited() {
-        // PHYSICS GATE (model-consistency form, pending the digitized
-        // Thiyagarajan & Thompson CSV — design-doc T2). Over the HIGH-pressure
-        // branch cascade and attachment both scale ∝ p and diffusion (∝ 1/p) is
-        // sub-dominant, so the branch is Λ-independent and parameter-free —
-        // this is the slope D5 named as the real gate. The low-pressure
-        // diffusion branch is Λ-sensitive and deliberately EXCLUDED (tuning Λ
-        // to the minimum is curve-fitting).
+    fn high_pressure_threshold_slope_lies_between_analytic_limits() {
+        // PHYSICS GATE, model-consistency form. Bracketed by two CLOSED-FORM
+        // limits rather than a fitted band. Solving the avalanche criterion —
+        // cascade must outrun losses and clear the n_seed → n_bd growth
+        // requirement G = ln(n_bd/n_seed)/τ within the pulse — gives
         //
-        // The range is NOT free: it is pinned to GATE_P_LO … GATE_P_HI, which
-        // brackets T&T's measured range. The fitted exponent is range-dependent
-        // by construction — solving the avalanche criterion gives
-        //     I_thr = K_a/A + (ν_diff + G)/(A·p),
-        // so the slope steepens towards −1 as diffusion/growth dominate and
-        // flattens to 0 as p → ∞ and I_thr → K_a/A. Fitting far above the
-        // measured range would therefore report a flatter slope; that is a real
-        // property of the model, recorded in docs/M6A_SPEC.md, not a bug.
+        //     I_thr(p) = [ν_att(p) + ν_diff(p) + G] / (A·p),   A ≡ ν_i/(I·p)
+        //
+        // With attachment from measured rate coefficients it is negligible here
+        // (6.7e7 vs 4.9e9 for diffusion at 760 Torr), leaving two terms whose
+        // exponents are exact:
+        //
+        //   * growth-limited, losses → 0 : I_thr = G/(A·p)        ∝ p^-1
+        //   * diffusion-limited          : I_thr = ν_diff/(A·p)   ∝ p^-2
+        //     (ν_diff = D_e,ref·(P_REF/p)/Λ² ∝ 1/p)
+        //
+        // Any mixture must fall strictly between them, so n ∈ [1, 2] is forced
+        // by the model's structure — nothing here is tunable. Λ moves where in
+        // the interval it lands, never outside it. Observed: n = 1.74.
+        //
+        // This is the model's own consistency, NOT agreement with experiment:
+        // T&T measure n = 0.33, outside this interval entirely. That gap is the
+        // real M6a finding and is gated separately in tests/validation.rs.
         let m = model();
         let n_points = 8;
         let curve = m.pressure_sweep(GATE_P_LO, GATE_P_HI, n_points, 6e-9, 400);
@@ -507,12 +545,34 @@ mod tests {
         );
         let slope = loglog_slope(&curve).unwrap();
         assert!(
-            (-1.0..=-0.4).contains(&slope),
-            "high-p threshold slope {slope:.3} over {:.0}–{:.0} Torr, expected cascade-limited \
-             n∈[0.4,1.0] (I_thr ∝ p^-n)",
+            (-2.0..=-1.0).contains(&slope),
+            "high-p threshold slope {slope:.3} over {:.0}–{:.0} Torr; the growth-limited (p^-1) \
+             and diffusion-limited (p^-2) closed forms bracket it to n∈[1,2]",
             GATE_P_LO / TORR,
             GATE_P_HI / TORR
         );
+    }
+
+    #[test]
+    fn attachment_is_negligible_against_diffusion_at_one_atmosphere() {
+        // Guards the finding that motivated switching to measured attachment
+        // coefficients: the order-of-magnitude K_a·p it replaced was ~150x too
+        // large and was the only thing flattening the modelled slope towards
+        // the data. If a future edit reinstates a dominant attachment term,
+        // this fails and points at docs/M6A_SPEC.md rather than letting the
+        // slope quietly drift back into apparent agreement.
+        let m = model();
+        let p = P_REF;
+        let n = m.n_over_p * p;
+        let n_o2 = m.f_o2 * n;
+        let nu_att = m.k_att_2body * n_o2 + m.k_att_3body * n_o2 * n;
+        let nu_diff = m.d_e_ref * (P_REF / p) / (m.lambda_diff * m.lambda_diff);
+        assert!(
+            nu_att < 0.05 * nu_diff,
+            "attachment {nu_att:e} is not negligible against diffusion {nu_diff:e}"
+        );
+        // Three-body is the dominant attachment channel at atmospheric density.
+        assert!(m.k_att_3body * n_o2 * n > 0.1 * m.k_att_2body * n_o2);
     }
 
     #[test]

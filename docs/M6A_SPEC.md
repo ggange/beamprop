@@ -72,11 +72,26 @@ sphere of radius `r`, the fundamental mode gives `Λ = r/π`. This value is
 **documented and asserted as an input**; tuning `Λ` to move the threshold
 minimum onto the measured curve is curve-fitting and is explicitly forbidden.
 
-### Attachment loss `ν_att`
+### Attachment loss `ν_att` — two channels, from measured rate coefficients
 
-Two-body electron attachment to O₂, `ν_att = K_a · p` (∝ neutral density),
-`K_a` from air-discharge data. Sub-dominant to cascade near threshold; included
-for completeness and honesty about the loss balance.
+```text
+ν_att(p) = k₂·n_O₂ + k₃·n_O₂·n,     n = p/(k_B T),  n_O₂ = 0.21·n
+```
+
+with `k₂ = 1e-17 m³/s` (dissociative, `e + O₂ → O⁻ + O`) and
+`k₃ = 1e-43 m⁶/s` (three-body, `e + O₂ + M → O₂⁻ + M`; Kossyi et al. 1992,
+Itikawa 2009). Three-body is the dominant channel at atmospheric density, and
+`∝ p²`.
+
+*(Amended 2026-07-24. This replaced a single order-of-magnitude constant
+`ν_att = K_a·p` with `K_a = 1e5 s⁻¹Pa⁻¹`. That value was ~150× too large:
+it gave `1.0×10¹⁰ s⁻¹` at 1 atm where the measured coefficients give
+`6.7×10⁷ s⁻¹`. The consequence matters — see the external gates below — because
+the inflated constant was the only term flattening the modelled threshold slope
+toward the measured one. With attachment correct it is **negligible against
+diffusion** (`4.9×10⁹ s⁻¹` at 1 atm), and the modelled slope moves from −0.72
+to −1.74, i.e. **away** from the data. The apparent near-agreement was an
+artifact of a wrong constant.)*
 
 ### Multiphoton seed `S_mpi`
 
@@ -105,13 +120,17 @@ volume, `n_e0 = 1/V_focal`.
 | U_i | 12.06 eV → 1.932e-18 J | effective ionization energy (O₂ IP); prefactor only, does **not** affect the slope gate |
 | K_m | 3.9e7 s⁻¹·Pa⁻¹ | ν_m/p for air ≈ 5.3×10⁹ s⁻¹·Torr⁻¹ rescaled to Pa |
 | D_e,ref | 2.0e-1 m²/s at p_ref | free-electron diffusion, order-of-magnitude; sets absolute low-p rise only |
-| K_a | 1.0e5 s⁻¹·Pa⁻¹ | two-body O₂ attachment, air-discharge order |
+| k₂ | 1.0e-17 m³/s | dissociative attachment `e + O₂ → O⁻ + O` (Itikawa 2009) |
+| k₃ | 1.0e-43 m⁶/s | three-body attachment `e + O₂ + M → O₂⁻ + M` (Kossyi 1992); dominant channel |
+| f_O₂ | 0.21 | O₂ number fraction of dry air |
 | n_bd | 1.0e23 m⁻³ | breakdown criterion density |
 | p_ref | 101325 Pa | 1 atm reference |
 
-The absolute threshold *level* depends on `U_i, D_e,ref, K_a, n_bd, Λ` and is
-**not gated** (inter-lab scatter is 3–10×). The *slope* depends only on the
-`ν_i ∝ p` scaling and is the gate.
+The absolute threshold *level* depends on `U_i, D_e,ref, k₂, k₃, n_bd, Λ` and is
+**not gated** (inter-lab scatter is 3–10×). The *slope* is the gate; with
+attachment negligible it is set by the competition between diffusion loss and
+the finite-pulse growth requirement, and is bracketed analytically at
+`n ∈ [1, 2]`.
 
 ## Integrator — exact exponential per constant-I slice
 
@@ -142,31 +161,40 @@ profile `I(t) = I_pk·exp(−4 ln2 (t/τ_FWHM)²)` over `[−2τ, 2τ]` and trac
 **Log-log slope of `I_thr(p)` over the pinned range 300–2000 Torr** — the
 high-pressure branch only.
 
-*(Amended 2026-07-23, during implementation, per the rule at the top of this
-document. The original text gated the slope over the full 10–2000 Torr sweep
-against `I_thr ∝ p^-1`. Both halves were wrong and the code now differs, so the
-spec is corrected here rather than in the code.)*
+*(Amended twice during implementation, per the rule at the top of this document.
+**2026-07-23:** the original text gated the slope over the full 10–2000 Torr
+sweep against `I_thr ∝ p^-1`; both halves were wrong. **2026-07-24:** the band
+was replaced by an analytic bracket after attachment was corrected — see below.)*
 
-Why the range is part of the gate, not a free knob. Solving the avalanche
-criterion — cascade must outrun losses *and* clear the `n_seed → n_bd` growth
-requirement `G = ln(n_bd/n_seed)/τ` within the pulse — gives
+Solving the avalanche criterion — cascade must outrun losses *and* clear the
+`n_seed → n_bd` growth requirement `G = ln(n_bd/n_seed)/τ` within the pulse —
+gives
 
 ```text
-I_thr(p) = K_a/A + (ν_diff(p) + G)/(A·p),      A ≡ ν_i/(I·p)
+I_thr(p) = [ν_att(p) + ν_diff(p) + G] / (A·p),      A ≡ ν_i/(I·p)
 ```
 
-so the exponent `n` in `I_thr ∝ p^-n` is **not** a single number: `n → 1` where
-the `1/p` terms dominate, and `n → 0` as `p → ∞` and `I_thr → K_a/A`. Fitting
-over 10–2000 Torr therefore mixes branches and returns ≈ −2.3 (the low-p end is
-the Λ-sensitive diffusion branch, which D5 excluded); fitting far above 2000
-Torr would return something flatter than the band. The gate range is pinned to
-**300–2000 Torr**, which brackets the T&T measurement range, and the gate is a
-statement about the model *on that range*.
+With attachment from measured rate coefficients it is negligible at these
+densities (`6.7×10⁷` against `4.9×10⁹ s⁻¹` for diffusion at 1 atm), leaving two
+terms whose exponents are **exact**:
 
-What is parameter-free about it: on this branch cascade and attachment both
-scale ∝ p and diffusion is sub-dominant, so the fitted `n` does not depend on
-`Λ` — the quantity D5 forbade tuning. Measured: `n = 0.716`, asserted band
-`n ∈ [0.4, 1.0]`, level at 760 Torr `6.3×10¹¹ W/cm²` (not gated).
+```text
+growth-limited (losses → 0):   I_thr = G/(A·p)       ∝ p^-1
+diffusion-limited:             I_thr = ν_diff/(A·p)  ∝ p^-2      (ν_diff ∝ 1/p)
+```
+
+Any mixture must fall strictly between them, so the gate asserts
+**`n ∈ [1, 2]`** — a bracket forced by the model's structure, not a fitted band.
+`Λ` moves where inside the interval the model lands, never outside it, which is
+what makes this independent of the quantity D5 forbade tuning. Observed:
+`n = 1.737`, level at 760 Torr `2.4×10¹¹ W/cm²` (not gated).
+
+The range still matters and is pinned to **300–2000 Torr**, bracketing T&T's
+measurement range. Fitting the full 10–2000 Torr sweep mixes in the low-p
+diffusion branch that D5 excluded.
+
+This gate is the model's **self-consistency**, not agreement with experiment —
+T&T measure `n = 0.33`, outside the interval entirely. See the external gates.
 
 **When the digitized Thiyagarajan & Thompson (J. Appl. Phys. 111, 073302
 (2012)) curve is available**, the gate additionally asserts the model matches
@@ -202,24 +230,46 @@ fitted, so any disagreement is a statement about the rate model.
 2. **`E_eff` rises with pressure — PASSES.** Predicted `p^+0.642`, measured
    `p^+0.695`. The sign is the physics: `E_eff` only rises because `ν_m ≪ ω`
    makes the IB factor grow ∝ p faster than the threshold field falls.
-3. **Threshold pressure-slope — FAILS, by ~2×.** Measured `E_B ∝ p^-0.164`
-   over 300–2000 Torr, i.e. `I_thr ∝ p^-0.33`; the kernel gives `p^-0.72`. The
-   measured curve reaches its high-pressure plateau *earlier* than the model's
-   `I_thr → K_a/A` asymptote does.
+3. **Threshold pressure-slope — FAILS, structurally.** Measured
+   `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.33`; the kernel
+   gives `p^-1.74`. Committed **red** (`#[ignore]`d with its reason, so the
+   suite stays green while the gap stays named).
 
-The failing gate is committed **red** (`#[ignore]`d with its reason, so the
-suite stays green while the gap stays visible and named). The suspected cause
-is the attachment term: `ν_att = K_a·p` is two-body, while air at these
-densities is dominated by **three-body** attachment (`e + O₂ + M`, ∝ p²), which
-would flatten the high-p branch as observed. Note the absolute level is *not*
-the problem — measured `1.0×10¹¹ W/cm²` (RMS) vs modelled `6.3×10¹¹` is 6×,
-inside the inter-lab scatter this spec already declines to gate.
+**A wrong diagnosis, recorded because the correction is the finding.** The gap
+first looked like a factor of 2 caused by two-body vs three-body attachment.
+Implementing attachment from measured rate coefficients showed the opposite:
+real attachment is ~150× *smaller* than the constant it replaced, hence
+negligible, and the corrected model moved from `p^-0.72` to `p^-1.74` — further
+from the data. The near-agreement had been propped up by a wrong number.
 
-**The line on fixing it.** Re-pinning `K_a` from independent attachment data,
-or replacing it with the three-body form because that is what the physics says,
-is legitimate. Tuning `K_a` until the slope lands inside the band is the
-curve-fitting the pinned-`Λ` rule exists to forbid, and is not permitted here
-either.
+**What is left is structural, and that is the interesting part.** With
+attachment negligible the model is bracketed by its own closed forms:
+
+```text
+growth-limited (losses → 0):   I_thr = G/(A·p)       ∝ p^-1
+diffusion-limited:             I_thr = ν_diff/(A·p)  ∝ p^-2
+```
+
+so `n ∈ [1, 2]` is **forced by the model's structure**. No choice of `Λ`,
+`D_e`, `K_a` or `n_bd` can reach the measured `n = 0.33` — it is outside the
+reachable interval, so this cannot be repaired by re-pinning any constant. It
+would take the cascade coefficient itself to fall with pressure, `A ∝ p^-0.67`,
+which is what an effective ionization energy `U_i` growing with collision
+frequency would produce (inelastic losses per ionization scale ∝ p, and the
+literature's "effective" `U_i` is known to exceed the true ionization potential).
+
+That is new physics, not a constant to re-pin, and it is the open question M6a
+hands forward. The absolute level is *not* the problem, and the attachment
+correction in fact **improved** it: measured `1.0×10¹¹ W/cm²` (RMS) vs modelled
+`2.4×10¹¹` is 2.4×, down from 6×, and well inside the inter-lab scatter this
+spec declines to gate. Level and slope moved in opposite directions, which is
+itself evidence the remaining gap is in the pressure *scaling* of the cascade
+rather than in its magnitude.
+
+**The line on fixing it.** Re-pinning a constant from independent data is
+legitimate; so is adding a term the physics demands. Tuning any constant until
+the slope lands in a band is the curve-fitting the pinned-`Λ` rule forbids, and
+the bracket above now makes such tuning provably futile as well as improper.
 
 ### Integrator unit tests (NOT physics validation — labeled as such)
 
