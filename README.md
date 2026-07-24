@@ -54,14 +54,18 @@ cargo run --release -- turbulence --n 256 --dx 2e-3 --w0 1e-2 --z 1000 --cn2 1.5
 # thermal blooming: a 20 kW beam heating the air, bending into a 2 m/s crosswind
 cargo run --release -- blooming --w0 5e-2 --power 2e4 --wind 2 --alpha-abs 1e-4 --z 500 --out bloom
 
+# 0-D optical breakdown (M6a): threshold vs pressure + the electron avalanche
+cargo run --release -- breakdown --out breakdown
+
 # render the images: GIFs/PNGs with physical axes and a labeled colorbar (matplotlib)
 python3 scripts/render.py out/turb
+python3 scripts/render_breakdown.py out/breakdown   # breakdown runs
 
 # remove generated results (images, .npy and sidecars in the output directory)
 cargo run --release -- clean
 ```
 
-The solver writes **data** (`.npy` arrays plus `_meta.json`/`_notes.md` sidecars); all images come from `python3 scripts/render.py <basename>`. Generated files land in `out/` by default (`--out-dir` overrides). Each `propagate`/`turbulence` run's `<out>_notes.md` describes the test case: parameters, derived physical quantities (Rayleigh range, Fried parameter, Rytov variance, …), what each file contains with its physical axes, and how the images are normalized. `cargo run --release -- --help` (or `--help` on any subcommand) lists all options.
+The solver writes **data** (`.npy` arrays plus `_meta.json`/`_notes.md` sidecars); all images come from `python3 scripts/render.py <basename>` (or `scripts/render_breakdown.py` for `breakdown` runs, which are 0-D rate physics rather than fields). Generated files land in `out/` by default (`--out-dir` overrides). Each `propagate`/`turbulence` run's `<out>_notes.md` describes the test case: parameters, derived physical quantities (Rayleigh range, Fried parameter, Rytov variance, …), what each file contains with its physical axes, and how the images are normalized. `cargo run --release -- --help` (or `--help` on any subcommand) lists all options.
 
 ## Python bindings
 

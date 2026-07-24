@@ -270,6 +270,17 @@ impl AirBreakdown {
         self.heating_power(intensity, pressure) / (self.delta_eff * self.k_m * pressure)
     }
 
+    /// Initial seed density `n_e0` (m⁻³): one electron in the focal volume.
+    pub fn seed_density(&self) -> f64 {
+        self.n_seed
+    }
+
+    /// Breakdown criterion density `n_bd` (m⁻³) — the level `n_e` must reach
+    /// within the pulse for breakdown to be declared.
+    pub fn criterion_density(&self) -> f64 {
+        self.n_bd
+    }
+
     /// Inverse-bremsstrahlung heating power absorbed per electron (W).
     ///
     /// `P = (e²·I)/(m_e·c·ε₀) · ν_m/(ν_m²+ω²)` with `ν_m = k_m·p`. In the
