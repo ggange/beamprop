@@ -96,7 +96,7 @@ def render_threshold(base, meta, repo_root):
     The right panel normalizes every series at 1 atm so only shape is compared;
     plotting a slope envelope on absolute axes would be a category error.
     """
-    p, i_thr, i_d005, i_d001 = read_csv_columns(f"{base}_threshold.csv", 4)
+    p, i_thr, i_d005, i_d001, _ = read_csv_columns(f"{base}_threshold.csv", 5)
     p_m, i_m = load_measured(repo_root)
     if p_m is not None:
         m = (p_m >= p.min()) & (p_m <= p.max())
@@ -183,84 +183,106 @@ def render_threshold(base, meta, repo_root):
 
 
 def render_avalanche(base, meta, fps):
-    """The avalanche, one frame per pressure, at a single fixed intensity.
+    """The avalanche: one INDEPENDENT 0-D run per pressure, swept as frames.
 
-    Traces are truncated once they cross n_bd. The kernel now saturates at full
-    ionization (logistic neutral depletion), so nothing runs away numerically --
-    but above the breakdown criterion the model still has no recombination, no
-    plasma back-reaction on the beam and no opacity, so it is not describing the
-    plasma it predicts. n_bd is where the model's claim ends, so that is where
-    the picture ends.
+    This is a parameter sweep, not a time-varying-pressure simulation. Each
+    frame integrates the rate equation from scratch at its own fixed pressure,
+    driven by the same pulse.
+
+    The pulse envelope is drawn behind the trace because the timing is
+    otherwise unreadable: t < 0 is *before* the pulse peak, and above threshold
+    the avalanche completes on the leading edge (the drive crosses the ignition
+    intensity ~1 ns early), so the interesting physics happens at negative t.
+
+    Traces run to their saturation ceiling — full ionization at that frame's
+    pressure — rather than being cut at n_bd. Above n_bd the model has no
+    recombination, opacity or back-reaction, so that region is shaded as beyond
+    its validity: the plateau is drawn, but not claimed.
     """
     ne = np.load(f"{base}_ne_traces.npy")           # [pressure, time]
-    p, _, _, _ = read_csv_columns(f"{base}_threshold.csv", 4)
+    p, _, _, _, n_neutral = read_csv_columns(f"{base}_threshold.csv", 5)
     t_ns = np.linspace(meta["t_min"], meta["t_max"], ne.shape[1]) * 1e9
     # float() matters: n_bd round-trips through JSON as a bare integer, and a
     # Python big-int axis limit is not safely castable to float64.
     n_bd = float(meta["n_bd"])
     n_seed = float(meta["n_seed"])
     drive = float(meta["drive_intensity_w_per_cm2"])
+    fwhm_ns = float(meta["fwhm"]) * 1e9
 
-    ceiling = n_bd * 10.0
-    floor = n_seed * 1e-8
+    floor = n_seed * 1e-2
+    top = float(n_neutral.max()) * 30.0
 
-    def truncated(row):
-        """Trace up to its first excursion past the display ceiling."""
-        over = np.nonzero(row > ceiling)[0]
-        stop = over[0] + 1 if over.size else row.size
-        return t_ns[:stop], np.clip(row[:stop], floor, ceiling)
+    fig, ax = plt.subplots(figsize=(7.8, 4.9), constrained_layout=True)
 
-    fig, ax = plt.subplots(figsize=(7.6, 4.8), constrained_layout=True)
-    ax.axhline(n_bd, color=BAND_C, lw=1.3, ls="--")
-    ax.text(
-        t_ns[-1], n_bd * 1.6, "breakdown criterion  $n_{bd}$",
-        color=BAND_C, fontsize=8.5, va="bottom", ha="right",
+    # Pulse envelope, on its own scale behind everything.
+    env = ax.twinx()
+    pulse = np.exp(-4.0 * np.log(2.0) * (t_ns / fwhm_ns) ** 2)
+    env.fill_between(t_ns, 0, pulse, color="#fcfdbf", alpha=0.75, lw=0, zorder=0)
+    env.plot(t_ns, pulse, color="#fec98d", lw=1.0, zorder=0)
+    env.set_ylim(0, 3.2)
+    env.set_yticks([])
+    env.text(
+        -1.92 * fwhm_ns, 0.06, f"laser pulse, {fwhm_ns:.0f} ns FWHM",
+        color="#b8860b", fontsize=8, va="bottom",
     )
-    ax.axhline(n_seed, color="#888888", lw=1.0, ls=":")
+
+    # Beyond-model-validity band.
+    ax.axhspan(n_bd, top, color=BAND_C, alpha=0.07, lw=0, zorder=1)
+    ax.axhline(n_bd, color=BAND_C, lw=1.3, ls="--", zorder=3)
     ax.text(
-        t_ns[0], n_seed * 1.6, "seed: one electron in the focal volume",
-        color="#888888", fontsize=8, va="bottom",
+        t_ns[-1], n_bd * 1.7,
+        "breakdown criterion $n_{bd}$\nabove: beyond model validity",
+        color=BAND_C, fontsize=7.5, va="bottom", ha="right", zorder=3,
+    )
+    ax.text(
+        t_ns[-1], top / 2.5, "dash-dot: full ionization at this pressure",
+        color="#3b0f70", fontsize=7.5, va="top", ha="right", zorder=6,
+    )
+    ax.axhline(n_seed, color="#888888", lw=1.0, ls=":", zorder=3)
+    ax.text(
+        t_ns[0], n_seed * 1.7, "seed: one electron in the focal volume",
+        color="#888888", fontsize=7.5, va="bottom", zorder=3,
     )
     for row in ne:
-        gt, gy = truncated(row)
-        ax.plot(gt, gy, color=MODEL_C, lw=0.4, alpha=0.10)
+        ax.plot(t_ns, np.clip(row, floor, None), color=MODEL_C, lw=0.4,
+                alpha=0.09, zorder=2)
 
-    (line,) = ax.plot([], [], color=MODEL_C, lw=2.2)
+    (sat,) = ax.plot([], [], color="#3b0f70", lw=1.0, ls="-.", zorder=4)
+    (line,) = ax.plot([], [], color=MODEL_C, lw=2.3, zorder=5)
     label = ax.text(
-        0.015, 0.90, "", transform=ax.transAxes, fontsize=10, va="top",
-        family="monospace",
+        0.015, 0.97, "", transform=ax.transAxes, fontsize=10, va="top",
+        family="monospace", zorder=6,
     )
     verdict = ax.text(
-        0.015, 0.81, "", transform=ax.transAxes, fontsize=10, va="top",
-        fontweight="bold",
+        0.015, 0.88, "", transform=ax.transAxes, fontsize=10, va="top",
+        fontweight="bold", zorder=6,
     )
 
     ax.set_yscale("log")
     ax.set_xlim(t_ns[0], t_ns[-1])
-    ax.set_ylim(floor, ceiling * 3.0)
-    ax.set_xlabel("time relative to pulse peak  (ns)")
+    ax.set_ylim(floor, top)
+    ax.set_zorder(env.get_zorder() + 1)
+    ax.patch.set_visible(False)
+    ax.set_xlabel("time relative to pulse peak  (ns)     — negative is before the peak")
     ax.set_ylabel("electron density $n_e$  (m$^{-3}$)")
-    ax.set_title(f"Same pulse, {drive:.2e} W/cm$^2$ — only the pressure changes")
-    style(ax)
-    ax.text(
-        0.985, 0.03,
-        "traces stop at $n_{bd}$: above it the model has no recombination,\n"
-        "opacity or back-reaction, so it no longer describes the plasma",
-        transform=ax.transAxes, fontsize=7.5, color="#555555",
-        ha="right", va="bottom",
+    ax.set_title(
+        f"Pressure sweep: {ne.shape[0]} independent runs, same pulse "
+        f"({drive:.2e} W/cm$^2$)",
+        fontsize=11,
     )
+    style(ax)
 
     def update(k):
-        gt, gy = truncated(ne[k])
-        line.set_data(gt, gy)
-        label.set_text(f"p = {p[k]:7.1f} Torr")
+        line.set_data(t_ns, np.clip(ne[k], floor, None))
+        sat.set_data([t_ns[0], t_ns[-1]], [n_neutral[k], n_neutral[k]])
+        label.set_text(f"run {k + 1:2d}/{ne.shape[0]}   p = {p[k]:7.1f} Torr")
         if ne[k].max() >= n_bd:
             verdict.set_text("BREAKDOWN")
             verdict.set_color(MODEL_C)
         else:
             verdict.set_text("no breakdown")
             verdict.set_color("#888888")
-        return line, label, verdict
+        return line, sat, label, verdict
 
     anim = animation.FuncAnimation(fig, update, frames=ne.shape[0], blit=False)
     out = f"{base}_avalanche.gif"

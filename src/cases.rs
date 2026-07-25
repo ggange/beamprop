@@ -376,6 +376,9 @@ pub struct BreakdownRun {
     /// Seed density (m⁻³): one electron in the focal volume, where every
     /// trace starts.
     pub n_seed: f64,
+    /// Neutral density at each sweep pressure (m⁻³) — the ceiling each trace
+    /// saturates against, since it is full ionization.
+    pub neutral_density: Vec<f64>,
 }
 
 /// Sweep the 0-D optical-breakdown threshold against pressure and record the
@@ -468,6 +471,10 @@ pub fn run_breakdown(p: &BreakdownParams) -> Result<BreakdownRun> {
         trace_time,
         n_bd: model.criterion_density(),
         n_seed: model.seed_density(),
+        neutral_density: central
+            .iter()
+            .map(|c| model.neutral_density(c.0 * TORR))
+            .collect(),
     })
 }
 

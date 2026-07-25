@@ -645,18 +645,20 @@ fn breakdown(
     // digitized T&T points on this.
     let mut csv = String::from(
         "# beamprop M6a 0-D optical-breakdown threshold sweep\n\
-         # columns: pressure_torr, i_thr_w_per_cm2, i_thr_delta005, i_thr_delta001\n\
+         # columns: pressure_torr, i_thr_w_per_cm2, i_thr_delta005, i_thr_delta001,\n\
+         #          n_neutral_per_m3\n\
          # i_thr_delta005/001 are the edges of the delta_eff literature envelope\n\
          # (0.05 flattens the slope, 0.01 steepens it); see docs/M6A_SPEC.md.\n\
-         pressure_torr,i_thr_w_per_cm2,i_thr_delta005,i_thr_delta001\n",
+         pressure_torr,i_thr_w_per_cm2,i_thr_delta005,i_thr_delta001,n_neutral_per_m3\n",
     );
     for i in 0..run.pressure_torr.len() {
         csv.push_str(&format!(
-            "{:.6},{:.6e},{:.6e},{:.6e}\n",
+            "{:.6},{:.6e},{:.6e},{:.6e},{:.6e}\n",
             run.pressure_torr[i],
             run.threshold[i],
             run.threshold_lo_slope[i],
-            run.threshold_hi_slope[i]
+            run.threshold_hi_slope[i],
+            run.neutral_density[i]
         ));
     }
     let csv_path = path(&format!("{out}_threshold.csv"));
