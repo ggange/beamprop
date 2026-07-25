@@ -185,10 +185,10 @@ enum Cmd {
         #[arg(long, default_value_t = 400)]
         steps: usize,
         /// Drive intensity for the traces, as a multiple of the threshold at
-        /// --p-max. The default puts roughly half the sweep above threshold, so
-        /// the animation shows the same pulse igniting the gas at high pressure
-        /// and fizzling at low; exactly 1.0 ignites only the final frame.
-        #[arg(long, default_value_t = 1.5)]
+        /// --p-max. Must straddle the sweep to be interesting, and the usable
+        /// range is narrow: the corrected model's threshold spans only ~1.17x
+        /// across 300-2000 Torr, so anything above that ignites every frame.
+        #[arg(long, default_value_t = 1.08)]
         drive: f64,
         /// Output basename (within --out-dir).
         #[arg(long, default_value = "breakdown")]
@@ -717,16 +717,18 @@ fn breakdown(
          \n\
          Every frame drives the *same* peak intensity, {di:.3e} W/cm^2, at a\n\
          different pressure. The avalanche is a knife edge: below threshold the\n\
-         seed electron decays away, above it n_e climbs many orders of magnitude\n\
-         within the pulse. Raising the pressure alone flips the gas from\n\
-         transparent to broken down.\n\
+         seed electron never multiplies, above it n_e climbs many orders of\n\
+         magnitude within the pulse and saturates at full ionization. Raising\n\
+         the pressure alone flips the gas from transparent to broken down --\n\
+         though note the corrected model's threshold spans only ~1.17x over\n\
+         300-2000 Torr, so the switch happens over a narrow pressure range.\n\
          \n\
          ## Files\n\
          \n\
          - `{out}_threshold.csv` — pressure (Torr), threshold (W/cm^2), and the\n\
            two envelope edges.\n\
          - `{out}_ne_traces.npy` — n_e(t) as `[pressure, time]`, {points} x {steps},\n\
-           in m^-3, clipped to 1e40 for plotting.\n\
+           in m^-3, bounded above by the local full-ionization density.\n\
          - `{out}_meta.json` — the run parameters, fitted slope, and time axis.\n\
          \n\
          Measured reference data: `tests/data/tt2012_*.csv`.\n",

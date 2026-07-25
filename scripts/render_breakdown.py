@@ -85,16 +85,16 @@ P_REF = 760.0  # Torr — normalization anchor; every series spans 1 atm
 
 
 def render_threshold(base, meta, repo_root):
-    """Two panels, because the model makes two claims of very different strength.
+    """Two panels: absolute level (left) and shape (right).
 
-    Left: absolute threshold. The model sits ~7x above the measurement, and
-    that offset is NOT validated -- it is ungated on purpose (published
-    thresholds scatter 3-10x across labs).
+    Neither is validated, and the figure says so. The model runs ~5-7x above
+    the measurement in level, and its pressure trend is too FLAT -- the
+    measured points fall outside the model's own slope envelope on the right
+    panel. An earlier version of this figure claimed the opposite; that claim
+    rested on an integration artifact (see docs/M6A_SPEC.md).
 
-    Right: the same curves normalized at 1 atm, i.e. SHAPE only. This is where
-    the validated claim lives: the slope envelope from delta_eff's literature
-    range contains the measured trend. Plotting containment on absolute axes
-    would be a category error -- the envelope spans slopes, not levels.
+    The right panel normalizes every series at 1 atm so only shape is compared;
+    plotting a slope envelope on absolute axes would be a category error.
     """
     p, i_thr, i_d005, i_d001 = read_csv_columns(f"{base}_threshold.csv", 4)
     p_m, i_m = load_measured(repo_root)
@@ -134,7 +134,7 @@ def render_threshold(base, meta, repo_root):
     # --- left: absolute, offset and all ---
     draw(ax_abs, (1.0, 1.0, 1.0), 1.0)
     ax_abs.set_ylabel("threshold peak intensity  (W/cm$^2$)")
-    ax_abs.set_title("Absolute threshold — level is NOT validated", fontsize=11)
+    ax_abs.set_title("Absolute level — not validated (ungated)", fontsize=11)
     if p_m is not None:
         ratio = interp_loglog(p, i_thr, P_REF) / interp_loglog(p_m, i_m, P_REF)
         ax_abs.annotate(
@@ -153,7 +153,9 @@ def render_threshold(base, meta, repo_root):
     sd = interp_loglog(p_m, i_m, P_REF) if p_m is not None else 1.0
     draw(ax_rel, sm, sd)
     ax_rel.set_ylabel(f"threshold, normalized at {P_REF:.0f} Torr")
-    ax_rel.set_title("Shape — this is the validated comparison", fontsize=11)
+    ax_rel.set_title(
+        "Shape — model too flat; measurement outside its envelope", fontsize=11
+    )
     ax_rel.axvline(P_REF, color=GRID_C, lw=1.0, zorder=0)
 
     fig.suptitle(
@@ -162,17 +164,16 @@ def render_threshold(base, meta, repo_root):
         f"{float(meta['fwhm']) * 1e9:.0f} ns FWHM",
         fontsize=13,
     )
-    handles, labels = ax_rel.get_legend_handles_labels()
-    fig.legend(
-        handles, labels, loc="outside lower center", ncol=3, frameon=False,
-        fontsize=8.5,
-    )
+    ax_abs.legend(loc="center left", frameon=False, fontsize=7.5)
     fig.text(
-        0.005, -0.055,
-        "Validated: the measured pressure trend lies inside the model's "
-        "slope envelope (right). Not validated: the absolute level (left), "
-        "deliberately ungated — published thresholds scatter 3–10x across labs.",
-        fontsize=8, color="#555555", va="top",
+        0.5, -0.02,
+        "Model $n$ = %.3f vs measured 0.329: too flat, and outside the "
+        "$\\delta_{\\rm eff}$ envelope — the external slope gate is RED. "
+        "Level is ungated (3–10x inter-lab scatter).\n"
+        "What M6a defends is a bracket: the two cascade limits give "
+        "$n$ = 0.127 and 0.551, straddling the measurement. See docs/M6A_SPEC.md."
+        % float(meta["slope"]),
+        fontsize=8, color="#555555", va="top", ha="center",
     )
 
     out = f"{base}_threshold.png"
@@ -184,13 +185,12 @@ def render_threshold(base, meta, repo_root):
 def render_avalanche(base, meta, fps):
     """The avalanche, one frame per pressure, at a single fixed intensity.
 
-    Traces are truncated once they cross n_bd. That is not cosmetic: the rate
-    model is linear in n_e with no saturation -- no neutral depletion, no
-    recombination, no plasma back-reaction on the beam -- so above the
-    breakdown criterion it is extrapolating far outside its domain (unchecked,
-    it runs to 1e40 m^-3, past solid density and 1e13x the critical density at
-    1064 nm). n_bd is where the model's claim ends, so that is where the
-    picture ends.
+    Traces are truncated once they cross n_bd. The kernel now saturates at full
+    ionization (logistic neutral depletion), so nothing runs away numerically --
+    but above the breakdown criterion the model still has no recombination, no
+    plasma back-reaction on the beam and no opacity, so it is not describing the
+    plasma it predicts. n_bd is where the model's claim ends, so that is where
+    the picture ends.
     """
     ne = np.load(f"{base}_ne_traces.npy")           # [pressure, time]
     p, _, _, _ = read_csv_columns(f"{base}_threshold.csv", 4)
@@ -244,8 +244,8 @@ def render_avalanche(base, meta, fps):
     style(ax)
     ax.text(
         0.985, 0.03,
-        "traces stop at $n_{bd}$: the rate model has no saturation term\n"
-        "and does not describe the plasma beyond it",
+        "traces stop at $n_{bd}$: above it the model has no recombination,\n"
+        "opacity or back-reaction, so it no longer describes the plasma",
         transform=ax.transAxes, fontsize=7.5, color="#555555",
         ha="right", va="bottom",
     )

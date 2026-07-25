@@ -115,58 +115,63 @@ with **no `⟨ε⟩` anywhere** and still exactly `∝ p`. Both forms are implem
 as `CascadeModel::{FixedMeanEnergy, SelfConsistentClimb}`; the self-consistent
 one is the **default**.
 
-| model | free constants | slope `n` |
-|---|---|---|
-| no inelastic loss | — | 1.737 |
-| `FixedMeanEnergy` | `δ_eff`, `⟨ε⟩` | 0.800 |
-| **`SelfConsistentClimb`** | `δ_eff` | **0.356** |
-| *measured (T&T)* | | *0.329* |
+| model | free constants | slope `n` | vs measured 0.329 |
+|---|---|---|---|
+| no inelastic loss | — | 1.737 | 5.3× too steep |
+| `FixedMeanEnergy` | `δ_eff`, `⟨ε⟩` | 0.551 | 1.7× too steep |
+| **`SelfConsistentClimb`** (default) | `δ_eff` | **0.127** | 2.6× too flat |
 
-**Honesty about its status.** `δ_eff` remains free within its literature range
-(0.01–0.05), which gives `n ∈ [0.154, 0.583]` — containing the measurement — so
-the external gate is an **envelope** test plus a factor-1.5 regression pin on
-the literature-central value, not a point comparison. `δ_eff = 0.02` was fixed
-before the self-consistent model existed, so nothing was tuned; but see the
-sensitivity audit below before reading the central-value agreement as sharp.
-Widening any range to manufacture containment is forbidden by the same rule
-that pins `Λ`.
+*(Numbers corrected 2026-07-25. The values previously in this table — 0.800 and
+0.356 — were inflated by the seed-window artifact described under Seeding
+below, which supplied ~60 of the ~82 nats the threshold criterion demanded and,
+being pressure-dependent, manufactured slope. The apparent 8 % agreement of the
+self-consistent model was an artifact of that bug.)*
 
-**Sensitivity audit (2026-07-24)** — run after the gate first went green,
-because a passing gate earns *more* scrutiny, not less. Verified first that an
-independent Python reimplementation (from these equations, not the Rust)
-reproduces `n = 0.3563` to four digits, and that the value is stable under
-discretization (0.346–0.356) and T&T's ±1 ns pulse uncertainty (0.352–0.362).
-Then each ungated constant was perturbed:
+**What survives the correction is the bracket, not a match.** The two limits sit
+either side of the measurement — 0.127 and 0.551 against 0.329 — and neither
+reproduces it. That straddle is what a mean-energy treatment of a tail-driven
+process should give, and it is the claim
+`the_two_cascade_models_bracket_the_measurement` gates. It is also the claim
+that *stayed true* while both endpoints moved, which is the main reason to
+trust it over either endpoint.
 
-| perturbation | n |
+**Honesty about status.** `δ_eff` remains free within its asserted range
+(0.01–0.05), which for the default gives `n ∈ [0.029, 0.299]` — **excluding**
+the measurement, so `tt2012_threshold_slope_matches_measurement` is red. For
+`FixedMeanEnergy` the same sweep over `(δ_eff, ⟨ε⟩)` gives `[0.224, 0.895]`,
+which does contain it. The default is chosen for parameter parsimony, **not**
+for agreement; switching it to the better-agreeing variant would be fitting.
+
+Two further caveats, stated because they bound how much any of this means:
+
+- **The `δ_eff` range 0.01–0.05 is asserted, not sourced.** It is a plausible
+  band for the fractional energy loss per collision in air above ~1 eV, but no
+  citation backs those endpoints, and `δ_eff` sets the threshold *level*
+  linearly. Matching T&T's level would need `δ_eff ≈ 0.003`.
+- **The level is 4.8–7.2× high and drifts** across the window; the drift is the
+  residual slope error in absolute clothing. Level stays ungated (3–10 %
+  inter-lab scatter).
+
+**Sensitivity audit (2026-07-24, values superseded 2026-07-25)** — run after the
+gate first went green, because a passing gate earns *more* scrutiny, not less.
+It verified that an independent Python reimplementation (from these equations,
+not the Rust) reproduced the Rust to four digits, that the result was stable
+under discretization and T&T's ±1 ns pulse uncertainty, and that two ungated
+constants moved the slope substantially:
+
+| perturbation | effect on `n` |
 |---|---|
-| baseline (literature-central) | 0.356 |
-| `n_bd` ×0.1 / ×10 | 0.353 / 0.360 |
-| pulse FWHM 5 / 7 ns | 0.362 / 0.352 |
-| `D_e` ×0.5 / ×2 | **0.213 / 0.569** |
-| generation prefactor `ln 2` | **0.469** |
+| `n_bd` ×0.1 / ×10 | negligible |
+| pulse FWHM 5 / 7 ns | ±2 % |
+| `D_e` ×0.5 / ×2 | **large** — `ν_diff` and `G` are comparable, not sub-dominant |
+| generation prefactor `ln 2` vs 1 | **~30 %** |
 
-Two findings demote the headline. **(a)** The slope is *not* `Λ/D_e`-robust in
-the current balance: `ν_diff = 4.9×10⁹` vs `G = 3.7×10⁹ s⁻¹` at 760 Torr —
-comparable, not sub-dominant — so the order-of-magnitude `D_e` sweeps the slope
-across most of the envelope. Any older text claiming the high-p branch is
-"Λ-independent" described the pre-plateau model and is withdrawn. **(b)** The
-derivation's `ν_i = 1/t_climb` carries an order-unity generation-model
-ambiguity (`ln 2/t_climb` under discrete doubling is equally defensible), worth
-30% on the slope by itself.
-
-Conclusion: the model family's uncertainty band from its own ungated constants
-is roughly `n ∈ [0.21, 0.57]`. The measured 0.329 sits comfortably inside, and
-that containment — not the 8% central agreement, which is partly luck — is the
-claim the gate makes.
-
-Two things are deliberately *not* claimed. The absolute level is ~7× above T&T
-— gated only as a *flat* offset inside the inter-lab scatter, which says the
-shape is right and the normalization is not. And the self-consistent model is
-not asserted to be more correct in general: putting every electron on the mean
-trajectory makes its threshold artificially sharp at `ε_∞ = U_i`, and a real
-energy distribution would soften it. The measurement sitting *between* the two
-limits is the more trustworthy statement, and it is gated as such.
+Both findings stand. The `D_e` sensitivity in particular withdraws any claim
+that the high-pressure branch is "Λ-independent" — that described the
+pre-plateau model. What the 2026-07-24 audit *missed* was the window artifact,
+which a numerical-hygiene check (vary the integration bounds, demand
+invariance) would have caught immediately; that check now exists as
+`threshold_is_window_independent`.
 
 ### Diffusion loss `ν_diff` — Λ is pinned, never fit (D5)
 
@@ -216,6 +221,37 @@ Breakdown at a point is declared when `n_e` reaches the criterion density
 ionization; documented constant). The initial seed is one electron in the focal
 volume, `n_e0 = 1/V_focal`.
 
+### Seeding and the integration window (amended 2026-07-25)
+
+`n_e` is **floored at the seed density** throughout the pulse integration, and
+that floor is physics, not hygiene.
+
+Without it the model was not window-independent. The integration runs over
+`[−w·FWHM, +w·FWHM]`; during the quiet arm before the pulse, losses grind the
+seed down — at 760 Torr `ν_loss ≈ 5×10⁹ s⁻¹` decays it by `e^-60` over 12 ns —
+so the avalanche had to climb out of a hole whose depth was set by `w`. Of the
+~82 nats of growth the criterion then demanded, ~60 came from the arbitrary
+integration bound and only ~22 from the physical `ln(n_bd/n_seed)`.
+
+That is meaningless as physics (`e^-60` of one electron is `10⁻²⁶` of an
+electron, in a volume that contains either one or none), and it had two
+consequences:
+
+- the threshold rose 11 % from `w = 2` to `w = 4` and never converged;
+- because `ν_loss` is pressure-dependent, it **manufactured slope** — see the
+  retraction under External gates.
+
+The floor states the modelling assumption plainly: one seed electron is
+available in the focal volume when the pulse arrives. `threshold_is_window_
+independent` gates the resulting insensitivity (< 1 % over `w ∈ [1, 4]`).
+
+Note this is an *assumption*, not a derivation. At 1 atm the ambient electron
+density from background ionization (~10⁹ m⁻³) puts ~3×10⁻⁵ electrons in a
+3.4×10⁻¹⁴ m³ focal volume, i.e. usually **none** — which is why ns breakdown at
+tight focus is stochastic and why the physically correct seed is multiphoton
+ionization during the pulse. Turning `S_mpi` on with a defensible `σ_K` is the
+open item; until then the floor is the honest stand-in and is labelled as such.
+
 ## Constants (SI, documented)
 
 | symbol | value | source / note |
@@ -250,6 +286,32 @@ constant, the linear ODE has the closed form
 n_e(t+dt) = n_e·exp(β·dt) + S·expm1(β·dt)/β        (β ≠ 0)
 n_e(t+dt) = n_e + S·dt                              (β → 0, the expm1 limit)
 ```
+
+**Amended 2026-07-25 — growth is logistic, not linear.** Ionization consumes
+the neutrals it feeds on, so the rate equation carries a depletion term:
+
+```text
+dn_e/dt = ν_i·n_e·(1 − n_e/N) − ν_loss·n_e + S_mpi,     N = p/(k_B T)
+```
+
+With `S = 0` this is Bernoulli and still has an exact per-slice solution,
+evaluated as
+
+```text
+n_e(t+dt) = n_e / ( e^{−β dt} + b·n_e·(1 − e^{−β dt})/β ),   b = ν_i/N
+```
+
+**not** the textbook `β n e^{βdt}/(β + b n (e^{βdt} − 1))`, which overflows to
+`inf/inf = NaN` far above threshold. In this form `e^{−β dt}` underflows
+harmlessly and `n_e → β/b`, the saturation density. No exponent clamp is
+applied on the growing side — clamping there corrupts the saturation limit
+itself and made `peak_ne` non-monotonic in intensity.
+
+Without depletion the equation is linear and `n_e` ran away: the shipped
+`breakdown` case reached `10⁴⁰ m⁻³`, `10¹⁴×` the neutral density and `10¹³×`
+critical density at 1064 nm, with the apparent ceiling being a plotting clamp
+rather than physics. Saturation does **not** move the threshold (`n_e/N ≈ 0.4 %`
+at the criterion), so it is a pure correction to the post-breakdown regime.
 
 `expm1` keeps the `β → 0` and small-`β·dt` cases accurate. The exponent is
 saturated at `β·dt = 700` (just under the `f64` `exp` ceiling): far above
@@ -290,8 +352,8 @@ threshold is higher than the closed form. The offset is pressure-independent,
 so the exponents below are unaffected — but never quote the closed form as a
 level, and note that being further above the plateau makes the code's slope
 *steeper* than the closed form predicts. This bit twice: for `FixedMeanEnergy`
-the closed form said 0.521 and the code gives 0.800; for `SelfConsistentClimb`
-it said 0.060 and the code gives 0.356. **Trust the code.**
+the closed form said 0.521 and the code gives 0.551; for `SelfConsistentClimb`
+it said 0.060 and the code gives 0.127. **Trust the code.**
 
 Attachment is negligible at these densities (`6.7×10⁷` against `4.9×10⁹ s⁻¹`
 for diffusion at 1 atm), leaving three terms whose exponents are **exact**:
@@ -304,10 +366,10 @@ diffusion-limited:             I_thr = U_i·ν_diff/(h·p)         ∝ p^-2
 
 Any mixture falls between them, and the gate asserts **`n ∈ (0, 1)`** — the
 plateau must be doing work, since without `L′` the model cannot get below
-`n = 1` at all. Observed with the default `SelfConsistentClimb`: **`n = 0.356`**,
-level at 760 Torr `1.32×10¹² W/cm²` (not gated). With `FixedMeanEnergy`:
-`n = 0.800`. Both literature envelopes are pinned separately —
-`[0.154, 0.583]` and `[0.413, 1.139]` respectively.
+`n = 1` at all. Observed with the default `SelfConsistentClimb`: **`n = 0.127`**,
+level at 760 Torr `1.18×10¹² W/cm²` (not gated). With `FixedMeanEnergy`:
+`n = 0.551`. Both envelopes are pinned separately — `[0.029, 0.299]` and
+`[0.224, 0.895]` respectively.
 
 **The bracket is not universal, and the qualifier is load-bearing.** It holds
 only while attachment is negligible. Three-body attachment is `∝ p²` and
@@ -358,28 +420,33 @@ fitted, so any disagreement is a statement about the rate model.
 2. **`E_eff` rises with pressure — PASSES.** Predicted `p^+0.642`, measured
    `p^+0.695`. The sign is the physics: `E_eff` only rises because `ν_m ≪ ω`
    makes the IB factor grow ∝ p faster than the threshold field falls.
-3. **Threshold pressure-slope — now PASSES as envelope containment.**
-   Measured `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`; the
-   kernel gives `p^-0.356` at literature-central constants. The central-value
-   agreement is not claimed as sharp — see the sensitivity audit above — but
-   the route here took two model corrections and no tuning:
+3. **Threshold pressure-slope — RED, retracted 2026-07-25.** Measured
+   `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`. The default
+   kernel gives `p^-0.127` and its `δ_eff` envelope `[0.029, 0.299]` excludes
+   the measurement, so the gate is `#[ignore]`d rather than re-banded.
+
+   This gate was **green before the 2026-07-25 audit**, reporting `n = 0.356`
+   and an 8 % match. That was an artifact: the seed decayed by `e^-60` during
+   the pre-pulse arm, so an arbitrary integration bound supplied ~60 of the ~82
+   nats the criterion demanded, and its pressure-dependence manufactured slope.
+   The three-stage narrative it supported is correspondingly corrected —
+   1.737 → 0.551 → 0.127, not 1.737 → 0.800 → 0.356.
 
    | stage | slope `n` | vs measured |
    |---|---|---|
    | original (no inelastic loss) | 1.737 | 5.3× — and unreachable at *any* parameter value, since `n = 1` was the model's floor |
-   | + inelastic loss at fixed `⟨ε⟩` | 0.800 | 2.4× |
-   | + `⟨ε⟩` eliminated (self-consistent climb) | **0.356** | **1.08×** |
+   | + inelastic loss at fixed `⟨ε⟩` | 0.551 | 1.7× |
+   | + `⟨ε⟩` eliminated (self-consistent climb) | 0.127 | 2.6× the other way |
 
-   Gated as an envelope over `δ_eff`'s literature range (`n ∈ [0.154, 0.583]`,
-   containing the measurement) plus a factor-1.5 band on the central value.
+   The inelastic-loss term is still justified — it broke the hard `n = 1` floor
+   — but it no longer *closes* the gap, and eliminating `⟨ε⟩` overshoots.
 
-**What this does and does not settle.** The *shape* of `I_thr(p)` is now
-reproduced; the *level* is not, sitting ~7× above T&T. But that offset is
-**flat** (6.4–7.4× across the window, spread 1.16×), which is the signature of
-a correct shape with an uncertain normalization — `U_i`, `n_bd`, `Λ` and
-`δ_eff` all scale it. Earlier models had *drifting* ratios (3.10× → 0.33×
-without the loss term, 4.69× → 2.41× with fixed `⟨ε⟩`), and that drift was the
-slope error showing up in absolute clothing. Level remains ungated.
+**What this does and does not settle.** Neither the shape nor the level is
+reproduced. The level runs 4.8–7.2× above T&T and **drifts** by 1.48× across
+the window — that drift is the residual slope error in absolute clothing, and
+the earlier claim that the ratio had gone flat (6.4–7.4×, spread 1.16×) was
+itself a product of the window artifact. Level remains ungated (3–10×
+inter-lab scatter); the drift is pinned only as a regression check.
 
 **The line on fixing it.** Re-pinning a constant from independent data is
 legitimate; so is adding a term the physics demands. Tuning any constant until

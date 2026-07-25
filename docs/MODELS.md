@@ -289,12 +289,14 @@ I_thr(p) = L′/h + U_i·(ν_att + ν_diff + G)/(h·p),   G = ln(n_bd/n_seed)/τ
 Attachment is negligible here, so the exponent runs between two **exact**
 limits — plateau-dominated `n → 0` and diffusion-dominated `n → 2` — with the
 growth-limited `p^-1` in between. Fitted over the pinned range **300–2000
-Torr** (8 log-spaced points, 6 ns FWHM) the model gives **n = 0.356**, and the
+Torr** (8 log-spaced points, 6 ns FWHM) the model gives **n = 0.127**, and the
 gate asserts `n ∈ (0, 1)`: the plateau must be doing work, since without `L`
 the model is stuck at `n ≥ 1`. Sweeping the literature ranges of `L′`
-(δ_eff ≈ 0.01–0.05) gives an envelope `n ∈ [0.154, 0.583]`, separately pinned so
-it cannot drift. The level at 760 Torr is **1.32×10¹² W/cm²**, and the
-`FixedMeanEnergy` variant gives `n = 0.800` as the other end of the bracket.
+(δ_eff ≈ 0.01–0.05) gives an envelope `n ∈ [0.029, 0.299]`, separately pinned so
+it cannot drift. The level at 760 Torr is **1.18×10¹² W/cm²**, and the
+`FixedMeanEnergy` variant gives `n = 0.551` as the other end of the bracket.
+Growth is **logistic** — ionization depletes the neutrals it feeds on, so `n_e`
+saturates at full ionization rather than running away.
 Absolute threshold level is **not** gated (3–10× inter-lab
 scatter). Integrator sub-gates are unit tests of the exact-exponential solver,
 not physics validation.
@@ -309,17 +311,16 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   1.05 ± 0.01 over 46–1858 Torr. Non-circular anchor.
 - **`E_eff(p)` slope — passes.** Predicted `p^+0.642`, measured `p^+0.695`;
   the positive sign confirms the `ν_m ≪ ω` branch.
-- **`I_thr(p)` slope — PASSES as envelope containment.** Measured `p^-0.329`;
-  kernel `p^-0.356` at literature-central constants. The route: `p^-1.74`
-  originally (where `n = 1` was a hard floor and the measurement was
-  unreachable at any parameter value), `p^-0.80` once inelastic losses were
-  subtracted from the heating, `p^-0.356` once `⟨ε⟩` was eliminated by solving
-  the climb ODE exactly. Nothing was tuned (`δ_eff = 0.02` predates the model),
-  but the central-value agreement is **not claimed as sharp**: the sensitivity
-  audit in `docs/M6A_SPEC.md` shows ungated constants sweep the model across
-  `n ≈ 0.21–0.57` (`D_e` ×2, generation prefactor `ln 2`), so the gated claim
-  is containment in that envelope plus a factor-1.5 regression pin on the
-  coded value. This first looked
+- **`I_thr(p)` slope — RED, retracted 2026-07-25.** Measured `p^-0.329`;
+  kernel `p^-0.127`, whose `δ_eff` envelope `[0.029, 0.299]` excludes the
+  measurement. This gate was previously green at `p^-0.356` (an "8 % match"),
+  but that rested on an integration artifact: the seed decayed by `e^-60`
+  before the pulse arrived, so an arbitrary integration bound supplied most of
+  the threshold requirement and, being pressure-dependent, manufactured slope.
+  Corrected route: `p^-1.74` → `p^-0.551` (inelastic loss) → `p^-0.127`
+  (`⟨ε⟩` eliminated). What survives is a **bracket** — the two cascade limits
+  give 0.127 and 0.551 and straddle the measurement — gated by
+  `the_two_cascade_models_bracket_the_measurement`. This first looked
   like a 2× attachment problem; implementing attachment from measured rate
   coefficients showed real attachment is ~150× *smaller* than the
   order-of-magnitude constant it replaced, moving the model from `p^-0.72` to
@@ -334,10 +335,11 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   falling with pressure (`A ∝ p^-0.67`), as an effective `U_i` growing with
   collision frequency would produce. That is new physics and is M6a's open
   question.
-  On level, the model now sits uniformly above the data by a bounded amount —
-  model/measured runs 4.69× at 380 Torr to 2.41× at 1896 Torr, inside the
-  ungated inter-lab scatter (before the inelastic term it *crossed* the data,
-  3.10× → 0.33×). Converting `E_B` to intensity uses `I = ε₀cE_rms²`, since the
+  On level, the model sits above the data by a bounded but drifting amount —
+  4.84× at 380 Torr to 6.97× at 1896 Torr, inside the ungated 3–10× inter-lab
+  scatter. The 1.48× drift is the residual slope error in absolute clothing;
+  an earlier "flat within 1.16×" claim was withdrawn with the artifact that
+  produced it. Converting `E_B` to intensity uses `I = ε₀cE_rms²`, since the
   `E_eff` ratio establishes `E_B` is an RMS amplitude.
 
 Full model and constants: `docs/M6A_SPEC.md`.

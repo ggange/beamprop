@@ -23,26 +23,30 @@
 //! The mean electron energy is **not** an input: the default
 //! [`CascadeModel::SelfConsistentClimb`] eliminates it by solving the climb
 //! `dε/dt = heating − δ_eff·ν_m·ε` exactly, leaving `δ_eff` as the only free
-//! constant.
+//! constant. Growth is **logistic**, not exponential: ionization consumes the
+//! neutrals it feeds on, so `n_e` saturates at full ionization instead of
+//! running away.
 //!
 //! The absolute threshold *level* depends on several order-of-magnitude
 //! constants (`U_i`, `D_e`, `Λ`, `n_bd`, `δ_eff`) and is deliberately **not**
 //! validated; published thresholds scatter 3–10× across labs, and this model
-//! sits ~7× above T&T — as a *flat* offset, so the shape is right and only the
-//! normalization is off.
+//! sits 4.8–7.2× above T&T.
 //!
-//! The gated observable is the threshold *slope* `I_thr(p) ∝ p^-n`. The model
-//! gives **`n = 0.356`** at its literature-central constants against
-//! Thiyagarajan & Thompson's measured **0.329** — but the gated claim is
-//! **envelope containment, not that 8% number**: the slope is genuinely
-//! sensitive to constants this project deliberately does not gate (`D_e` ×2
-//! moves it across 0.21–0.57, and the `1/t_climb` vs `ln2/t_climb`
-//! generation-model ambiguity moves it to 0.47), so the central-value
-//! agreement is partly luck and is documented as such. What is *not* luck:
-//! without the inelastic-loss term the model's flattest reachable slope was
-//! exactly `n = 1` (measurement unreachable at any parameter value), and no
-//! constant was ever adjusted against the data. Analysis, sensitivity table,
-//! and the full history are in `docs/M6A_SPEC.md`.
+//! **Where the slope comparison actually stands (audited 2026-07-25).** The
+//! model gives `I_thr ∝ p^-0.127` against T&T's measured `p^-0.329`, and the
+//! measurement lies *outside* the `δ_eff` literature envelope `[0.029, 0.299]`
+//! — so `tt2012_threshold_slope_matches_measurement` is **red on purpose**.
+//! An earlier `n = 0.356` looked like an 8% match but was propped up by an
+//! integration artifact: the seed decayed by `e^-60` during the quiet arm
+//! before the pulse, so an arbitrary integration bound supplied most of the
+//! threshold requirement, and because that loss is pressure-dependent it
+//! manufactured slope. `threshold_is_window_independent` now forbids it.
+//!
+//! What survives is a bracket: the two limits of the energy balance give
+//! `n = 0.127` (this model) and `n = 0.551` ([`CascadeModel::FixedMeanEnergy`]),
+//! and the measurement sits between them — the expected signature of treating
+//! a tail-driven process with a mean-energy model. Analysis in
+//! `docs/M6A_SPEC.md`; external gates in `tests/validation.rs`.
 
 use std::f64::consts::PI;
 
@@ -74,15 +78,16 @@ const I_BRACKET_HI: f64 = 1e22;
 /// How the inelastic energy loss enters the cascade rate.
 ///
 /// The two variants are the parameter-light limits of the same energy balance,
-/// and they **bracket** the measured threshold slope: 0.800 and 0.356 against
-/// T&T's 0.329. See `docs/M6A_SPEC.md`.
+/// and they **bracket** the measured threshold slope: 0.551 and 0.127 against
+/// T&T's 0.329. Neither reproduces it; the bracket is the claim. See
+/// `docs/M6A_SPEC.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CascadeModel {
     /// Loss evaluated at a fixed mean electron energy `⟨ε⟩`:
     /// `ν_i = max(0, heating − δ_eff·ν_m·⟨ε⟩)/U_i`.
     ///
     /// `⟨ε⟩` is a free constant, literature-bounded to ≈2–5 eV. Retained as
-    /// the steeper end of the bracket (`n = 0.800`) and for the unit tests that
+    /// the steeper end of the bracket (`n = 0.551`) and for the unit tests that
     /// need a cascade rate linear in intensity; not the default.
     FixedMeanEnergy,
     /// `⟨ε⟩` eliminated by solving the climb exactly.
@@ -97,17 +102,16 @@ pub enum CascadeModel {
     /// ```
     ///
     /// No free `⟨ε⟩` at all, and still exactly `∝ p` (the scaling the external
-    /// `E_eff` gate confirms). **The default**: it gives `n = 0.356` against a
-    /// measured 0.329, the closest M6a gets to the data, with `δ_eff` unchanged
-    /// from before this model existed.
+    /// `E_eff` gate confirms). **The default**, chosen for parameter parsimony
+    /// — *not* for agreement: it gives `n = 0.127` against a measured 0.329,
+    /// which is the flatter side of the bracket and misses by 2.6×.
     ///
-    /// Its known idealization is the flip side of its strength: putting every
-    /// electron on the *mean* trajectory makes the threshold sharp at
-    /// `ε_∞ = U_i`, since the climb time diverges logarithmically there. A real
-    /// energy distribution has a tail that ionizes earlier and would soften
-    /// that. Treating the 8% agreement as luck-adjacent is the honest reading —
-    /// which is why `the_two_cascade_models_bracket_the_measurement` records
-    /// that the data sits *between* the two limits rather than at either.
+    /// Its idealization is the flip side of its parsimony, and it is the likely
+    /// reason it is too flat: putting every electron on the *mean* trajectory
+    /// makes the threshold artificially sharp at `ε_∞ = U_i`, where the climb
+    /// time diverges logarithmically. A real energy distribution has a tail
+    /// that ionizes earlier, which would soften the plateau and steepen the
+    /// slope back toward the data. That is the open question M6a hands forward.
     SelfConsistentClimb,
 }
 
@@ -135,6 +139,9 @@ pub struct AirBreakdown {
     mean_energy: f64,
     /// Which limit of the energy balance drives the cascade.
     cascade_model: CascadeModel,
+    /// Pulse-integration half-window, in FWHMs. A converged model must give a
+    /// threshold independent of this; see [`AirBreakdown::peak_ne`].
+    window_half_widths: f64,
     /// Diffusion length `Λ` (m), from the focal geometry — **pinned, not fit**.
     lambda_diff: f64,
     /// Dissociative-attachment rate coefficient `e + O₂ → O⁻ + O` (m³/s).
@@ -205,6 +212,7 @@ impl AirBreakdown {
             delta_eff: 0.02,
             mean_energy: 3.0 * E_CHARGE,
             cascade_model: CascadeModel::SelfConsistentClimb,
+            window_half_widths: 2.0,
             lambda_diff,
             // Attachment from measured rate coefficients, not an s⁻¹Pa⁻¹ fudge
             // (Kossyi et al. 1992; Itikawa 2009). The three-body channel is the
@@ -254,9 +262,20 @@ impl AirBreakdown {
     }
 
     /// Select which limit of the energy balance drives the cascade — see
-    /// [`CascadeModel`]. The default is [`CascadeModel::FixedMeanEnergy`].
+    /// [`CascadeModel`]. The default is [`CascadeModel::SelfConsistentClimb`].
     pub fn with_cascade_model(mut self, cascade_model: CascadeModel) -> Self {
         self.cascade_model = cascade_model;
+        self
+    }
+
+    /// Set the pulse-integration half-window in FWHMs (default 2.0, at which
+    /// the Gaussian is `1.5×10⁻⁵` of peak).
+    ///
+    /// Exists so `threshold_is_window_independent` can vary it. Results must
+    /// not depend on it; if they do, the model is being propped up by its
+    /// integration bounds rather than by its physics.
+    pub fn with_window(mut self, window_half_widths: f64) -> Self {
+        self.window_half_widths = window_half_widths;
         self
     }
 
@@ -279,6 +298,12 @@ impl AirBreakdown {
     /// within the pulse for breakdown to be declared.
     pub fn criterion_density(&self) -> f64 {
         self.n_bd
+    }
+
+    /// Neutral number density `N = p/(k_B·T)` (m⁻³) — the ceiling on `n_e`,
+    /// since ionization consumes the neutrals it feeds on.
+    pub fn neutral_density(&self, pressure: f64) -> f64 {
+        self.n_over_p * pressure
     }
 
     /// Inverse-bremsstrahlung heating power absorbed per electron (W).
@@ -371,43 +396,105 @@ impl AirBreakdown {
     /// The growth exponent is saturated at [`MAX_EXPONENT`] so a violently
     /// over-threshold pulse stays monotone rather than overflowing to `NaN`.
     pub fn advance(&self, n_e: f64, intensity: f64, pressure: f64, dt: f64) -> f64 {
-        let beta = self.cascade_rate(intensity, pressure) - self.loss_rate(pressure);
+        let nu_i = self.cascade_rate(intensity, pressure);
+        let beta = nu_i - self.loss_rate(pressure);
         let s = self.mpi_source(intensity, pressure);
-        // Saturate: e^709 is the f64 ceiling, and any β·dt near it is already
-        // astronomically past the breakdown criterion. Unsaturated, `exp`
-        // overflows to +inf; then `s·expm1(β dt)/β` is `0.0·inf = NaN` whenever
-        // the MPI source is off, `n_e` is NaN for the rest of the pulse, and
-        // every `n_e > peak` comparison is false — so a *stronger* pulse would
-        // silently report no breakdown, breaking the bisection's monotonicity.
-        let bdt = (beta * dt).min(MAX_EXPONENT);
-        let growth = n_e * bdt.exp();
+        // Ionization consumes neutrals, so the cascade cannot outrun the gas it
+        // feeds on: `b = ν_i/N` makes the growth logistic and caps `n_e` at full
+        // ionization. Without it the equation is linear and `n_e` runs away —
+        // it reached 10^40 m⁻³ in the shipped `breakdown` case, 10^14 times the
+        // neutral density and 10^13 times critical density, i.e. pure
+        // extrapolation dressed as a result.
+        let n_neutral = self.n_over_p * pressure;
+        let b = if n_neutral > 0.0 {
+            nu_i / n_neutral
+        } else {
+            0.0
+        };
+
+        let bdt = beta * dt;
+
         if s == 0.0 {
-            return growth;
+            if n_e <= 0.0 {
+                return 0.0;
+            }
+            // Exact solution of `dn/dt = β·n − b·n²` (logistic/Bernoulli),
+            // written as
+            //     n' = n / (e^{−β dt} + b·n·(1 − e^{−β dt})/β)
+            // rather than the textbook `β n e^{βdt} / (β + b n (e^{βdt} − 1))`.
+            // Two reasons, both load-bearing. The textbook form overflows to
+            // `inf/inf = NaN` far above threshold. And `e^{−β dt}` *underflows*
+            // harmlessly to 0 for a strong cascade, leaving `n' → β/b` — the
+            // saturation density — so no exponent clamp is needed on the
+            // growing side. Clamping there would corrupt the saturation limit
+            // itself (it made `peak_ne` non-monotonic in intensity: 0.1·N at
+            // 10²⁴ W/m² between 1.0·N at 10²⁰ and 10³⁰).
+            // Still exact, still step-size independent.
+            let neg = (-bdt).min(MAX_EXPONENT); // only β < 0 can overflow `exp`
+            let em = neg.exp();
+            // (1 − e^{−β dt})/β, with the removable singularity at β → 0.
+            let factor = if bdt.abs() < 1e-12 {
+                dt
+            } else {
+                -neg.exp_m1() / beta
+            };
+            let denom = em + b * n_e * factor;
+            return if denom > 0.0 && denom.is_finite() {
+                n_e / denom
+            } else {
+                n_e * bdt.min(MAX_EXPONENT).exp()
+            };
         }
+
+        // With the multiphoton source the equation is Riccati and has no
+        // elementary closed form. Fall back to the exact *linear* step with the
+        // depletion factor frozen at the slice start — first-order in `dt`, and
+        // documented as such (`σ_K = 0` by default, so the exact path above is
+        // the one every gate exercises).
+        let rate = beta - b * n_e;
+        let d = (rate * dt).clamp(-MAX_EXPONENT, MAX_EXPONENT);
         // expm1(x)/x → 1 as x → 0; guard the exact-zero and tiny cases.
-        let source_factor = if bdt.abs() < 1e-12 {
+        let source_factor = if d.abs() < 1e-12 {
             dt
         } else {
-            bdt.exp_m1() / beta
+            d.exp_m1() / rate
         };
-        growth + s * source_factor
+        let next = n_e * d.exp() + s * source_factor;
+        // Full ionization is the ceiling on this path too.
+        if n_neutral > 0.0 {
+            next.min(n_neutral)
+        } else {
+            next
+        }
     }
 
     /// Peak electron density reached over a Gaussian temporal pulse of peak
     /// intensity `i_peak` (W/m²) and full-width-half-maximum `fwhm` (s) at
-    /// pressure `p`, sampled with `n_steps` slices over `[−2·fwhm, 2·fwhm]`.
+    /// pressure `p`, sampled with `n_steps` slices over
+    /// `[−w·fwhm, +w·fwhm]`, `w` = [`window_half_widths`](Self::with_window).
+    ///
+    /// `n_e` is floored at the seed density throughout, and that floor is
+    /// **physics, not hygiene**. Without it the model is not window-independent:
+    /// losses grind the seed down during the quiet arm before the pulse
+    /// arrives — at 760 Torr, `ν_loss ≈ 5×10⁹ s⁻¹` decays it by `e^-60` over
+    /// 12 ns — so the avalanche must first climb back out of a hole that the
+    /// arbitrary choice of `w` dug. That is meaningless as physics (`e^-60`
+    /// times one electron is `10⁻²⁶` of an electron in a volume that holds
+    /// either one or none) and it made the threshold depend on `w`, which the
+    /// `threshold_is_window_independent` gate now forbids. The floor states the
+    /// modelling assumption plainly: one seed electron is available in the
+    /// focal volume when the pulse arrives.
     pub fn peak_ne(&self, i_peak: f64, fwhm: f64, pressure: f64, n_steps: usize) -> f64 {
-        let t_span = 4.0 * fwhm;
-        let dt = t_span / n_steps as f64;
+        let half = self.window_half_widths * fwhm;
+        let dt = 2.0 * half / n_steps as f64;
         // I(t) = I_pk·exp(−4 ln2 (t/fwhm)²); t centred on the pulse peak.
         let c = 4.0 * std::f64::consts::LN_2 / (fwhm * fwhm);
         let mut n_e = self.n_seed;
         let mut peak = n_e;
         for step in 0..n_steps {
-            // Slice-centre time, running from −2·fwhm upward.
-            let t = -2.0 * fwhm + (step as f64 + 0.5) * dt;
+            let t = -half + (step as f64 + 0.5) * dt;
             let intensity = i_peak * (-c * t * t).exp();
-            n_e = self.advance(n_e, intensity, pressure, dt);
+            n_e = self.advance(n_e, intensity, pressure, dt).max(self.n_seed);
             if n_e > peak {
                 peak = n_e;
             }
@@ -709,10 +796,12 @@ mod tests {
         // ~12× in L′). The model's slope is an envelope, not a point, and this
         // pins that envelope so it cannot drift silently:
         //
-        //   δ=0.01 ⟨ε⟩=2 → n=1.139     δ=0.05 ⟨ε⟩=5 → n=0.413
+        //   δ=0.01 ⟨ε⟩=2 → n=0.895     δ=0.05 ⟨ε⟩=5 → n=0.224
         //
-        // Measured is n = 0.329 — just BELOW the envelope. The envelope is NOT
-        // widened to swallow it; see tests/validation.rs for that gate.
+        // Measured n = 0.329 is inside THIS envelope — but note this is the
+        // FixedMeanEnergy variant, not the default. The default
+        // SelfConsistentClimb envelope is [0.029, 0.299] and EXCLUDES the
+        // measurement; see tests/validation.rs, where that gate is red.
         let mut ns = Vec::new();
         for delta in [0.01, 0.02, 0.05] {
             for ev in [2.0, 3.0, 5.0] {
@@ -727,8 +816,8 @@ mod tests {
         let lo = ns.iter().cloned().fold(f64::MAX, f64::min);
         let hi = ns.iter().cloned().fold(0.0f64, f64::max);
         assert!(
-            (0.39..=0.44).contains(&lo) && (1.11..=1.17).contains(&hi),
-            "literature envelope moved: n ∈ [{lo:.3}, {hi:.3}], expected ≈[0.413, 1.139]"
+            (0.21..=0.24).contains(&lo) && (0.87..=0.92).contains(&hi),
+            "literature envelope moved: n ∈ [{lo:.3}, {hi:.3}], expected ≈[0.224, 0.895]"
         );
         // The whole envelope must sit below the no-inelastic-loss floor of 1.74
         // — that improvement is the point of the term.
@@ -768,11 +857,18 @@ mod tests {
 
     #[test]
     fn the_two_cascade_models_bracket_the_measurement() {
-        // The two limits of the same energy balance sit either side of T&T's
-        // n = 0.329: FixedMeanEnergy (⟨ε⟩ free, literature-bounded) is too
-        // steep at 0.800; SelfConsistentClimb (⟨ε⟩ eliminated) gives 0.356.
-        // Recording the bracket keeps either from being quietly "improved"
-        // into the other's territory.
+        // THE DURABLE CLAIM of M6a, and the only slope statement that survived
+        // the 2026-07-25 audit. The two limits of the same energy balance sit
+        // either side of T&T's n = 0.329: FixedMeanEnergy (⟨ε⟩ free,
+        // literature-bounded) is too steep at 0.551; SelfConsistentClimb (⟨ε⟩
+        // eliminated) is too flat at 0.127. Neither reproduces the measurement;
+        // the truth lies between, which is what a mean-energy treatment of a
+        // process governed by the tail of the energy distribution should give.
+        //
+        // Recording the bracket keeps either from being quietly "improved" into
+        // the other's territory — and note the bracket is what remained TRUE
+        // when the seed-window artifact was removed and both endpoints moved
+        // (0.800 → 0.551 and 0.356 → 0.127).
         let slope_of = |model| {
             let c = AirBreakdown::air_1064nm()
                 .with_cascade_model(model)
@@ -782,15 +878,20 @@ mod tests {
         };
         let fixed = slope_of(CascadeModel::FixedMeanEnergy);
         let selfc = slope_of(CascadeModel::SelfConsistentClimb);
+        const MEASURED: f64 = 0.329;
         assert!(
-            (0.78..=0.82).contains(&fixed),
-            "FixedMeanEnergy slope moved: {fixed:.3}, expected ≈0.800"
+            (0.53..=0.57).contains(&fixed),
+            "FixedMeanEnergy slope moved: {fixed:.3}, expected ≈0.551"
         );
         assert!(
-            (0.34..=0.37).contains(&selfc),
-            "SelfConsistentClimb slope moved: {selfc:.3}, expected ≈0.356"
+            (0.11..=0.15).contains(&selfc),
+            "SelfConsistentClimb slope moved: {selfc:.3}, expected ≈0.127"
         );
-        assert!(selfc < fixed, "the two models no longer bracket");
+        assert!(
+            selfc < MEASURED && MEASURED < fixed,
+            "the models no longer bracket the measurement: \
+             {selfc:.3} .. {MEASURED} .. {fixed:.3}"
+        );
     }
 
     #[test]
@@ -869,6 +970,66 @@ mod tests {
         );
         // Three-body is the dominant attachment channel at atmospheric density.
         assert!(m.k_att_3body * n_o2 * n > 0.1 * m.k_att_2body * n_o2);
+    }
+
+    #[test]
+    fn threshold_is_window_independent() {
+        // NUMERICAL-HYGIENE GATE, added 2026-07-25 after this exact defect
+        // shipped. The pulse at |t| = 2·FWHM is 1.5e-5 of peak, so widening the
+        // integration window must not move the threshold. It used to: losses
+        // ground the seed down during the quiet arm (e^-60 at 760 Torr over
+        // 12 ns), so the avalanche had to climb out of a hole whose depth was
+        // set by an arbitrary integration bound. The threshold rose 11% from
+        // w = 2 to w = 4 and never converged.
+        //
+        // Worse, that decay is pressure-dependent, so it manufactured SLOPE:
+        // removing it moved the default model from n = 0.356 to n = 0.127
+        // against a measured 0.329. The external slope gate had been green on
+        // the strength of a bookkeeping artifact.
+        let base = model();
+        let at = |w: f64| {
+            base.with_window(w)
+                .threshold_intensity(6e-9, 760.0 * TORR, 400)
+                .unwrap()
+        };
+        let widths = [1.0, 1.5, 2.0, 3.0, 4.0];
+        let vals: Vec<f64> = widths.iter().map(|&w| at(w)).collect();
+        let lo = vals.iter().cloned().fold(f64::MAX, f64::min);
+        let hi = vals.iter().cloned().fold(0.0f64, f64::max);
+        assert!(
+            hi / lo < 1.01,
+            "threshold depends on the integration window: {lo:.4e}..{hi:.4e} \
+             over w ∈ {widths:?} ({:.1}% spread)",
+            100.0 * (hi / lo - 1.0)
+        );
+    }
+
+    #[test]
+    fn cascade_saturates_at_full_ionization() {
+        // The gas cannot be more than fully ionized. Before the logistic term
+        // the rate equation was linear in n_e and ran to 1e40 m^-3 in the
+        // shipped `breakdown` case — 1e14 times the neutral density, 1e13 times
+        // critical density at 1064 nm — with the visible ceiling being a
+        // plotting clamp rather than any physics.
+        let m = model();
+        let p = P_REF;
+        let n_neutral = m.neutral_density(p);
+        let mut prev = 0.0;
+        for i in [1e17, 1e18, 1e20, 1e22, 1e24, 1e26, 1e30] {
+            let ne = m.peak_ne(i, 6e-9, p, 400);
+            assert!(ne.is_finite(), "peak n_e not finite at I = {i:e}");
+            assert!(
+                ne <= n_neutral * 1.001,
+                "n_e = {ne:e} exceeds full ionization N = {n_neutral:e} at I = {i:e}"
+            );
+            // Monotone in intensity: the clamp used to break this, giving 0.1·N
+            // at 1e24 between 1.0·N at 1e20 and 1e30.
+            assert!(
+                ne >= prev * 0.999,
+                "peak n_e non-monotonic in intensity at I = {i:e}: {ne:e} < {prev:e}"
+            );
+            prev = ne;
+        }
     }
 
     #[test]

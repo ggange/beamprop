@@ -446,10 +446,13 @@ pub fn run_breakdown(p: &BreakdownParams) -> Result<BreakdownRun> {
         let mut n_e = model.seed_density();
         for (col, &t) in trace_time.iter().enumerate() {
             let intensity = drive_intensity * (-c * t * t).exp();
-            n_e = model.advance(n_e, intensity, pressure, dt);
-            // Traces are plotted on a log axis; keep them finite for the
-            // renderer even when the avalanche saturates the exponent.
-            ne_traces[[row, col]] = n_e.min(1e40);
+            n_e = model
+                .advance(n_e, intensity, pressure, dt)
+                .max(model.seed_density());
+            // Bounded by construction: the logistic term caps n_e at full
+            // ionization, so no plotting clamp is needed (there used to be one
+            // at 1e40, which was the visible ceiling in the first release).
+            ne_traces[[row, col]] = n_e;
         }
     }
 
@@ -487,7 +490,7 @@ mod tests {
             p_max_torr: 2000.0,
             points: 6,
             steps: 200,
-            drive: 1.5,
+            drive: 1.08,
         })
         .unwrap();
         assert_eq!(r.pressure_torr.len(), 6);
@@ -499,10 +502,16 @@ mod tests {
         assert!(r.slope_envelope.0 < r.slope && r.slope < r.slope_envelope.1);
         // Traces start from the seed and stay finite despite the avalanche.
         assert!(r.ne_traces.iter().all(|v| v.is_finite() && *v > 0.0));
-        // The drive is above threshold at p_max and below it at p_min, which is
-        // what makes the animation show ignition switching on with pressure.
-        assert!(r.drive_intensity > *r.threshold.last().unwrap());
-        assert!(r.drive_intensity < r.threshold[0]);
+        // The drive must straddle the sweep — above threshold at p_max, below
+        // it at p_min — or the animation shows nothing switching on. The
+        // corrected model makes this a narrow target: I_thr spans only ~1.17x
+        // across 300-2000 Torr, so `drive` has to sit inside that.
+        let (lo, hi) = (*r.threshold.last().unwrap(), r.threshold[0]);
+        assert!(
+            r.drive_intensity > lo && r.drive_intensity < hi,
+            "drive {:.4e} does not straddle the sweep [{lo:.4e}, {hi:.4e}]",
+            r.drive_intensity
+        );
     }
 
     #[test]
