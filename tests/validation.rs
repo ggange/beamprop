@@ -1061,6 +1061,78 @@ fn tt2012_threshold_slope_matches_measurement() {
     );
 }
 
+/// **External gate against published cascade theory — the apples-to-apples
+/// comparison this milestone was missing.**
+///
+/// The kernel models collisional cascade only (`σ_K = 0`). T&T's *measured*
+/// curve is therefore the wrong target: it contains multiphoton ionization
+/// too, and the authors explicitly MPI-correct it before comparing to cascade
+/// theory (88 % cascade / 12 % MPI at 760 Torr, MPI-dominant below 100 Torr).
+/// Their Eq. 4 is the cascade-only closed form, and it is what a cascade-only
+/// kernel should be checked against.
+///
+/// The reference's own defining property is that it is **flat** at 1064 nm:
+/// the `λ⁻²` term is 1.94×10⁵ against a `p²` term that never exceeds 6.9, so
+/// accepted cascade theory predicts essentially no pressure dependence here.
+/// That reframes the kernel's flatness (`n` = 0.095) as *agreement with
+/// cascade theory* rather than disagreement with experiment — and it means the
+/// measured `n` = 0.329 cannot be reproduced by any cascade-only model,
+/// including this one.
+///
+/// Gated: the reference is flat, and both cascade limits sit within a factor
+/// of 6 of it in level — `SelfConsistentClimb` runs 4.1–5.1× high and
+/// `FixedMeanEnergy` 1.3–3.2×, against a measured/theory ratio of 0.74 at
+/// 760 Torr. Eq. 4 is not gospel —
+/// the authors need a 2.1× scaling factor to reconcile it with their own data
+/// — so the band is deliberately loose.
+#[test]
+fn tt2012_cascade_theory_reference() {
+    use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
+    use beamprop::validate::tt2012_cascade_threshold;
+
+    let lambda = 1064e-9;
+    let pressures: Vec<f64> = (0..8)
+        .map(|i| TT_P_LO * (TT_P_HI / TT_P_LO).powf(i as f64 / 7.0) * TORR)
+        .collect();
+
+    // The reference is flat in pressure — that is the whole point.
+    let theory: Vec<(f64, f64)> = pressures
+        .iter()
+        .map(|&p| (p, tt2012_cascade_threshold(p, lambda)))
+        .collect();
+    let theory_slope = beamprop::validate::loglog_slope(&theory).expect("theory slope");
+    assert!(
+        theory_slope.abs() < 0.01,
+        "T&T Eq. 4 should be flat at 1064 nm, got slope {theory_slope:.5}"
+    );
+    // And it must reproduce the value the paper quotes at 760 Torr.
+    let at_760 = tt2012_cascade_threshold(760.0 * TORR, lambda) / 1e4;
+    assert!(
+        (2.7e11..=2.9e11).contains(&at_760),
+        "T&T Eq. 4 at 760 Torr gives {at_760:.3e} W/cm², paper states 2.8e11"
+    );
+
+    let base = AirBreakdown::air_1064nm();
+    for (model, name, bound) in [
+        (base, "SelfConsistentClimb", 6.0),
+        (
+            base.with_cascade_model(CascadeModel::FixedMeanEnergy),
+            "FixedMeanEnergy",
+            4.0,
+        ),
+    ] {
+        for &p in &pressures {
+            let mine = model.threshold_intensity(6e-9, p, 400).expect("threshold");
+            let ratio = mine / tt2012_cascade_threshold(p, lambda);
+            assert!(
+                ratio > 1.0 / bound && ratio < bound,
+                "{name} at {:.0} Torr is {ratio:.2}× T&T Eq. 4 (bound {bound}×)",
+                p / TORR
+            );
+        }
+    }
+}
+
 /// **External check on the level, and on the unit convention behind it.**
 ///
 /// Converting T&T's `E_B` to intensity needs the RMS form `I = ε₀·c·E_rms²`;

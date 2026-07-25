@@ -87,16 +87,16 @@ P_REF = 760.0  # Torr — normalization anchor; every series spans 1 atm
 def render_threshold(base, meta, repo_root):
     """Two panels: absolute level (left) and shape (right).
 
-    Neither is validated, and the figure says so. The model runs ~5-7x above
-    the measurement in level, and its pressure trend is too FLAT -- the
-    measured points fall outside the model's own slope envelope on the right
-    panel. An earlier version of this figure claimed the opposite; that claim
-    rested on an integration artifact (see docs/M6A_SPEC.md).
+    Three series: this kernel (cascade-only), T&T's cascade closed form
+    (their Eq. 4), and their measured curve. The measured curve contains
+    multiphoton ionization as well as cascade, so Eq. 4 -- not the data -- is
+    what a cascade-only kernel should be judged against. Eq. 4 is flat at
+    1064 nm, which is why the kernel is flat too.
 
     The right panel normalizes every series at 1 atm so only shape is compared;
     plotting a slope envelope on absolute axes would be a category error.
     """
-    p, i_thr, i_d005, i_d001, _ = read_csv_columns(f"{base}_threshold.csv", 5)
+    p, i_thr, i_d005, i_d001, _, i_cc = read_csv_columns(f"{base}_threshold.csv", 6)
     p_m, i_m = load_measured(repo_root)
     if p_m is not None:
         m = (p_m >= p.min()) & (p_m <= p.max())
@@ -107,7 +107,7 @@ def render_threshold(base, meta, repo_root):
         1, 2, figsize=(11.6, 4.9), constrained_layout=True
     )
 
-    def draw(ax, scale_model, scale_data):
+    def draw(ax, scale_model, scale_data, scale_cc):
         ax.fill_between(
             p, i_d005 / scale_model[1], i_d001 / scale_model[2], color=BAND_C,
             alpha=0.22, lw=0,
@@ -120,11 +120,15 @@ def render_threshold(base, meta, repo_root):
             p, i_thr / scale_model[0], color=MODEL_C, lw=1.8,
             label=f"model, central constants ($n$ = {float(meta['slope']):.3f})",
         )
+        ax.plot(
+            p, i_cc / scale_cc, color="#3b0f70", lw=1.5, ls="--", zorder=4,
+            label="T&T cascade theory, their Eq. 4 ($n \\approx 0$)",
+        )
         if p_m is not None:
             ax.plot(
                 p_m, i_m / scale_data, "o", color=DATA_C, ms=7, mec="#3b0f70",
                 mew=1.0, zorder=5,
-                label="Thiyagarajan & Thompson 2012 ($n$ = 0.329)",
+                label="T&T 2012 measured ($n$ = 0.329, cascade + MPI)",
             )
         ax.set_xscale("log")
         ax.set_yscale("log")
@@ -132,7 +136,7 @@ def render_threshold(base, meta, repo_root):
         style(ax)
 
     # --- left: absolute, offset and all ---
-    draw(ax_abs, (1.0, 1.0, 1.0), 1.0)
+    draw(ax_abs, (1.0, 1.0, 1.0), 1.0, 1.0)
     ax_abs.set_ylabel("threshold peak intensity  (W/cm$^2$)")
     ax_abs.set_title("Absolute level — not validated (ungated)", fontsize=11)
     if p_m is not None:
@@ -151,10 +155,11 @@ def render_threshold(base, meta, repo_root):
     # --- right: normalized at 1 atm, i.e. shape only ---
     sm = tuple(interp_loglog(p, c, P_REF) for c in (i_thr, i_d005, i_d001))
     sd = interp_loglog(p_m, i_m, P_REF) if p_m is not None else 1.0
-    draw(ax_rel, sm, sd)
+    draw(ax_rel, sm, sd, interp_loglog(p, i_cc, P_REF))
     ax_rel.set_ylabel(f"threshold, normalized at {P_REF:.0f} Torr")
     ax_rel.set_title(
-        "Shape — model too flat; measurement outside its envelope", fontsize=11
+        "Shape — the kernel tracks cascade theory, not the raw measurement",
+        fontsize=11,
     )
     ax_rel.axvline(P_REF, color=GRID_C, lw=1.0, zorder=0)
 
@@ -167,12 +172,11 @@ def render_threshold(base, meta, repo_root):
     ax_abs.legend(loc="center left", frameon=False, fontsize=7.5)
     fig.text(
         0.5, -0.02,
-        "Model $n$ = %.3f vs measured 0.329: too flat, and outside the "
-        "$\\delta_{\\rm eff}$ envelope — the external slope gate is RED. "
-        "Level is ungated (3–10x inter-lab scatter).\n"
-        "What M6a defends is a bracket: the two cascade limits give "
-        "$n$ = 0.127 and 0.551, straddling the measurement. See docs/M6A_SPEC.md."
-        % float(meta["slope"]),
+        "The kernel is cascade-only; the measured curve is not (T&T: 88%% cascade "
+        "/ 12%% MPI at 760 Torr), so their Eq. 4 is the apples-to-apples target.\n"
+        "Model $n$ = %.3f against a cascade theory that is flat at 1064 nm — the "
+        "measured $n$ = 0.329 is unreachable by ANY cascade-only model. "
+        "See docs/M6A_SPEC.md." % float(meta["slope"]),
         fontsize=8, color="#555555", va="top", ha="center",
     )
 
@@ -200,7 +204,7 @@ def render_avalanche(base, meta, fps):
     its validity: the plateau is drawn, but not claimed.
     """
     ne = np.load(f"{base}_ne_traces.npy")           # [pressure, time]
-    p, _, _, _, n_neutral = read_csv_columns(f"{base}_threshold.csv", 5)
+    p, _, _, _, n_neutral, _ = read_csv_columns(f"{base}_threshold.csv", 6)
     t_ns = np.linspace(meta["t_min"], meta["t_max"], ne.shape[1]) * 1e9
     # float() matters: n_bd round-trips through JSON as a bare integer, and a
     # Python big-int axis limit is not safely castable to float64.

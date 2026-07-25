@@ -21,7 +21,7 @@ use crate::medium::{UniformExtinction, kruse_extinction};
 use crate::montecarlo::seeded_ensemble;
 use crate::propagate::{Propagator, beam_width, centroid};
 use crate::turbulence::TurbulentPath;
-use crate::validate::{BloomingCase, GaussianBeam, loglog_slope};
+use crate::validate::{BloomingCase, GaussianBeam, loglog_slope, tt2012_cascade_threshold};
 use crate::viz::XzSliceMap;
 
 /// Stack transverse maps into a `[frame, y, x]` array.
@@ -379,6 +379,9 @@ pub struct BreakdownRun {
     /// Neutral density at each sweep pressure (m⁻³) — the ceiling each trace
     /// saturates against, since it is full ionization.
     pub neutral_density: Vec<f64>,
+    /// T&T Eq. 4 cascade-theory threshold at each sweep pressure (W/cm²) —
+    /// the apples-to-apples reference for a cascade-only kernel.
+    pub cascade_theory: Vec<f64>,
 }
 
 /// Sweep the 0-D optical-breakdown threshold against pressure and record the
@@ -474,6 +477,10 @@ pub fn run_breakdown(p: &BreakdownParams) -> Result<BreakdownRun> {
         neutral_density: central
             .iter()
             .map(|c| model.neutral_density(c.0 * TORR))
+            .collect(),
+        cascade_theory: central
+            .iter()
+            .map(|c| tt2012_cascade_threshold(c.0 * TORR, p.wavelength) / 1e4)
             .collect(),
     })
 }

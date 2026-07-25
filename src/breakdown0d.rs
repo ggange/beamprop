@@ -32,20 +32,26 @@
 //! validated; published thresholds scatter 3–10× across labs, and this model
 //! sits 4.8–7.2× above T&T.
 //!
-//! **Where the slope comparison actually stands (audited 2026-07-25).** The
-//! model gives `I_thr ∝ p^-0.127` against T&T's measured `p^-0.329`, and the
-//! measurement lies *outside* the `δ_eff` literature envelope `[0.029, 0.299]`
-//! — so `tt2012_threshold_slope_matches_measurement` is **red on purpose**.
-//! An earlier `n = 0.356` looked like an 8% match but was propped up by an
-//! integration artifact: the seed decayed by `e^-60` during the quiet arm
-//! before the pulse, so an arbitrary integration bound supplied most of the
-//! threshold requirement, and because that loss is pressure-dependent it
-//! manufactured slope. `threshold_is_window_independent` now forbids it.
+//! **Where the comparison stands (paper obtained 2026-07-25).** The kernel
+//! models the collisional cascade only. Thiyagarajan & Thompson's *measured*
+//! curve is therefore the wrong target — it contains multiphoton ionization
+//! too (they quote 88 % cascade / 12 % MPI at 760 Torr, MPI-dominant below
+//! 100 Torr, and MPI-correct the data before comparing it to theory). The
+//! apples-to-apples reference is their cascade closed form, Eq. 4, which at
+//! 1064 nm is **flat in pressure**: the `λ⁻²` term is `1.94×10⁵` against a
+//! `p²` term that never exceeds 6.9.
 //!
-//! What survives is a bracket: the two limits of the energy balance give
-//! `n = 0.127` (this model) and `n = 0.551` ([`CascadeModel::FixedMeanEnergy`]),
-//! and the measurement sits between them — the expected signature of treating
-//! a tail-driven process with a mean-energy model. Analysis in
+//! Against that reference the kernel does reasonably — 4.1–5.1× high in level
+//! for this model, 1.3–3.2× for [`CascadeModel::FixedMeanEnergy`], gated by
+//! `tt2012_cascade_theory_reference`. Against the raw measurement it does not,
+//! and cannot: no cascade-only model can produce the measured `n = 0.329` when
+//! accepted cascade theory says `n ≈ 0`. That gate
+//! (`tt2012_threshold_slope_matches_measurement`) is red on purpose.
+//!
+//! The bracket survives every correction so far: `n = 0.095` here and `0.468`
+//! for the fixed-`⟨ε⟩` limit, straddling 0.329. It has now held through the
+//! seed-window fix (0.356 → 0.127) and the focal-geometry fix (→ 0.095), which
+//! is the main reason to trust it over either endpoint. Analysis in
 //! `docs/M6A_SPEC.md`; external gates in `tests/validation.rs`.
 
 use std::f64::consts::PI;
@@ -151,9 +157,11 @@ pub struct AirBreakdown {
     k_att_3body: f64,
     /// O₂ fraction of dry air by number.
     f_o2: f64,
-    /// Multiphoton cross-section coefficient `σ_K` for `S = σ_K·I^K·N`
-    /// (SI; swappable, docs Open Question 2).
-    sigma_k: f64,
+    /// Per-neutral multiphoton ionization rate at [`Self::mpi_i_ref`] (s⁻¹).
+    /// Zero disables the MPI source entirely (the default).
+    mpi_rate_ref: f64,
+    /// Reference intensity for the MPI rate (W/m²).
+    mpi_i_ref: f64,
     /// Number of photons `K` for multiphoton ionization.
     k_photons: i32,
     /// Breakdown criterion density `n_bd` (m⁻³).
@@ -227,7 +235,8 @@ impl AirBreakdown {
             // is the initial condition, and the avalanche multiplies it. The
             // continuous multiphoton source is the swappable term (docs Open
             // Question 2); a physical σ_K would be supplied when it is enabled.
-            sigma_k: 0.0,
+            mpi_rate_ref: 0.0,
+            mpi_i_ref: 1.0,
             k_photons,
             n_bd: 1.0e23,
             n_over_p: 1.0 / (K_B * temperature),
@@ -235,13 +244,29 @@ impl AirBreakdown {
         })
     }
 
-    /// The pinned M6a case: 1064 nm in dry air at 288 K, T&T 20 µm-radius focus
-    /// modelled as a sphere (`Λ = r/π`), seed of one electron in the focal
-    /// sphere.
+    /// The pinned M6a case: 1064 nm in dry air at 288 K, with the focal
+    /// geometry of Thiyagarajan & Thompson 2012 taken from **their Eq. 5**.
+    ///
+    /// The focus is **divergence-limited**, not diffraction-limited: a 1 cm
+    /// beam with 1 mrad divergence through an `f` = 4 cm lens gives
+    /// `r₀ = f·α/2 = 20 µm` and a depth of focus `l₀ = 0.414·(α/d)·f² = 66 µm`.
+    /// (The Rayleigh range of a *diffraction-limited* 20 µm waist would be
+    /// 1.2 mm — 36× longer — so assuming a diffraction-limited filament here
+    /// is wrong in the other direction.) The diffusion length of that cylinder
+    /// is their Eq. 5,
+    ///
+    /// ```text
+    /// (1/Λ)² = (π/l₀)² + (2.405/r₀)²   →   Λ = 7.74 µm
+    /// ```
+    ///
+    /// matching the `Λ = 8 µm` the paper states. An earlier version modelled
+    /// the focus as a *sphere* with `Λ = r₀/π = 6.37 µm`, which overstated
+    /// `ν_diff` by 1.48×.
     pub fn air_1064nm() -> Self {
-        let r_focus = 20e-6;
-        let lambda_diff = r_focus / PI;
-        let focal_volume = 4.0 / 3.0 * PI * r_focus.powi(3);
+        let r_focus = 20e-6_f64; // f·α/2, f = 4 cm, α = 1 mrad
+        let l_axial = 0.414 * (1e-3 / 1e-2) * 0.04_f64.powi(2); // = 66.2 µm
+        let lambda_diff = 1.0 / ((PI / l_axial).powi(2) + (2.405 / r_focus).powi(2)).sqrt();
+        let focal_volume = PI * r_focus * r_focus * l_axial;
         // Unwrap: all arguments are known-good constants.
         Self::new(1064e-9, 12.06, lambda_diff, 288.0, focal_volume).unwrap()
     }
@@ -258,6 +283,31 @@ impl AirBreakdown {
     pub fn with_inelastic_loss(mut self, delta_eff: f64, mean_energy_ev: f64) -> Self {
         self.delta_eff = delta_eff;
         self.mean_energy = mean_energy_ev * E_CHARGE;
+        self
+    }
+
+    /// Enable the multiphoton source, calibrated to Thiyagarajan & Thompson's
+    /// own MPI estimate (their Sec. II A): `I_B(MPI) = 4.42×10⁹ W/cm²` with
+    /// `S = 14` photons, from `U_i = 15.6 eV` for air at `ħω = 1.165 eV`.
+    ///
+    /// The calibration reads their number as its own definition — at
+    /// `I = I_B(MPI)`, multiphoton ionization alone reaches the breakdown
+    /// criterion within one pulse — giving `W_ref = n_bd/(N·τ)`.
+    ///
+    /// `K = 14` here rather than the 11 that `U_i = 12.06 eV` (O₂) implies,
+    /// because the calibration must be self-consistent with the photon count
+    /// the paper used. The cascade keeps 12.06 eV, the lowest ionization
+    /// channel available to a collisional electron.
+    ///
+    /// **Off by default, and see `tt2012_mpi_calibration_undershoots_the_data`
+    /// before switching it on**: their MPI threshold sits 45× *below* their own
+    /// measured threshold, so a rate anchored to it predicts breakdown far too
+    /// early.
+    pub fn with_tt2012_mpi(mut self, fwhm: f64, pressure: f64) -> Self {
+        const I_B_MPI: f64 = 4.42e9 * 1e4; // W/cm² → W/m²
+        self.k_photons = 14;
+        self.mpi_i_ref = I_B_MPI;
+        self.mpi_rate_ref = self.n_bd / (self.n_over_p * pressure * fwhm);
         self
     }
 
@@ -383,10 +433,23 @@ impl AirBreakdown {
         nu_att + nu_diff
     }
 
-    /// Multiphoton seed rate `S_mpi = σ_K·I^K·N` (m⁻³·s⁻¹).
+    /// Multiphoton seed rate `S_mpi` (m⁻³·s⁻¹), written about a reference
+    /// intensity rather than as a bare cross-section:
+    ///
+    /// ```text
+    /// S_mpi = N · W_ref · (I/I_ref)^K
+    /// ```
+    ///
+    /// The `σ_K·I^K` form is unusable here: at `K = 14` and SI intensities it
+    /// overflows `f64` well inside the bisection bracket (`I^14 > 10³⁰⁸` for
+    /// `I > 10²²`), while `σ_K` itself underflows to ~`10⁻¹⁸⁶`. The ratio form
+    /// keeps every intermediate in range.
     pub fn mpi_source(&self, intensity: f64, pressure: f64) -> f64 {
+        if self.mpi_rate_ref == 0.0 {
+            return 0.0;
+        }
         let n_neutral = self.n_over_p * pressure;
-        self.sigma_k * intensity.powi(self.k_photons) * n_neutral
+        n_neutral * self.mpi_rate_ref * (intensity / self.mpi_i_ref).powi(self.k_photons)
     }
 
     /// Advance `n_e` by one time-slice `dt` at constant intensity, using the
@@ -603,7 +666,7 @@ mod tests {
             k_att_2body: 0.0,
             k_att_3body: 0.0,
             d_e_ref: 0.0,
-            sigma_k: 0.0,
+            mpi_rate_ref: 0.0,
             ..m
         };
         let dt = 1e-11;
@@ -625,7 +688,10 @@ mod tests {
         let p = 760.0 * TORR;
         // No cascade (zero intensity), no MPI: pure loss decay.
         let loss = m.loss_rate(p);
-        let bare = AirBreakdown { sigma_k: 0.0, ..m };
+        let bare = AirBreakdown {
+            mpi_rate_ref: 0.0,
+            ..m
+        };
         let dt = 1e-10;
         let steps = 30;
         let mut n_e = 1e20;
@@ -653,11 +719,11 @@ mod tests {
         };
         // Force β=0 by giving cascade zero intensity and injecting S via a
         // constant source: emulate with advance at I=0 but nonzero mpi by
-        // setting sigma_k so that S_mpi(I0)=s at the chosen I0.
+        // choosing the reference so that S_mpi(I0) = s exactly.
         let i0: f64 = 1e17;
-        let sigma_k = s / (i0.powi(balanced.k_photons) * balanced.n_over_p * p);
         let src = AirBreakdown {
-            sigma_k,
+            mpi_rate_ref: s / (balanced.n_over_p * p),
+            mpi_i_ref: i0,
             ..balanced
         };
         // At I0 the cascade is nonzero, so also null it to isolate β=0: use a
@@ -687,13 +753,13 @@ mod tests {
         let n0 = 1e18;
         let s = 5e29;
         let i0: f64 = 1e17;
-        let sigma_k = s / (i0.powi(m.k_photons) * m.n_over_p * p);
         let bal = AirBreakdown {
             u_ion: f64::INFINITY, // no cascade → β = −loss; cancel loss too
             k_att_2body: 0.0,
             k_att_3body: 0.0,
             d_e_ref: 0.0,
-            sigma_k,
+            mpi_rate_ref: s / (m.n_over_p * p),
+            mpi_i_ref: i0,
             ..m
         };
         let dt = 1e-11;
@@ -796,12 +862,14 @@ mod tests {
         // ~12× in L′). The model's slope is an envelope, not a point, and this
         // pins that envelope so it cannot drift silently:
         //
-        //   δ=0.01 ⟨ε⟩=2 → n=0.895     δ=0.05 ⟨ε⟩=5 → n=0.224
+        //   δ=0.01 ⟨ε⟩=2 → n=0.785     δ=0.05 ⟨ε⟩=5 → n=0.187
         //
         // Measured n = 0.329 is inside THIS envelope — but note this is the
-        // FixedMeanEnergy variant, not the default. The default
-        // SelfConsistentClimb envelope is [0.029, 0.299] and EXCLUDES the
-        // measurement; see tests/validation.rs, where that gate is red.
+        // FixedMeanEnergy variant, not the default, and note also that the
+        // measurement is NOT a cascade-only observable (it contains MPI). The
+        // default SelfConsistentClimb envelope is [0.023, 0.231]. The
+        // apples-to-apples target is T&T's own cascade closed form, gated by
+        // tt2012_cascade_theory_reference in tests/validation.rs.
         let mut ns = Vec::new();
         for delta in [0.01, 0.02, 0.05] {
             for ev in [2.0, 3.0, 5.0] {
@@ -816,8 +884,8 @@ mod tests {
         let lo = ns.iter().cloned().fold(f64::MAX, f64::min);
         let hi = ns.iter().cloned().fold(0.0f64, f64::max);
         assert!(
-            (0.21..=0.24).contains(&lo) && (0.87..=0.92).contains(&hi),
-            "literature envelope moved: n ∈ [{lo:.3}, {hi:.3}], expected ≈[0.224, 0.895]"
+            (0.17..=0.21).contains(&lo) && (0.76..=0.81).contains(&hi),
+            "literature envelope moved: n ∈ [{lo:.3}, {hi:.3}], expected ≈[0.187, 0.785]"
         );
         // The whole envelope must sit below the no-inelastic-loss floor of 1.74
         // — that improvement is the point of the term.
@@ -860,15 +928,16 @@ mod tests {
         // THE DURABLE CLAIM of M6a, and the only slope statement that survived
         // the 2026-07-25 audit. The two limits of the same energy balance sit
         // either side of T&T's n = 0.329: FixedMeanEnergy (⟨ε⟩ free,
-        // literature-bounded) is too steep at 0.551; SelfConsistentClimb (⟨ε⟩
-        // eliminated) is too flat at 0.127. Neither reproduces the measurement;
+        // literature-bounded) is steeper at 0.468; SelfConsistentClimb (⟨ε⟩
+        // eliminated) is flatter at 0.095. Neither reproduces the measurement;
         // the truth lies between, which is what a mean-energy treatment of a
         // process governed by the tail of the energy distribution should give.
         //
         // Recording the bracket keeps either from being quietly "improved" into
         // the other's territory — and note the bracket is what remained TRUE
         // when the seed-window artifact was removed and both endpoints moved
-        // (0.800 → 0.551 and 0.356 → 0.127).
+        // (0.800 → 0.551 → 0.468 and 0.356 → 0.127 → 0.095 as the seed-window
+        // artifact and then the focal geometry were corrected).
         let slope_of = |model| {
             let c = AirBreakdown::air_1064nm()
                 .with_cascade_model(model)
@@ -880,12 +949,12 @@ mod tests {
         let selfc = slope_of(CascadeModel::SelfConsistentClimb);
         const MEASURED: f64 = 0.329;
         assert!(
-            (0.53..=0.57).contains(&fixed),
-            "FixedMeanEnergy slope moved: {fixed:.3}, expected ≈0.551"
+            (0.45..=0.49).contains(&fixed),
+            "FixedMeanEnergy slope moved: {fixed:.3}, expected ≈0.468"
         );
         assert!(
-            (0.11..=0.15).contains(&selfc),
-            "SelfConsistentClimb slope moved: {selfc:.3}, expected ≈0.127"
+            (0.08..=0.11).contains(&selfc),
+            "SelfConsistentClimb slope moved: {selfc:.3}, expected ≈0.095"
         );
         assert!(
             selfc < MEASURED && MEASURED < fixed,
@@ -970,6 +1039,44 @@ mod tests {
         );
         // Three-body is the dominant attachment channel at atmospheric density.
         assert!(m.k_att_3body * n_o2 * n > 0.1 * m.k_att_2body * n_o2);
+    }
+
+    #[test]
+    fn tt2012_mpi_calibration_undershoots_the_data() {
+        // Why the multiphoton source stays OFF by default, recorded as a
+        // measurement rather than an opinion.
+        //
+        // T&T give an MPI threshold of 4.42e9 W/cm² at 760 Torr (their
+        // Sec. II A) and separately measure breakdown at 2.06e11 — a factor 47
+        // higher. So MPI *alone*, read as a breakdown criterion, should have
+        // ignited the gas at 4.42e9, and it demonstrably did not. Anchoring a
+        // rate coefficient to that number inherits the problem: the threshold
+        // collapses to ≈5.5e9 W/cm², ~37× below what the same paper measures,
+        // and contradicts its own accounting of 88 % cascade / 12 % MPI at
+        // 760 Torr.
+        //
+        // The conclusion is about the paper's MPI estimate, not about MPI: it
+        // is an order-of-magnitude significance indicator (Nelson's flux-density
+        // criterion, whose constant C the paper never states), not a rate. A
+        // real σ_K from multiphoton cross-section data is the open item.
+        let p = 760.0 * TORR;
+        let cascade = model();
+        let with_mpi = cascade.with_tt2012_mpi(6e-9, p);
+        let i_cascade = cascade.threshold_intensity(6e-9, p, 400).unwrap();
+        let i_mpi = with_mpi.threshold_intensity(6e-9, p, 400).unwrap();
+        const MEASURED: f64 = 2.06e11 * 1e4; // W/m²
+
+        assert!(
+            i_mpi < i_cascade / 100.0,
+            "MPI no longer dominates the cascade: {i_mpi:.3e} vs {i_cascade:.3e}"
+        );
+        assert!(
+            i_mpi < MEASURED / 20.0,
+            "T&T-calibrated MPI threshold {i_mpi:.3e} is no longer far below the \
+             measured {MEASURED:.3e}; recheck the calibration before enabling it"
+        );
+        // And the default must keep it off.
+        assert_eq!(model().mpi_source(1e16, p), 0.0);
     }
 
     #[test]

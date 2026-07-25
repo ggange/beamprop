@@ -268,7 +268,9 @@ constant taken from the centre of its literature range and never tuned.
 attachment from measured rate coefficients (dissociative `k₂·n_O₂ ∝ p` plus
 three-body `k₃·n_O₂·n ∝ p²`, the latter dominant at atmospheric density, and
 both negligible here — `6.7×10⁷` vs `4.9×10⁹ s⁻¹` for diffusion at 1 atm),
-free-electron diffusion loss
+free-electron diffusion loss over the diffusion length of T&T's
+divergence-limited focus (their Eq. 5: `Λ = 7.74 µm` for `r₀ = 20 µm`,
+`l₀ = 66 µm`)
 `ν_diff = D_e(p)/Λ²` with `D_e ∝ 1/p` over the geometry-pinned diffusion length
 `Λ` (T&T 20 µm focus as a sphere, `Λ = r/π` — **pinned, never fit**), and a
 swappable multiphoton seed `S_mpi = σ_K·I^K·N` (off by default; the seed is one
@@ -289,12 +291,13 @@ I_thr(p) = L′/h + U_i·(ν_att + ν_diff + G)/(h·p),   G = ln(n_bd/n_seed)/τ
 Attachment is negligible here, so the exponent runs between two **exact**
 limits — plateau-dominated `n → 0` and diffusion-dominated `n → 2` — with the
 growth-limited `p^-1` in between. Fitted over the pinned range **300–2000
-Torr** (8 log-spaced points, 6 ns FWHM) the model gives **n = 0.127**, and the
+Torr** (8 log-spaced points, 6 ns FWHM) the model gives **n = 0.095**, and the
 gate asserts `n ∈ (0, 1)`: the plateau must be doing work, since without `L`
 the model is stuck at `n ≥ 1`. Sweeping the literature ranges of `L′`
-(δ_eff ≈ 0.01–0.05) gives an envelope `n ∈ [0.029, 0.299]`, separately pinned so
+(δ_eff ≈ 0.01–0.05) gives an envelope `n ∈ [0.023, 0.231]`, separately pinned so
 it cannot drift. The level at 760 Torr is **1.18×10¹² W/cm²**, and the
-`FixedMeanEnergy` variant gives `n = 0.551` as the other end of the bracket.
+`FixedMeanEnergy` variant gives `n = 0.468` (level 4.58×10¹¹) as the other end
+of the bracket.
 Growth is **logistic** — ionization depletes the neutrals it feeds on, so `n_e`
 saturates at full ionization rather than running away.
 Absolute threshold level is **not** gated (3–10× inter-lab
@@ -311,16 +314,27 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   1.05 ± 0.01 over 46–1858 Torr. Non-circular anchor.
 - **`E_eff(p)` slope — passes.** Predicted `p^+0.642`, measured `p^+0.695`;
   the positive sign confirms the `ν_m ≪ ω` branch.
-- **`I_thr(p)` slope — RED, retracted 2026-07-25.** Measured `p^-0.329`;
-  kernel `p^-0.127`, whose `δ_eff` envelope `[0.029, 0.299]` excludes the
-  measurement. This gate was previously green at `p^-0.356` (an "8 % match"),
+- **`I_thr(p)` slope vs the MEASURED curve — RED, and now known to be the
+  wrong target.** Measured `p^-0.329`; kernel `p^-0.095`. The measured curve
+  is not cascade-only (88 % cascade / 12 % MPI at 760 Torr per the paper), so
+  no cascade-only kernel can match it. This gate was previously green at `p^-0.356` (an "8 % match"),
   but that rested on an integration artifact: the seed decayed by `e^-60`
   before the pulse arrived, so an arbitrary integration bound supplied most of
   the threshold requirement and, being pressure-dependent, manufactured slope.
-  Corrected route: `p^-1.74` → `p^-0.551` (inelastic loss) → `p^-0.127`
+  Corrected route: `p^-1.74` → `p^-0.468` (inelastic loss) → `p^-0.095`
   (`⟨ε⟩` eliminated). What survives is a **bracket** — the two cascade limits
-  give 0.127 and 0.551 and straddle the measurement — gated by
-  `the_two_cascade_models_bracket_the_measurement`. This first looked
+  give 0.095 and 0.468 and straddle the measurement — gated by
+  `the_two_cascade_models_bracket_the_measurement`.
+- **Cascade theory (T&T Eq. 4) — PASSES, and is the apples-to-apples
+  reference.** `I_B(CC) = 1.44×10⁶(p_atm² + 2.2×10⁵λ_µm⁻²)` W/cm², implemented
+  as `validate::tt2012_cascade_threshold`. Flat at 1064 nm (`n = −0.00002`)
+  because `λ⁻²` dominates `p²` by 10⁵ — so the kernel's flatness *agrees* with
+  cascade theory. Level: `SelfConsistentClimb` 4.1–5.1× high, `FixedMeanEnergy`
+  1.3–3.2×.
+- **MPI calibrated to the paper's own estimate — implemented, left OFF.**
+  Anchoring a rate to their `I_B(MPI) = 4.42×10⁹ W/cm²` collapses the threshold
+  to 5.5×10⁹, 37× below their own measurement. Their number is an
+  order-of-magnitude indicator, not a rate anchor. This first looked
   like a 2× attachment problem; implementing attachment from measured rate
   coefficients showed real attachment is ~150× *smaller* than the
   order-of-magnitude constant it replaced, moving the model from `p^-0.72` to

@@ -118,8 +118,8 @@ one is the **default**.
 | model | free constants | slope `n` | vs measured 0.329 |
 |---|---|---|---|
 | no inelastic loss | — | 1.737 | 5.3× too steep |
-| `FixedMeanEnergy` | `δ_eff`, `⟨ε⟩` | 0.551 | 1.7× too steep |
-| **`SelfConsistentClimb`** (default) | `δ_eff` | **0.127** | 2.6× too flat |
+| `FixedMeanEnergy` | `δ_eff`, `⟨ε⟩` | 0.468 | 1.4× steeper |
+| **`SelfConsistentClimb`** (default) | `δ_eff` | **0.095** | 3.5× flatter |
 
 *(Numbers corrected 2026-07-25. The values previously in this table — 0.800 and
 0.356 — were inflated by the seed-window artifact described under Seeding
@@ -128,7 +128,7 @@ being pressure-dependent, manufactured slope. The apparent 8 % agreement of the
 self-consistent model was an artifact of that bug.)*
 
 **What survives the correction is the bracket, not a match.** The two limits sit
-either side of the measurement — 0.127 and 0.551 against 0.329 — and neither
+either side of the measurement — 0.095 and 0.468 against 0.329 — and neither
 reproduces it. That straddle is what a mean-energy treatment of a tail-driven
 process should give, and it is the claim
 `the_two_cascade_models_bracket_the_measurement` gates. It is also the claim
@@ -136,9 +136,9 @@ that *stayed true* while both endpoints moved, which is the main reason to
 trust it over either endpoint.
 
 **Honesty about status.** `δ_eff` remains free within its asserted range
-(0.01–0.05), which for the default gives `n ∈ [0.029, 0.299]` — **excluding**
+(0.01–0.05), which for the default gives `n ∈ [0.023, 0.231]` — **excluding**
 the measurement, so `tt2012_threshold_slope_matches_measurement` is red. For
-`FixedMeanEnergy` the same sweep over `(δ_eff, ⟨ε⟩)` gives `[0.224, 0.895]`,
+`FixedMeanEnergy` the same sweep over `(δ_eff, ⟨ε⟩)` gives `[0.187, 0.785]`,
 which does contain it. The default is chosen for parameter parsimony, **not**
 for agreement; switching it to the better-agreeing variant would be fitting.
 
@@ -180,10 +180,29 @@ invariance) would have caught immediately; that check now exists as
 ```
 
 `Λ` is the fundamental diffusion length of the **focal geometry**, computed from
-the spot, not tuned to the data. For the T&T 20 µm-radius focus modelled as a
-sphere of radius `r`, the fundamental mode gives `Λ = r/π`. This value is
-**documented and asserted as an input**; tuning `Λ` to move the threshold
-minimum onto the measured curve is curve-fitting and is explicitly forbidden.
+the spot, not tuned to the data.
+
+*(Corrected 2026-07-25 from the paper itself.)* T&T's Eq. 5 gives it for their
+geometry:
+
+```text
+(1/Λ)² = (π/l₀)² + (2.405/r₀)²,    r₀ = f·α/2 = 20 µm,
+                                   l₀ = 0.414·(α/d)·f² = 66 µm
+```
+
+with `f` = 4 cm, `α` = 1 mrad divergence, `d` = 1 cm beam — giving
+**Λ = 7.74 µm**, matching the `Λ = 8 µm` the paper states, and a focal volume
+`π r₀² l₀ = 8.32×10⁻¹⁴ m³`.
+
+Two earlier guesses were both wrong. Modelling the focus as a **sphere**
+(`Λ = r₀/π = 6.37 µm`) overstated `ν_diff` by 1.48×. Modelling it as a
+diffraction-limited **filament** (Rayleigh range 1.2 mm) was wrong the other
+way: the beam is *divergence*-limited at 1 mrad, so the depth of focus is
+66 µm, not 2.4 mm.
+
+`Λ` remains **documented and asserted as an input**; tuning it to move the
+threshold onto the measured curve is curve-fitting and is explicitly
+forbidden.
 
 ### Attachment loss `ν_att` — two channels, from measured rate coefficients
 
@@ -352,8 +371,8 @@ threshold is higher than the closed form. The offset is pressure-independent,
 so the exponents below are unaffected — but never quote the closed form as a
 level, and note that being further above the plateau makes the code's slope
 *steeper* than the closed form predicts. This bit twice: for `FixedMeanEnergy`
-the closed form said 0.521 and the code gives 0.551; for `SelfConsistentClimb`
-it said 0.060 and the code gives 0.127. **Trust the code.**
+the closed form said 0.521 and the code gives 0.468; for `SelfConsistentClimb`
+it said 0.060 and the code gives 0.095. **Trust the code.**
 
 Attachment is negligible at these densities (`6.7×10⁷` against `4.9×10⁹ s⁻¹`
 for diffusion at 1 atm), leaving three terms whose exponents are **exact**:
@@ -366,10 +385,10 @@ diffusion-limited:             I_thr = U_i·ν_diff/(h·p)         ∝ p^-2
 
 Any mixture falls between them, and the gate asserts **`n ∈ (0, 1)`** — the
 plateau must be doing work, since without `L′` the model cannot get below
-`n = 1` at all. Observed with the default `SelfConsistentClimb`: **`n = 0.127`**,
+`n = 1` at all. Observed with the default `SelfConsistentClimb`: **`n = 0.095`**,
 level at 760 Torr `1.18×10¹² W/cm²` (not gated). With `FixedMeanEnergy`:
-`n = 0.551`. Both envelopes are pinned separately — `[0.029, 0.299]` and
-`[0.224, 0.895]` respectively.
+`n = 0.468`, level `4.58×10¹¹`. Both envelopes are pinned separately —
+`[0.023, 0.231]` and `[0.187, 0.785]` respectively.
 
 **The bracket is not universal, and the qualifier is load-bearing.** It holds
 only while attachment is negligible. Three-body attachment is `∝ p²` and
@@ -422,7 +441,7 @@ fitted, so any disagreement is a statement about the rate model.
    makes the IB factor grow ∝ p faster than the threshold field falls.
 3. **Threshold pressure-slope — RED, retracted 2026-07-25.** Measured
    `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`. The default
-   kernel gives `p^-0.127` and its `δ_eff` envelope `[0.029, 0.299]` excludes
+   kernel gives `p^-0.095` and its `δ_eff` envelope `[0.023, 0.231]` excludes
    the measurement, so the gate is `#[ignore]`d rather than re-banded.
 
    This gate was **green before the 2026-07-25 audit**, reporting `n = 0.356`
@@ -430,13 +449,17 @@ fitted, so any disagreement is a statement about the rate model.
    the pre-pulse arm, so an arbitrary integration bound supplied ~60 of the ~82
    nats the criterion demanded, and its pressure-dependence manufactured slope.
    The three-stage narrative it supported is correspondingly corrected —
-   1.737 → 0.551 → 0.127, not 1.737 → 0.800 → 0.356.
+   1.737 → 0.468 → 0.095, not 1.737 → 0.800 → 0.356.
+
+   **But the raw curve is the wrong target** — see "The comparison target"
+   above. Against T&T's own cascade closed form the kernel is within 4.1–5.1×
+   in level, and its flatness is what that theory predicts.
 
    | stage | slope `n` | vs measured |
    |---|---|---|
    | original (no inelastic loss) | 1.737 | 5.3× — and unreachable at *any* parameter value, since `n = 1` was the model's floor |
-   | + inelastic loss at fixed `⟨ε⟩` | 0.551 | 1.7× |
-   | + `⟨ε⟩` eliminated (self-consistent climb) | 0.127 | 2.6× the other way |
+   | + inelastic loss at fixed `⟨ε⟩` | 0.468 | 1.4× |
+   | + `⟨ε⟩` eliminated (self-consistent climb) | 0.095 | 3.5× the other way |
 
    The inelastic-loss term is still justified — it broke the hard `n = 1` floor
    — but it no longer *closes* the gap, and eliminating `⟨ε⟩` overshoots.
@@ -452,6 +475,54 @@ inter-lab scatter); the drift is pinned only as a regression check.
 legitimate; so is adding a term the physics demands. Tuning any constant until
 the slope lands in a band is the curve-fitting the pinned-`Λ` rule forbids, and
 the bracket above now makes such tuning provably futile as well as improper.
+
+### The comparison target — corrected 2026-07-25 from the paper
+
+The kernel models **collisional cascade only** (`σ_K = 0`). T&T's measured
+curve is not a cascade-only observable: the paper attributes 88 % of the
+ionization at 760 Torr to cascade and 12 % to multiphoton ionization, with MPI
+*dominant* below 100 Torr, and it explicitly MPI-corrects the measured data
+before comparing to cascade theory. Comparing a cascade-only kernel to the raw
+curve was therefore a category error on our side.
+
+The right reference is their **Eq. 4**, the cascade closed form:
+
+```text
+I_B(CC) = 1.44×10⁶ · (p_atm² + 2.2×10⁵·λ_µm⁻²)   W/cm²
+```
+
+At 1064 nm `λ⁻²` contributes `1.94×10⁵` while `p²` never exceeds 6.9 over
+10–2000 Torr, so **accepted cascade theory is flat in pressure at this
+wavelength** (fitted `n = −0.00002`), and reproduces the `2.8×10¹¹ W/cm²` the
+paper quotes at 760 Torr. Implemented as
+`validate::tt2012_cascade_threshold`, gated by
+`tt2012_cascade_theory_reference`.
+
+This reframes the headline. The kernel's flatness is *agreement with cascade
+theory*, not disagreement with experiment; and the measured `n = 0.329` is
+unreachable by **any** cascade-only model, this one included. Level against
+Eq. 4: `SelfConsistentClimb` 4.1–5.1× high, `FixedMeanEnergy` 1.3–3.2×
+(measurement/theory is 0.74 at 760 Torr). Eq. 4 is not gospel either — the
+authors need a 2.1× scaling factor (1.74× with dust filtering) to reconcile it
+with their own measurements.
+
+### Multiphoton ionization — implemented, calibrated, and left off
+
+`S_mpi = N·W_ref·(I/I_ref)^K`, written about a reference intensity because the
+bare `σ_K·I^K` form is unusable at `K = 14`: it overflows `f64` inside the
+bisection bracket while `σ_K` itself underflows to ~`10⁻¹⁸⁶`.
+
+`AirBreakdown::with_tt2012_mpi` calibrates it to the paper's own MPI estimate
+(`I_B(MPI) = 4.42×10⁹ W/cm²` at 760 Torr, `S = 14` photons from `U_i = 15.6 eV`
+for air), reading that number as its definition: at `I_B(MPI)`, MPI alone
+reaches the breakdown criterion within one pulse.
+
+**The result is why it stays off.** The threshold collapses to `5.5×10⁹ W/cm²`,
+**37× below the 2.06×10¹¹ the same paper measures**, and contradicts its own
+88 %-cascade accounting. Their MPI number is an order-of-magnitude significance
+indicator — Nelson's flux-density criterion, whose constant `C` the paper never
+states — not a rate anchor. A real `σ_K` from multiphoton cross-section data is
+the open item; gated as `tt2012_mpi_calibration_undershoots_the_data`.
 
 ### Integrator unit tests (NOT physics validation — labeled as such)
 
