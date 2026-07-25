@@ -284,12 +284,12 @@ that floor is physics, not hygiene.
 
 Without it the model was not window-independent. The integration runs over
 `[−w·FWHM, +w·FWHM]`; during the quiet arm before the pulse, losses grind the
-seed down — at 760 Torr `ν_loss ≈ 5×10⁹ s⁻¹` decays it by `e^-60` over 12 ns —
+seed down — at 760 Torr `ν_loss ≈ 3.4×10⁹ s⁻¹` decays it by `e^-41` over 12 ns —
 so the avalanche had to climb out of a hole whose depth was set by `w`. Of the
-~82 nats of growth the criterion then demanded, ~60 came from the arbitrary
-integration bound and only ~22 from the physical `ln(n_bd/n_seed)`.
+~64 nats of growth the criterion then demanded, ~41 came from the arbitrary
+integration bound and only ~23 from the physical `ln(n_bd/n_seed)`.
 
-That is meaningless as physics (`e^-60` of one electron is `10⁻²⁶` of an
+That is meaningless as physics (`e^-41` of one electron is `10⁻¹⁸` of an
 electron, in a volume that contains either one or none), and it had two
 consequences:
 
@@ -302,8 +302,8 @@ available in the focal volume when the pulse arrives. `threshold_is_window_
 independent` gates the resulting insensitivity (< 1 % over `w ∈ [1, 4]`).
 
 Note this is an *assumption*, not a derivation. At 1 atm the ambient electron
-density from background ionization (~10⁹ m⁻³) puts ~3×10⁻⁵ electrons in a
-3.4×10⁻¹⁴ m³ focal volume, i.e. usually **none** — which is why ns breakdown at
+density from background ionization (~10⁹ m⁻³) puts ~8×10⁻⁵ electrons in a
+8.3×10⁻¹⁴ m³ focal volume, i.e. usually **none** — which is why ns breakdown at
 tight focus is stochastic and why the physically correct seed is multiphoton
 ionization during the pulse. Turning `S_mpi` on with a defensible `σ_K` is the
 open item; until then the floor is the honest stand-in and is labelled as such.
@@ -450,7 +450,7 @@ model-consistency layer beneath it.
 
 ### External gates — Thiyagarajan & Thompson 2012 (digitized 2026-07-24)
 
-The T&T figure plots **two** curves against pressure: the breakdown threshold
+T&T **Fig. 4** plots **two** curves against pressure: the breakdown threshold
 field `E_B` and the effective field `E_eff`. Both are digitized into
 `tests/data/tt2012_*.csv`. Together with the paper's own closed forms (Eq. 4
 cascade theory, Eq. 5 focal geometry) they yield **six** gates:
@@ -494,8 +494,8 @@ fitted, so any disagreement is a statement about the rate model.
    the measurement, so the gate is `#[ignore]`d rather than re-banded.
 
    This gate was **green before the 2026-07-25 audit**, reporting `n = 0.356`
-   and an 8 % match. That was an artifact: the seed decayed by `e^-60` during
-   the pre-pulse arm, so an arbitrary integration bound supplied ~60 of the ~82
+   and an 8 % match. That was an artifact: the seed decayed by `e^-41` during
+   the pre-pulse arm, so an arbitrary integration bound supplied ~41 of the ~64
    nats the criterion demanded, and its pressure-dependence manufactured slope.
    The three-stage narrative it supported is correspondingly corrected —
    1.737 → 0.468 → 0.095, not 1.737 → 0.800 → 0.356.
@@ -651,6 +651,38 @@ anchor is an **independent** source (a second published dataset, or an
 independent theoretical scaling **not** derived from the same coefficients the
 kernel uses) — the old Raizer-analytic fallback was circular because the kernel
 already uses Raizer coefficients. Documented, not hidden.
+
+**The trigger fired, and the fallback is only half-discharged — recorded as an
+open debt against M6a (2026-07-25).** The slope gate *was* the condition: it is
+red and `#[ignore]`d, so by D5 an independent anchor is owed. What was put in
+its place is T&T's **Eq. 4**, and that satisfies the clause in one half and not
+the other:
+
+- **The exponent half is clean and is what M6a should be judged on.** The
+  `λ⁻²` agreement (−2.000 vs −2.000, ratio constant to `2×10⁻⁵` over a 20× span
+  in `λ`, with a negative control that fails drift by 24×) is a shape statement
+  on an axis where nothing in the kernel is tunable. It does not depend on the
+  value of `δ_eff·⟨ε⟩` at all, so no choice of coefficient can manufacture it.
+- **The level half does not meet the clause's own test.** Eq. 4 is not a second
+  dataset — it is the same paper — and its `λ⁻²` coefficient implies
+  `δ_eff·⟨ε⟩ = 0.060 eV`, which is *the same literature centre the kernel
+  already uses*. The 1.01× agreement in `L′/h` is therefore a consistency check
+  within one coefficient lineage, not independent corroboration. The section
+  above is right that *pinning* `δ_eff·⟨ε⟩` from Eq. 4 would make the level
+  gates circular; the point here is narrower and still stands without the pin —
+  shared provenance already drains most of the evidential weight from the level
+  agreement, which is why it is carried as a regression pin and never quoted as
+  a validation.
+
+**What closing this requires: a genuinely independent threshold dataset** — a
+different group, different apparatus, ideally a different wavelength so the
+`λ⁻²` prediction is tested against measurement rather than against another
+theory. Until that exists, M6a's honest status is *one clean shape gate against
+accepted theory, no external agreement with measurement*, and it should be
+stated that way rather than as a closed rung. This debt does not block M6c,
+which gates independently on Chapman–Jouguet velocity and consumes only the
+threshold trigger — but it must not be allowed to go implicit as the ladder
+climbs.
 
 ## NOT in scope (M6a)
 

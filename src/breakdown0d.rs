@@ -590,10 +590,10 @@ impl AirBreakdown {
     /// `n_e` is floored at the seed density throughout, and that floor is
     /// **physics, not hygiene**. Without it the model is not window-independent:
     /// losses grind the seed down during the quiet arm before the pulse
-    /// arrives — at 760 Torr, `ν_loss ≈ 5×10⁹ s⁻¹` decays it by `e^-60` over
+    /// arrives — at 760 Torr, `ν_loss ≈ 3.4×10⁹ s⁻¹` decays it by `e^-41` over
     /// 12 ns — so the avalanche must first climb back out of a hole that the
-    /// arbitrary choice of `w` dug. That is meaningless as physics (`e^-60`
-    /// times one electron is `10⁻²⁶` of an electron in a volume that holds
+    /// arbitrary choice of `w` dug. That is meaningless as physics (`e^-41`
+    /// times one electron is `10⁻¹⁸` of an electron in a volume that holds
     /// either one or none) and it made the threshold depend on `w`, which the
     /// `threshold_is_window_independent` gate now forbids. The floor states the
     /// modelling assumption plainly: one seed electron is available in the
@@ -690,7 +690,7 @@ mod tests {
     const TORR: f64 = 133.322_368_4; // Pa per Torr
 
     /// Pinned pressure range of the M6a slope gate (Pa) — see
-    /// `high_pressure_threshold_slope_is_cascade_limited` and
+    /// `high_pressure_threshold_slope_lies_between_analytic_limits` and
     /// docs/M6A_SPEC.md. Brackets the T&T measurement range; the fitted
     /// exponent is only defined relative to it.
     const GATE_P_LO: f64 = 300.0 * TORR;

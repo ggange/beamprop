@@ -381,6 +381,19 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   states), not a rate anchor. A real `σ_K` from multiphoton cross-section data
   is the open item.
 
+**Open debt M6a hands forward (D5 fallback, half-discharged).** With the slope
+gate red, the plan's fallback clause requires an anchor independent of the
+kernel's own coefficients. Eq. 4 supplies that for the **exponent** (`λ⁻²` is
+untouched by any coefficient choice) but not for the **level**: it is the same
+paper, and its `λ⁻²` coefficient implies the same `δ_eff·⟨ε⟩ = 0.060 eV` the
+kernel already assumes, so the 1.01× agreement is intra-lineage consistency, not
+corroboration. Closing it needs a second published threshold dataset from a
+different group — ideally at a different wavelength, so `λ⁻²` is tested against
+measurement rather than against theory. M6a's honest status until then: one
+clean shape gate against accepted cascade theory, no external agreement with
+measurement. Does not block M6c (gated separately on Chapman–Jouguet velocity).
+See `docs/M6A_SPEC.md` § Fallback.
+
 Open question M6a hands forward: the measured `n` = 0.329 is unreachable by any
 cascade-only model, since accepted cascade theory is flat at this wavelength.
 Closing it means the MPI contribution the paper itself invokes (12 % at
