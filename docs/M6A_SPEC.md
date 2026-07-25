@@ -132,8 +132,26 @@ either side of the measurement — 0.095 and 0.468 against 0.329 — and neither
 reproduces it. That straddle is what a mean-energy treatment of a tail-driven
 process should give, and it is the claim
 `the_two_cascade_models_bracket_the_measurement` gates. It is also the claim
-that *stayed true* while both endpoints moved, which is the main reason to
-trust it over either endpoint.
+that *stayed true* while both endpoints moved.
+
+**But the bracket is a one-parameter sensitivity, not two independent limits**
+*(narrowed 2026-07-25)*. Both variants reduce to `ν_i → heating/U_i` at high
+intensity; they differ only in **where the cascade cuts off** —
+`FixedMeanEnergy` at `ε_∞ = ⟨ε⟩ = 3 eV`, `SelfConsistentClimb` at
+`ε_∞ = U_i = 12.06 eV` — and that cutoff sets the plateau, hence the slope.
+Sweeping that single energy walks continuously between the endpoints:
+
+| `FixedMeanEnergy` `⟨ε⟩` | 3 eV | 4 eV | 5 eV | 6 eV | 8 eV | 12.06 eV |
+|---|---|---|---|---|---|---|
+| slope `n` | 0.468 | 0.397 | 0.346 | 0.309 | 0.255 | 0.192 |
+
+So containing 0.329 is a statement about the uncertainty in one loosely-known
+energy, not a physical straddle, and the interval is **not a bound**: fixing
+`⟨ε⟩` at `U_i` gives 0.192, *inside* it. The wavelength gate below is the
+external agreement that does not have this weakness, and should be read as the
+milestone's headline in place of the bracket. Also note the sense of the
+one-parameter walk: `⟨ε⟩` ≈ 5 eV reproduces the measurement on its own, which
+is exactly why it must not be selected — see "The line on fixing it".
 
 **Honesty about status.** `δ_eff` remains free within its asserted range
 (0.01–0.05), which for the default gives `n ∈ [0.023, 0.231]` — **excluding**
@@ -147,9 +165,20 @@ Two further caveats, stated because they bound how much any of this means:
 - **The `δ_eff` range 0.01–0.05 is asserted, not sourced.** It is a plausible
   band for the fractional energy loss per collision in air above ~1 eV, but no
   citation backs those endpoints, and `δ_eff` sets the threshold *level*
-  linearly. Matching T&T's level would need `δ_eff ≈ 0.003`.
+  linearly. Matching T&T's level would need `δ_eff ≈ 0.003`. There *is* an
+  independent number available — Eq. 4's `λ⁻²` coefficient implies
+  `δ_eff·⟨ε⟩ = 0.060 eV`, which is exactly the literature centre already in use
+  — but adopting it as a pin would make the Eq. 4 level gates circular. See the
+  wavelength-gate section for the trade.
+- **`⟨ε⟩` is not fully eliminated even in the default.** A mean energy still
+  enters through `D_e,ref = 0.2 m²/s` (an energy-dependent transport
+  coefficient; `v̄·λ_mfp/3` at 3 eV gives ≈0.08 m²/s) and through holding
+  `δ_eff` itself constant. `self_consistent_climb_eliminates_the_mean_energy`
+  proves only that the `with_inelastic_loss` `⟨ε⟩` knob cannot reach that path.
+  Given the audit below found `D_e` sensitivity **large**, the parsimony
+  argument for the default is thinner than "one free constant" suggests.
 - **The level is 4.8–7.2× high and drifts** across the window; the drift is the
-  residual slope error in absolute clothing. Level stays ungated (3–10 %
+  residual slope error in absolute clothing. Level stays ungated (3–10×
   inter-lab scatter).
 
 **Sensitivity audit (2026-07-24, values superseded 2026-07-25)** — run after the
@@ -212,8 +241,16 @@ forbidden.
 
 with `k₂ = 1e-17 m³/s` (dissociative, `e + O₂ → O⁻ + O`) and
 `k₃ = 1e-43 m⁶/s` (three-body, `e + O₂ + M → O₂⁻ + M`; Kossyi et al. 1992,
-Itikawa 2009). Three-body is the dominant channel at atmospheric density, and
-`∝ p²`.
+Itikawa 2009).
+
+*(Corrected 2026-07-25.)* At 1 atm the **two-body** channel leads:
+`5.4×10⁷ s⁻¹` against `1.4×10⁷` for three-body. Three-body overtakes it only
+above `n = k₂/k₃ = 10²⁶ m⁻³` (≈4 atm). Earlier revisions of this document
+asserted three-body was dominant at atmospheric density, which is wrong by 4×;
+nothing was gated on it (the guard test only ever demanded three-body be
+non-negligible, and now also demands it be sub-dominant). The `∝ p²` scaling of
+the three-body channel is still what turns the threshold slope positive far
+above the gate window — that crossover is just at ~4 atm, not at 1 atm.
 
 *(Amended 2026-07-24. This replaced a single order-of-magnitude constant
 `ν_att = K_a·p` with `K_a = 1e5 s⁻¹Pa⁻¹`. That value was ~150× too large:
@@ -221,7 +258,7 @@ it gave `1.0×10¹⁰ s⁻¹` at 1 atm where the measured coefficients give
 `6.7×10⁷ s⁻¹`. The consequence matters — see the external gates below — because
 the inflated constant was the only term flattening the modelled threshold slope
 toward the measured one. With attachment correct it is **negligible against
-diffusion** (`4.9×10⁹ s⁻¹` at 1 atm), and the modelled slope moves from −0.72
+diffusion** (`3.3×10⁹ s⁻¹` at 1 atm), and the modelled slope moves from −0.72
 to −1.74, i.e. **away** from the data. The apparent near-agreement was an
 artifact of a wrong constant.)*
 
@@ -285,7 +322,7 @@ open item; until then the floor is the honest stand-in and is labelled as such.
 | D_e,ref | 2.0e-1 m²/s at p_ref | free-electron diffusion, order-of-magnitude; sets absolute low-p rise only |
 | L′ | 3.75e-13 W·Pa⁻¹ | `δ_eff·K_m·⟨ε⟩` at the literature centre (δ_eff = 0.02, ⟨ε⟩ = 3 eV); sets the high-p plateau |
 | k₂ | 1.0e-17 m³/s | dissociative attachment `e + O₂ → O⁻ + O` (Itikawa 2009) |
-| k₃ | 1.0e-43 m⁶/s | three-body attachment `e + O₂ + M → O₂⁻ + M` (Kossyi 1992); dominant channel |
+| k₃ | 1.0e-43 m⁶/s | three-body attachment `e + O₂ + M → O₂⁻ + M` (Kossyi 1992); sub-dominant below ≈4 atm, `∝ p²` |
 | f_O₂ | 0.21 | O₂ number fraction of dry air |
 | n_bd | 1.0e23 m⁻³ | breakdown criterion density |
 | p_ref | 101325 Pa | 1 atm reference |
@@ -374,7 +411,7 @@ level, and note that being further above the plateau makes the code's slope
 the closed form said 0.521 and the code gives 0.468; for `SelfConsistentClimb`
 it said 0.060 and the code gives 0.095. **Trust the code.**
 
-Attachment is negligible at these densities (`6.7×10⁷` against `4.9×10⁹ s⁻¹`
+Attachment is negligible at these densities (`6.7×10⁷` against `3.3×10⁹ s⁻¹`
 for diffusion at 1 atm), leaving three terms whose exponents are **exact**:
 
 ```text
@@ -415,10 +452,22 @@ model-consistency layer beneath it.
 
 The T&T figure plots **two** curves against pressure: the breakdown threshold
 field `E_B` and the effective field `E_eff`. Both are digitized into
-`tests/data/tt2012_*.csv`. They yield four gates — collision frequency,
-`E_eff` sign, level-ratio flatness, and slope-envelope containment — and all
-four now pass, none `#[ignore]`d. The history below records what each stage
-passed and failed, because the failures drove the model corrections.
+`tests/data/tt2012_*.csv`. Together with the paper's own closed forms (Eq. 4
+cascade theory, Eq. 5 focal geometry) they yield **six** gates:
+
+| gate | status |
+|---|---|
+| `tt2012_collision_frequency_matches_literature` | passes (5 %) |
+| `tt2012_effective_field_rises_with_pressure` | passes |
+| `tt2012_cascade_theory_reference` | passes |
+| `tt2012_wavelength_scaling_matches_cascade_theory` | passes — the headline |
+| `tt2012_level_ratio_is_bounded_within_scatter` | passes (regression pin) |
+| `tt2012_threshold_slope_matches_measurement` | **RED**, `#[ignore]`d on purpose |
+
+*(This paragraph previously claimed four gates, all passing and none
+`#[ignore]`d — written before the slope gate was retracted on 2026-07-25 and
+left deliberately red.)* The history below records what each stage passed and
+failed, because the failures drove the model corrections.
 
 The paper pins every experimental input the kernel takes — 1064 nm, 6 ± 1 ns
 FWHM, **20 µm radius** focus, dry air, 10–2000 Torr — which is exactly what
@@ -505,6 +554,67 @@ Eq. 4: `SelfConsistentClimb` 4.1–5.1× high, `FixedMeanEnergy` 1.3–3.2×
 (measurement/theory is 0.74 at 760 Torr). Eq. 4 is not gospel either — the
 authors need a 2.1× scaling factor (1.74× with dust filtering) to reconcile it
 with their own measurements.
+
+### Wavelength scaling vs Eq. 4 — added 2026-07-25, the headline shape gate
+
+Comparing two flat curves at one wavelength is a level comparison wearing a
+shape's clothes. **Wavelength** is the axis where the kernel and Eq. 4 make a
+non-trivial, identical prediction, and where nothing in the kernel is tunable:
+`δ_eff·⟨ε⟩` sets the plateau's level and cannot produce a `λ` exponent.
+
+Both terms of the kernel's threshold carry `1/h ∝ ω²`, since
+`h = e²K_m/(m_e c ε₀ ω²)`:
+
+```text
+I_thr(p) = L′/h + U_i·(ν_diff + ν_att + G)/(h·p)      ⇒  I_thr ∝ ω² ∝ λ⁻²
+```
+
+with a pressure- and geometry-independent proportionality — while Eq. 4's
+dominant term at these wavelengths is `2.2×10⁵·λ_µm⁻²`. Measured over
+**0.53–10.6 µm** at 760 Torr:
+
+| quantity | kernel | T&T Eq. 4 |
+|---|---|---|
+| `d(ln I_thr)/d(ln λ)` | **−2.000** | **−2.000** |
+| ratio kernel/Eq. 4, `FixedMeanEnergy` | 1.6383 → 1.6384 (drift `2×10⁻⁵`) | — |
+| ratio kernel/Eq. 4, `SelfConsistentClimb` | 4.2218 → 4.2219 | — |
+
+The residual `1.5×10⁻⁴` in the exponent is the `(ν_m/ω)²` correction to the
+Lorentzian at 10.6 µm, not a modelling difference. Holding the geometry fixed
+across `λ` is physical rather than convenient: T&T's focus is
+*divergence*-limited (`r₀ = f·α/2`, `l₀ = 0.414·(α/d)·f²`), so `Λ` and the focal
+volume do not depend on wavelength — implemented as
+`AirBreakdown::dry_air_tt2012_focus`.
+
+Sharper still, the plateau `L′/h` and Eq. 4's `λ⁻²` coefficient are the **same
+physical quantity** — `ω²` times the inelastic energy loss per collision:
+
+```text
+L′/h = δ_eff·⟨ε⟩ · m_e c ε₀ ω² / e² = 2.838×10¹⁵ W/m²   (δ_eff = 0.02, ⟨ε⟩ = 3 eV)
+Eq. 4 λ⁻² term                      = 2.798×10¹⁵ W/m²
+```
+
+— agreeing to **1.01×** at the literature centre of a range chosen before this
+comparison existed. Gated by
+`tt2012_wavelength_scaling_matches_cascade_theory`.
+
+**What it does and does not establish.** The `λ⁻²` is analytic in the kernel
+(it is the `ν_m ≪ ω` limit of the IB Lorentzian), so the gate does not
+independently *discover* the scaling. It establishes that the kernel shares
+Eq. 4's wavelength structure **exactly rather than approximately**, and it fails
+loudly if that limit is ever left — a `ν_m ≳ ω` regime, a wavelength-dependent
+geometry, or an MPI/photon-count term leaking into the cascade path all break
+the constant ratio. Set against a pressure axis where the kernel and the
+measurement disagree, an exactly-shared exponent over 20× in `λ` is the most
+defensible external statement M6a has.
+
+**Not a pin, and the trade if it ever becomes one.** `δ_eff·⟨ε⟩` stays asserted
+from its literature range. Inverting Eq. 4 for it — `δ_eff·⟨ε⟩ = 0.060 eV` —
+would be legitimate re-pinning under the rule below, and would retire the "range
+is asserted, not sourced" caveat; but it would make the level assertions in both
+this gate and `tt2012_cascade_theory_reference` circular, so both level
+assertions would have to be retired in the same change, leaving only the
+exponent. That trade is available and not taken.
 
 ### Multiphoton ionization — implemented, calibrated, and left off
 

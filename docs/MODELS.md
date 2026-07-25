@@ -265,20 +265,34 @@ constant high-pressure **plateau** on top of the `1/p` avalanche term. Without
 lets it approach the measured trend at all. `L′ = δ_eff·K_m·⟨ε⟩` is one lumped
 constant taken from the centre of its literature range and never tuned.
 
-attachment from measured rate coefficients (dissociative `k₂·n_O₂ ∝ p` plus
-three-body `k₃·n_O₂·n ∝ p²`, the latter dominant at atmospheric density, and
-both negligible here — `6.7×10⁷` vs `4.9×10⁹ s⁻¹` for diffusion at 1 atm),
-free-electron diffusion loss over the diffusion length of T&T's
-divergence-limited focus (their Eq. 5: `Λ = 7.74 µm` for `r₀ = 20 µm`,
-`l₀ = 66 µm`)
-`ν_diff = D_e(p)/Λ²` with `D_e ∝ 1/p` over the geometry-pinned diffusion length
-`Λ` (T&T 20 µm focus as a sphere, `Λ = r/π` — **pinned, never fit**), and a
-swappable multiphoton seed `S_mpi = σ_K·I^K·N` (off by default; the seed is one
-electron in the focal volume). Breakdown at `n_e ≥ n_bd = 10²³ m⁻³`.
+The loss terms are attachment from measured rate coefficients (dissociative
+`k₂·n_O₂ ∝ p` plus three-body `k₃·n_O₂·n ∝ p²`; the two-body channel leads at
+1 atm, `5.4×10⁷` against `1.4×10⁷ s⁻¹`, with three-body overtaking it only above
+`n = k₂/k₃ = 10²⁶ m⁻³` ≈ 4 atm) and free-electron diffusion,
+`ν_diff = D_e(p)/Λ²` with `D_e ∝ 1/p`. Attachment is negligible against
+diffusion throughout the gate window — `6.7×10⁷` vs `3.3×10⁹ s⁻¹` at 1 atm.
 
-The linear-per-slice ODE is advanced by its exact exponential solution
-`n_e' = n_e·e^{βdt} + S·expm1(βdt)/β` (`β = ν_i − ν_loss`). Threshold intensity
-is found by log-bisection; a pressure sweep gives `I_thr(p)`.
+`Λ` is the diffusion length of T&T's **divergence-limited** focus, from their
+Eq. 5: `(1/Λ)² = (π/l₀)² + (2.405/r₀)²` with `r₀ = f·α/2 = 20 µm` and
+`l₀ = 0.414·(α/d)·f² = 66 µm`, giving **`Λ = 7.74 µm`** — matching the 8 µm the
+paper states. **Pinned from geometry, never fit.** (Two earlier guesses were
+wrong in opposite directions: a *sphere*, `Λ = r₀/π = 6.37 µm`, overstated
+`ν_diff` by 1.48×; a diffraction-limited *filament* put the depth of focus at
+2.4 mm instead of 66 µm.) Because the focus is set by the beam's 1 mrad
+divergence rather than by diffraction, `Λ` and the focal volume are
+wavelength-independent — which is what makes the wavelength gate below a clean
+one-variable test.
+
+Finally a swappable multiphoton seed `S_mpi = σ_K·I^K·N` (off by default; the
+seed is one electron in the focal volume). Breakdown at `n_e ≥ n_bd = 10²³ m⁻³`.
+
+The per-slice ODE is advanced by its exact solution. With `σ_K = 0` the slice
+is Bernoulli — growth is **logistic**, since ionization depletes the neutrals it
+feeds on — and is evaluated as `n_e' = n_e/(e^{−βdt} + b·n_e·(1 − e^{−βdt})/β)`
+with `β = ν_i − ν_loss`, `b = ν_i/N`; that form underflows harmlessly instead of
+overflowing to `NaN` far above threshold, and `n_e` saturates at full ionization
+rather than running away. Threshold intensity is found by log-bisection; a
+pressure sweep gives `I_thr(p)`.
 
 Implemented in `src/breakdown0d.rs`.
 
@@ -297,11 +311,8 @@ the model is stuck at `n ≥ 1`. Sweeping the literature ranges of `L′`
 (δ_eff ≈ 0.01–0.05) gives an envelope `n ∈ [0.023, 0.231]`, separately pinned so
 it cannot drift. The level at 760 Torr is **1.18×10¹² W/cm²**, and the
 `FixedMeanEnergy` variant gives `n = 0.468` (level 4.58×10¹¹) as the other end
-of the bracket.
-Growth is **logistic** — ionization depletes the neutrals it feeds on, so `n_e`
-saturates at full ionization rather than running away.
-Absolute threshold level is **not** gated (3–10× inter-lab
-scatter). Integrator sub-gates are unit tests of the exact-exponential solver,
+of the bracket. Absolute threshold level is **not** gated (3–10× inter-lab
+scatter). Integrator sub-gates are unit tests of the exact per-slice solver,
 not physics validation.
 
 External gates (Thiyagarajan & Thompson 2012, digitized into
@@ -324,37 +335,60 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   Corrected route: `p^-1.74` → `p^-0.468` (inelastic loss) → `p^-0.095`
   (`⟨ε⟩` eliminated). What survives is a **bracket** — the two cascade limits
   give 0.095 and 0.468 and straddle the measurement — gated by
-  `the_two_cascade_models_bracket_the_measurement`.
+  `the_two_cascade_models_bracket_the_measurement`. Read narrowly: the two
+  variants differ only in where the cascade cuts off (`⟨ε⟩` = 3 eV vs
+  `U_i` = 12.06 eV), so the bracket is a *one-parameter sensitivity*, not two
+  independent limits, and not a bound — `⟨ε⟩` ≈ 5 eV gives `n` = 0.346 on its
+  own, and `⟨ε⟩ = U_i` gives 0.192, inside the interval.
 - **Cascade theory (T&T Eq. 4) — PASSES, and is the apples-to-apples
   reference.** `I_B(CC) = 1.44×10⁶(p_atm² + 2.2×10⁵λ_µm⁻²)` W/cm², implemented
   as `validate::tt2012_cascade_threshold`. Flat at 1064 nm (`n = −0.00002`)
   because `λ⁻²` dominates `p²` by 10⁵ — so the kernel's flatness *agrees* with
   cascade theory. Level: `SelfConsistentClimb` 4.1–5.1× high, `FixedMeanEnergy`
   1.3–3.2×.
+- **Wavelength scaling vs Eq. 4 — PASSES, and is the strongest shape check in
+  M6a.** Both terms of `I_thr` carry `1/h ∝ ω²`, so the kernel predicts
+  `I_thr ∝ λ⁻²`, the same exponent as Eq. 4's dominant term. Over
+  **0.53–10.6 µm** (a 20× span, geometry frozen — legitimate, since the focus is
+  divergence- not diffraction-limited) both give **−2.000**, with the ratio
+  between them constant to `2×10⁻⁵`; the residual is the `(ν_m/ω)²` correction
+  at 10.6 µm. Level offsets are flat at 1.64× (`FixedMeanEnergy`) and 4.22×
+  (`SelfConsistentClimb`). Sharper still: the plateau `L′/h` and Eq. 4's `λ⁻²`
+  coefficient are the *same physical quantity* — `ω²` times the inelastic energy
+  loss per collision — and agree to **1.01×** at the literature centre
+  (`δ_eff` = 0.02, `⟨ε⟩` = 3 eV). This is a shape agreement on an axis where
+  nothing is tunable: `δ_eff·⟨ε⟩` sets the level and cannot produce a `λ`
+  exponent. It does *not* independently discover the scaling (the `λ⁻²` is
+  analytic in the `ν_m ≪ ω` limit) — it establishes that the two theories share
+  it exactly, and fails loudly if that limit is left. Gated by
+  `tt2012_wavelength_scaling_matches_cascade_theory`. **Not a pin:**
+  `δ_eff·⟨ε⟩` stays asserted from its literature range; re-pinning it *from*
+  Eq. 4 would make the level assertions here and in
+  `tt2012_cascade_theory_reference` circular, and both would have to be retired
+  in the same change, leaving only the exponent.
+- **Level vs the measured curve — bounded, drifting, ungated.** The model sits
+  4.84× above the data at 380 Torr and 6.97× at 1896 Torr, inside the ungated
+  3–10× inter-lab scatter. The 1.48× drift is the residual slope error in
+  absolute clothing; an earlier "flat within 1.16×" claim was withdrawn with the
+  artifact that produced it. Converting `E_B` to intensity uses
+  `I = ε₀cE_rms²`, since the `E_eff` ratio establishes `E_B` is an RMS
+  amplitude.
 - **MPI calibrated to the paper's own estimate — implemented, left OFF.**
   Anchoring a rate to their `I_B(MPI) = 4.42×10⁹ W/cm²` collapses the threshold
-  to 5.5×10⁹, 37× below their own measurement. Their number is an
-  order-of-magnitude indicator, not a rate anchor. This first looked
-  like a 2× attachment problem; implementing attachment from measured rate
-  coefficients showed real attachment is ~150× *smaller* than the
-  order-of-magnitude constant it replaced, moving the model from `p^-0.72` to
-  `p^-1.74` — the earlier near-agreement was an artifact of a wrong constant.
-  Since `ν_i ∝ I·p`, a threshold set by a fixed growth requirement gives
-  `I_thr ∝ p^-1` exactly when losses vanish — `n = 1` is the model's **flat
-  floor**, and diffusion only steepens it, so the measured 0.33 lies below what
-  the model can produce. Only a loss growing faster than `p` flattens past it;
-  three-body attachment qualifies but at its measured coefficient that regime
-  starts near 10⁴ Torr, so reaching 0.33 in-window would need `k₃` ≈ 100× the
-  measured value. The defensible route is the cascade coefficient itself
-  falling with pressure (`A ∝ p^-0.67`), as an effective `U_i` growing with
-  collision frequency would produce. That is new physics and is M6a's open
-  question.
-  On level, the model sits above the data by a bounded but drifting amount —
-  4.84× at 380 Torr to 6.97× at 1896 Torr, inside the ungated 3–10× inter-lab
-  scatter. The 1.48× drift is the residual slope error in absolute clothing;
-  an earlier "flat within 1.16×" claim was withdrawn with the artifact that
-  produced it. Converting `E_B` to intensity uses `I = ε₀cE_rms²`, since the
-  `E_eff` ratio establishes `E_B` is an RMS amplitude.
+  to 5.5×10⁹, 37× below their own measurement, and contradicts the paper's own
+  88 %-cascade accounting. Their number is an order-of-magnitude significance
+  indicator (Nelson's flux-density criterion, whose constant the paper never
+  states), not a rate anchor. A real `σ_K` from multiphoton cross-section data
+  is the open item.
+
+Open question M6a hands forward: the measured `n` = 0.329 is unreachable by any
+cascade-only model, since accepted cascade theory is flat at this wavelength.
+Closing it means the MPI contribution the paper itself invokes (12 % at
+760 Torr, dominant below 100 Torr), not a flatter cascade — and separately, a
+distribution-resolved cascade rate, since the default variant's near-flatness
+comes from putting every electron on the mean trajectory (at threshold it runs
+within 0.8 % of the `ε_∞ = U_i` pole at 2000 Torr, where that idealization is
+least defensible).
 
 Full model and constants: `docs/M6A_SPEC.md`.
 
@@ -367,7 +401,9 @@ References:
   621 (1975) — regime map and threshold scaling.
 - A. Thiyagarajan, J. B. Thompson, *Optical breakdown threshold investigation
   of 1064 nm laser induced air plasmas*, J. Appl. Phys. **111**, 073302 (2012)
-  — the threshold-vs-pressure anchor (external gate, pending digitization).
+  — the external anchor: `E_B` and `E_eff` curves digitized into
+  `tests/data/tt2012_*.csv`, focal geometry from their Eq. 5, and the cascade
+  closed form from their Eq. 4.
 
 ## Rendering (not physics)
 

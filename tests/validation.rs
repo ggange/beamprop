@@ -996,9 +996,9 @@ fn tt2012_effective_field_rises_with_pressure() {
 /// the gap stays named) rather than re-banded to pass.
 ///
 /// Measured `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`. The
-/// default `SelfConsistentClimb` kernel gives `p^-0.127`, and sweeping the
+/// default `SelfConsistentClimb` kernel gives `p^-0.095`, and sweeping the
 /// literature range of its one free constant `δ_eff ∈ [0.01, 0.05]` gives
-/// `n ∈ [0.029, 0.299]` — the measurement is **outside** the envelope.
+/// `n ∈ [0.023, 0.231]` — the measurement is **outside** the envelope.
 ///
 /// **What changed, and why it matters more than the number.** The previously
 /// reported `n = 0.356` was propped up by an integration artifact, not by
@@ -1009,19 +1009,24 @@ fn tt2012_effective_field_rises_with_pressure() {
 /// setting most of the threshold. Because the loss is pressure-dependent, it
 /// also manufactured slope. Removing it (seed floored at one electron per focal
 /// volume; `threshold_is_window_independent` now gates window insensitivity)
-/// moved the default model from 0.356 to 0.127.
+/// moved the default model from 0.356 to 0.127, and the later focal-geometry
+/// correction (Λ from T&T's Eq. 5) to its present 0.095.
 ///
 /// So the honest reading of the earlier "8% agreement" is that it was a
 /// coincidence of a bug, and the three-stage narrative it supported
 /// (1.737 → 0.800 → 0.356 as physics was added) is partly void: the corrected
-/// numbers are 1.737 → 0.551 → 0.127.
+/// numbers are 1.737 → 0.468 → 0.095.
 ///
-/// What survives is `the_two_cascade_models_bracket_the_measurement`: the two
-/// limits of the energy balance give 0.127 and 0.551 and the measurement sits
-/// between them. That is the claim M6a can defend — and it is a weaker, more
-/// honest one than a central-value match.
+/// What survives on this axis is `the_two_cascade_models_bracket_the_measurement`
+/// — the two limits give 0.095 and 0.468 and the measurement sits between them —
+/// but read that narrowly: the two differ only in the cascade cutoff energy, so
+/// it is a one-parameter sensitivity rather than two independent limits, and
+/// `⟨ε⟩` ≈ 5 eV reproduces 0.329 on its own. The defensible external agreement
+/// is on the **wavelength** axis instead, where the kernel and Eq. 4 share the
+/// `λ⁻²` exponent exactly — see
+/// `tt2012_wavelength_scaling_matches_cascade_theory`.
 #[test]
-#[ignore = "RED on purpose: measured n=0.329 is outside the default model's literature envelope [0.029, 0.299] (see docs/M6A_SPEC.md)"]
+#[ignore = "RED on purpose: measured n=0.329 is outside the default model's literature envelope [0.023, 0.231] (see docs/M6A_SPEC.md)"]
 fn tt2012_threshold_slope_matches_measurement() {
     let Some(e_b) = load_tt_curve("tt2012_E_B_vs_pressure.csv") else {
         return;
@@ -1133,6 +1138,137 @@ fn tt2012_cascade_theory_reference() {
     }
 }
 
+/// **External gate on the WAVELENGTH axis — the shape check the pressure axis
+/// could not provide.**
+///
+/// Every other M6a gate runs at 1064 nm, where the kernel and T&T's Eq. 4 are
+/// both flat in pressure and the comparison is therefore a level comparison
+/// wearing a shape's clothes. Wavelength is the axis where the two theories
+/// make a non-trivial, *identical* prediction, and where nothing has been
+/// tuned: `δ_eff·⟨ε⟩` sets the plateau's level and cannot produce a `λ`
+/// exponent.
+///
+/// Both terms of the kernel's threshold carry `1/h ∝ ω²`,
+///
+/// ```text
+/// I_thr(p) = L′/h + U_i·(ν_diff + ν_att + G)/(h·p),   h = e²K_m/(m_e c ε₀ ω²)
+/// ```
+///
+/// so the kernel predicts `I_thr ∝ ω² ∝ λ⁻²` with a pressure- and
+/// geometry-independent proportionality — while Eq. 4's dominant term at these
+/// wavelengths is `2.2×10⁵·λ_µm⁻²`. Measured here over **0.53–10.6 µm**, a 20×
+/// span, both give an exponent of −2.000 and the *ratio between them is
+/// constant to 2×10⁻⁵* — the residual being the `(ν_m/ω)²` correction to the
+/// Lorentzian at 10.6 µm, not a modelling difference.
+///
+/// **What this does and does not establish.** The `λ⁻²` is analytic in the
+/// kernel (it is the `ν_m ≪ ω` limit of the IB Lorentzian), so this gate does
+/// not independently *discover* the scaling — it establishes that the kernel
+/// shares Eq. 4's wavelength structure exactly rather than approximately, and
+/// it fails loudly if that limit is ever left: a `ν_m ≳ ω` regime, a
+/// wavelength-dependent geometry, or a photon-count/MPI term leaking into the
+/// cascade path would all break the constant ratio. Against the pressure axis,
+/// where the kernel and the measurement disagree, that is worth having pinned.
+///
+/// The level offsets are recorded, not asserted tightly: `FixedMeanEnergy` runs
+/// a flat 1.64× above Eq. 4 at every wavelength, and its bare plateau `L′/h` at
+/// the literature centre (`δ_eff` = 0.02, `⟨ε⟩` = 3 eV) is **1.01×** Eq. 4's
+/// `λ⁻²` coefficient — the two are the same physical quantity, `ω²` times the
+/// inelastic energy loss per collision. That near-equality is **not a pin**:
+/// `δ_eff·⟨ε⟩` remains asserted from its literature range (see
+/// `docs/M6A_SPEC.md`), and if it were ever re-pinned *from* Eq. 4 then the
+/// level assertions here and in `tt2012_cascade_theory_reference` would become
+/// circular and must be retired, leaving only the exponent.
+#[test]
+fn tt2012_wavelength_scaling_matches_cascade_theory() {
+    use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
+    use beamprop::validate::{loglog_slope, tt2012_cascade_threshold};
+
+    // 0.53–10.6 µm: doubled Nd:YAG through CO₂, spanning the wavelengths the
+    // breakdown literature actually uses. ν_m/ω ≤ 0.022 at 10.6 µm and 1 atm,
+    // so the whole span stays in the ν_m ≪ ω branch the E_eff gate confirms.
+    const LAMBDAS_UM: [f64; 6] = [0.53, 0.694, 1.064, 2.0, 3.0, 10.6];
+    let p = 760.0 * TORR;
+
+    for (model, name, level) in [
+        (CascadeModel::FixedMeanEnergy, "FixedMeanEnergy", 1.64),
+        (
+            CascadeModel::SelfConsistentClimb,
+            "SelfConsistentClimb",
+            4.22,
+        ),
+    ] {
+        let mut kernel = Vec::new();
+        let mut theory = Vec::new();
+        let mut ratios = Vec::new();
+        for lambda_um in LAMBDAS_UM {
+            let lambda = lambda_um * 1e-6;
+            let m = AirBreakdown::dry_air_tt2012_focus(lambda)
+                .expect("geometry")
+                .with_cascade_model(model);
+            let mine = m.threshold_intensity(6e-9, p, 400).expect("threshold");
+            let eq4 = tt2012_cascade_threshold(p, lambda);
+            kernel.push((lambda, mine));
+            theory.push((lambda, eq4));
+            ratios.push(mine / eq4);
+        }
+
+        // The shape claim: both exponents are −2, observed to 4 digits.
+        let n_kernel = loglog_slope(&kernel).expect("kernel λ slope");
+        let n_theory = loglog_slope(&theory).expect("theory λ slope");
+        // Tolerances are ~10× the observed residual, which is the (ν_m/ω)²
+        // correction to the Lorentzian at 10.6 µm (exponent −1.999848, drift
+        // 1.000017). Loose enough to survive a change to K_m, tight enough that
+        // a real structural regression cannot hide. Calibrated against a
+        // negative control — swapping this geometry for a diffraction-limited
+        // one (Λ, V ∝ λ) gives exponent −2.0077 and drift 1.0237, so it fails
+        // the drift bound by 24× and the exponent bound by 1.5×. A 0.02
+        // exponent tolerance would have let that pass, which is why the drift
+        // assertion below carries the real weight.
+        assert!(
+            (n_kernel + 2.0).abs() < 0.005,
+            "{name} λ exponent {n_kernel:+.4}, expected −2.000 (I_thr ∝ ω², \
+             the ν_m ≪ ω limit of the IB Lorentzian)"
+        );
+        assert!(
+            (n_theory + 2.0).abs() < 0.005,
+            "T&T Eq. 4 λ exponent {n_theory:+.4}, expected −2.000; the p² term \
+             should be negligible against 2.2e5·λ_µm⁻² here"
+        );
+
+        // The sharper statement: not just equal exponents but a CONSTANT ratio
+        // across 20× in λ. An exponent match alone tolerates a slow drift.
+        let lo = ratios.iter().cloned().fold(f64::MAX, f64::min);
+        let hi = ratios.iter().cloned().fold(0.0f64, f64::max);
+        assert!(
+            hi / lo < 1.001,
+            "{name}/Eq.4 ratio drifts across λ: {lo:.4}×–{hi:.4}× over \
+             {LAMBDAS_UM:?} µm — the two no longer share a wavelength structure"
+        );
+        // Level recorded as a loose regression pin, consistent with the project
+        // rule that absolute threshold level is not gated.
+        assert!(
+            (0.8 * level..=1.2 * level).contains(&lo),
+            "{name} level vs Eq. 4 moved: {lo:.2}×, expected ≈{level}×"
+        );
+    }
+
+    // The plateau `L′/h` is the same physical quantity as Eq. 4's λ⁻² term:
+    // ω² times the inelastic energy loss per collision. At the literature
+    // centre they agree to ~1%. Recorded because it is the branch's sharpest
+    // physical result; NOT used to pin δ_eff·⟨ε⟩ (see the doc comment).
+    let m = AirBreakdown::air_1064nm().with_cascade_model(CascadeModel::FixedMeanEnergy);
+    // Pressure-independent by construction (both powers ∝ p), so any p serves.
+    let plateau = m.inelastic_loss_power(p) / m.heating_power(1.0, p);
+    let eq4_1064 = tt2012_cascade_threshold(p, 1064e-9);
+    let ratio = plateau / eq4_1064;
+    assert!(
+        (0.9..=1.15).contains(&ratio),
+        "plateau L′/h = {plateau:.4e} W/m² is {ratio:.3}× T&T Eq. 4's λ⁻² term \
+         ({eq4_1064:.4e}); expected ≈1.01× at δ_eff = 0.02, ⟨ε⟩ = 3 eV"
+    );
+}
+
 /// **External check on the level, and on the unit convention behind it.**
 ///
 /// Converting T&T's `E_B` to intensity needs the RMS form `I = ε₀·c·E_rms²`;
@@ -1189,7 +1325,7 @@ fn tt2012_level_ratio_is_bounded_within_scatter() {
     let hi = ratios.iter().map(|r| r.1).fold(0.0f64, f64::max);
 
     // Regression pin on the drift. Not a flatness claim: the 1.48× spread is
-    // the model's residual slope error (n = 0.127 vs measured 0.329) expressed
+    // the model's residual slope error (n = 0.095 vs measured 0.329) expressed
     // in level terms, and shrinking it means fixing the slope, not the level.
     assert!(
         (1.3..=1.7).contains(&(hi / lo)),

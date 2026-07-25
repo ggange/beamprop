@@ -48,11 +48,20 @@
 //! accepted cascade theory says `n ≈ 0`. That gate
 //! (`tt2012_threshold_slope_matches_measurement`) is red on purpose.
 //!
-//! The bracket survives every correction so far: `n = 0.095` here and `0.468`
-//! for the fixed-`⟨ε⟩` limit, straddling 0.329. It has now held through the
-//! seed-window fix (0.356 → 0.127) and the focal-geometry fix (→ 0.095), which
-//! is the main reason to trust it over either endpoint. Analysis in
-//! `docs/M6A_SPEC.md`; external gates in `tests/validation.rs`.
+//! On the **wavelength** axis the agreement is structural rather than a level
+//! comparison: both terms of `I_thr` carry `1/h ∝ ω²`, so the kernel predicts
+//! `I_thr ∝ λ⁻²` — the same exponent as Eq. 4's dominant term, matched to
+//! −2.000 with a ratio constant to 2×10⁻⁵ over 0.53–10.6 µm
+//! (`tt2012_wavelength_scaling_matches_cascade_theory`). The plateau `L′/h` and
+//! Eq. 4's `λ⁻²` coefficient are the same physical quantity — `ω²` times the
+//! inelastic energy loss per collision — and agree to 1 % at the literature
+//! centre. That is the branch's sharpest physical result.
+//!
+//! The pressure-slope **bracket** (`n = 0.095` here, `0.468` for the
+//! fixed-`⟨ε⟩` limit, straddling 0.329) is a weaker claim than it looks: the
+//! two variants differ only in the cascade cutoff energy, so it is a
+//! one-parameter sensitivity, not two independent limits. See [`CascadeModel`].
+//! Analysis in `docs/M6A_SPEC.md`; external gates in `tests/validation.rs`.
 
 use std::f64::consts::PI;
 
@@ -84,17 +93,30 @@ const I_BRACKET_HI: f64 = 1e22;
 /// How the inelastic energy loss enters the cascade rate.
 ///
 /// The two variants are the parameter-light limits of the same energy balance,
-/// and they **bracket** the measured threshold slope: 0.551 and 0.127 against
-/// T&T's 0.329. Neither reproduces it; the bracket is the claim. See
-/// `docs/M6A_SPEC.md`.
+/// and they **bracket** the measured threshold slope: 0.468 and 0.095 against
+/// T&T's 0.329. Neither reproduces it.
+///
+/// Read the bracket narrowly. The two differ only in **where the cascade cuts
+/// off** — [`Self::FixedMeanEnergy`] at `ε_∞ = ⟨ε⟩ = 3 eV`,
+/// [`Self::SelfConsistentClimb`] at `ε_∞ = U_i = 12.06 eV` — so sweeping that
+/// one energy walks continuously between them (`⟨ε⟩` = 5 eV gives `n` = 0.346,
+/// straddling the measurement all by itself). It is therefore a *one-parameter
+/// sensitivity*, not two independent physical limits, and not a bound: fixed
+/// `⟨ε⟩` at `U_i` gives 0.192, inside the interval. See `docs/M6A_SPEC.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CascadeModel {
     /// Loss evaluated at a fixed mean electron energy `⟨ε⟩`:
     /// `ν_i = max(0, heating − δ_eff·ν_m·⟨ε⟩)/U_i`.
     ///
     /// `⟨ε⟩` is a free constant, literature-bounded to ≈2–5 eV. Retained as
-    /// the steeper end of the bracket (`n = 0.551`) and for the unit tests that
+    /// the steeper end of the bracket (`n = 0.468`) and for the unit tests that
     /// need a cascade rate linear in intensity; not the default.
+    ///
+    /// Two properties argue for it despite that free constant. Its plateau
+    /// `L′/h` at the literature centre is **1.01×** T&T Eq. 4's `λ⁻²`
+    /// coefficient (`tt2012_wavelength_scaling_matches_cascade_theory`), and at
+    /// threshold it runs at `ε_∞` = 3.7–9.3 eV — comfortably above its own
+    /// cutoff, unlike the default.
     FixedMeanEnergy,
     /// `⟨ε⟩` eliminated by solving the climb exactly.
     ///
@@ -109,8 +131,8 @@ pub enum CascadeModel {
     ///
     /// No free `⟨ε⟩` at all, and still exactly `∝ p` (the scaling the external
     /// `E_eff` gate confirms). **The default**, chosen for parameter parsimony
-    /// — *not* for agreement: it gives `n = 0.127` against a measured 0.329,
-    /// which is the flatter side of the bracket and misses by 2.6×.
+    /// — *not* for agreement: it gives `n = 0.095` against a measured 0.329,
+    /// which is the flatter side of the bracket and misses by 3.5×.
     ///
     /// Its idealization is the flip side of its parsimony, and it is the likely
     /// reason it is too flat: putting every electron on the *mean* trajectory
@@ -118,6 +140,14 @@ pub enum CascadeModel {
     /// time diverges logarithmically. A real energy distribution has a tail
     /// that ionizes earlier, which would soften the plateau and steepen the
     /// slope back toward the data. That is the open question M6a hands forward.
+    ///
+    /// **It is also evaluated close to that divergence.** At threshold `ε_∞` is
+    /// 14.95 eV at 300 Torr, 12.49 at 760 and 12.16 at 2000 — the last within
+    /// 0.8 % of `U_i`, i.e. the threshold there is set by a logarithm a hair
+    /// from its pole, which is exactly where a single-mean-energy treatment is
+    /// least defensible. Its near-flatness is substantially an artifact of that
+    /// near-hard cutoff, and the parsimony argument for this default should be
+    /// read against it. Nothing currently gates that margin.
     SelfConsistentClimb,
 }
 
@@ -263,12 +293,28 @@ impl AirBreakdown {
     /// the focus as a *sphere* with `Λ = r₀/π = 6.37 µm`, which overstated
     /// `ν_diff` by 1.48×.
     pub fn air_1064nm() -> Self {
+        // Unwrap: 1064 nm is a known-good literal.
+        Self::dry_air_tt2012_focus(1064e-9).unwrap()
+    }
+
+    /// Dry air in T&T's focal geometry at an arbitrary wavelength.
+    ///
+    /// The geometry is deliberately held **fixed** as `wavelength` varies, and
+    /// that is physical here rather than a convenience: T&T's focus is
+    /// *divergence*-limited (`r₀ = f·α/2`, `l₀ = 0.414·(α/d)·f²`), so both the
+    /// spot and the depth of focus are set by the beam's 1 mrad divergence and
+    /// the `f` = 4 cm lens — not by diffraction. `Λ` and the focal volume are
+    /// therefore wavelength-independent, and the only `λ`-dependence left in
+    /// the threshold is the one the rate model puts there.
+    ///
+    /// That is what makes `tt2012_wavelength_scaling_matches_cascade_theory`
+    /// meaningful: it varies `λ` over 20× with every other input frozen.
+    pub fn dry_air_tt2012_focus(wavelength: f64) -> Result<Self> {
         let r_focus = 20e-6_f64; // f·α/2, f = 4 cm, α = 1 mrad
         let l_axial = 0.414 * (1e-3 / 1e-2) * 0.04_f64.powi(2); // = 66.2 µm
         let lambda_diff = 1.0 / ((PI / l_axial).powi(2) + (2.405 / r_focus).powi(2)).sqrt();
         let focal_volume = PI * r_focus * r_focus * l_axial;
-        // Unwrap: all arguments are known-good constants.
-        Self::new(1064e-9, 12.06, lambda_diff, 288.0, focal_volume).unwrap()
+        Self::new(wavelength, 12.06, lambda_diff, 288.0, focal_volume)
     }
 
     /// Rebuild with a different inelastic-loss parameterisation, from the two
@@ -411,13 +457,18 @@ impl AirBreakdown {
     /// Total loss frequency `ν_att + ν_diff` (s⁻¹).
     ///
     /// Attachment has two channels, both from measured rate coefficients:
-    /// dissociative `k₂·n_O₂ ∝ p` and three-body `k₃·n_O₂·n ∝ p²`, the latter
-    /// dominant at atmospheric density. Diffusion goes as `1/p` (free-electron
-    /// `D_e ∝ 1/p` over the fixed diffusion length `Λ`).
+    /// dissociative `k₂·n_O₂ ∝ p` and three-body `k₃·n_O₂·n ∝ p²`. Diffusion
+    /// goes as `1/p` (free-electron `D_e ∝ 1/p` over the fixed diffusion
+    /// length `Λ`).
     ///
-    /// At 760 Torr the balance is attachment 6.7e7, diffusion 4.9e9 — i.e.
+    /// At 760 Torr the balance is attachment 6.7e7, diffusion 3.3e9 — i.e.
     /// **attachment is negligible here**, and the threshold is set by diffusion
     /// and by the finite-pulse growth requirement.
+    ///
+    /// Within attachment the *two-body* channel leads at this density (5.4e7
+    /// against 1.4e7); three-body overtakes it only above `n = k₂/k₃ = 10²⁶
+    /// m⁻³`, about 4 atm. Since three-body is the `∝ p²` channel, that
+    /// crossover is what puts the model's positive-slope branch near 10⁴ Torr.
     ///
     /// Like the other rate methods this is a bare pure function and assumes
     /// `pressure > 0`; `p = 0` gives an infinite diffusion loss and `p < 0` a
@@ -973,7 +1024,7 @@ mod tests {
         //     I_thr(p) = [ν_att(p) + ν_diff(p) + G] / (A·p),   A ≡ ν_i/(I·p)
         //
         // With attachment from measured rate coefficients it is negligible here
-        // (6.7e7 vs 4.9e9 for diffusion at 760 Torr), leaving two terms whose
+        // (6.7e7 vs 3.3e9 for diffusion at 760 Torr), leaving two terms whose
         // exponents are exact:
         //
         //   * growth-limited, losses → 0 : I_thr = G/(A·p)        ∝ p^-1
@@ -983,8 +1034,8 @@ mod tests {
         // Those two bracketed the model to n ∈ [1, 2] BEFORE the inelastic-loss
         // term existed (observed then: n = 1.737). The term adds a third,
         // pressure-independent contribution — a genuine plateau — which drags
-        // the slope below that old floor, to n = 0.356 with the default
-        // SelfConsistentClimb (0.800 with FixedMeanEnergy). So this test now
+        // the slope below that old floor, to n = 0.095 with the default
+        // SelfConsistentClimb (0.468 with FixedMeanEnergy). So this test now
         // gates the *combined* form:
         //
         //     I_thr(p) = L′/h + U_i·(ν_diff + ν_att + G)/(h·p)
@@ -1037,8 +1088,16 @@ mod tests {
             nu_att < 0.05 * nu_diff,
             "attachment {nu_att:e} is not negligible against diffusion {nu_diff:e}"
         );
-        // Three-body is the dominant attachment channel at atmospheric density.
-        assert!(m.k_att_3body * n_o2 * n > 0.1 * m.k_att_2body * n_o2);
+        // Both channels are kept because both matter at this density, but the
+        // *two-body* one leads here — 5.4e7 against 1.4e7. Three-body overtakes
+        // it only above n = k₂/k₃ = 1e26 m⁻³ (≈4 atm), which is why the model's
+        // ∝ p² branch, and with it the positive-slope regime, sits near 1e4
+        // Torr rather than in the gate window. (An earlier comment here claimed
+        // three-body was dominant at 1 atm; it is not, and nothing was gated on
+        // it — this assertion only ever demanded it be non-negligible.)
+        let two_body = m.k_att_2body * n_o2;
+        let three_body = m.k_att_3body * n_o2 * n;
+        assert!(three_body > 0.1 * two_body && three_body < two_body);
     }
 
     #[test]
@@ -1091,7 +1150,8 @@ mod tests {
         //
         // Worse, that decay is pressure-dependent, so it manufactured SLOPE:
         // removing it moved the default model from n = 0.356 to n = 0.127
-        // against a measured 0.329. The external slope gate had been green on
+        // against a measured 0.329 (and the later focal-geometry correction took
+        // it to its present 0.095). The external slope gate had been green on
         // the strength of a bookkeeping artifact.
         let base = model();
         let at = |w: f64| {
