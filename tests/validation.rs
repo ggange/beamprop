@@ -1916,10 +1916,21 @@ fn lsd_front_speed_is_seed_independent() {
 /// `−8.26 %`, `−2.66 %`, `−0.43 %`, `+0.19 %` — monotone, each halving taking
 /// at least a factor 2.3 off the error (3.1×, 6.2×, 2.3×).
 ///
-/// The sign is the physically expected one: a thick deposition zone releases
-/// part of the beam energy behind the sonic plane, where it can no longer
-/// support the front, so the wave runs **slow**. It reaches the CJ speed only
-/// in the thin-layer limit the closed form is written in.
+/// **What the residual actually is: a relaxation transient, not a steady-state
+/// thick-layer effect.** Held at `1/α = 400 µm` and given progressively longer
+/// to settle (0.15 → 0.30 → 0.50 of the domain), it runs
+/// `−8.3 % → −3.7 % → −1.5 %` and shows no sign of plateauing. A thicker
+/// deposition zone relaxes onto the self-sustaining speed more slowly, so at a
+/// fixed settle it sits further from it; given long enough, every layer
+/// thickness reaches the same CJ speed.
+///
+/// That is the textbook result, and it is worth stating plainly because an
+/// earlier version of this comment claimed the opposite — that a thick zone
+/// releases energy behind the sonic plane where it cannot support the front,
+/// implying a permanent deficit. A Chapman–Jouguet velocity depends on the
+/// *total* heat release and not on the reaction-zone length, so that
+/// explanation contradicted the theory the gate is checking against. The
+/// measurement above is what settled it.
 #[test]
 fn lsd_front_speed_converges_as_the_absorption_layer_thins() {
     let gas = IdealGas::AIR;
@@ -1980,4 +1991,197 @@ fn lsd_energy_budget_closes() {
             column.deposited_energy()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// M6c gate G4 — the parameter-free scaling exponent (docs/M6C_SPEC.md, step 5).
+//
+// THE PHYSICS GATE. Everything above it is verification: G1/G2/G2b/G3/G3b/G3c
+// establish that the code solves the equations it was given, and G3 in
+// particular is checked against a closed form the model is *derived from*, so
+// it cannot speak to whether the model describes the world.
+//
+// This one can. Every quantity uncertain about the absolute LEVEL of D --
+// gamma_eff, the absorbed fraction, radial relief, radiation losses, the Gaunt
+// factor -- enters the closed form as a coefficient, and no coefficient can
+// produce a 1/3 exponent. The exponent is what the model genuinely predicts
+// independently of the coefficient soup, and it is the quantity measured LSD
+// velocities are reported to follow. A gate on the exponent is a statement
+// about the world; a gate on the level would be a statement about the soup.
+// That is the M6a "D5" lesson applied.
+// ---------------------------------------------------------------------------
+
+/// Domain and resolution for the sweeps: `1/α = 50 µm` spans 5 cells at
+/// `dx = 10 µm` and is 1/600 of the domain, comfortably inside `check_regime`.
+const G4_LENGTH: f64 = 3e-2;
+const G4_CELLS: usize = 3_000;
+const G4_ALPHA: f64 = 2e4;
+/// Ignition threshold as a multiple of the **ambient** specific internal
+/// energy, rather than the fixed 2 MJ/kg G3 uses.
+///
+/// G3 sits at one point where a fixed threshold is 9.7× ambient against a
+/// post-shock state 85× ambient — an 8.8× margin, so the threshold plainly is
+/// not what lights the front. The sweeps drive that margin down: at `γ = 1.2`
+/// and `ρ₀ = 12.25` the post-shock state is only 11× ambient, and a 10×
+/// threshold there stops merely *enabling* the front and starts *controlling*
+/// it. That failure is visible rather than subtle — the fitted density
+/// exponent goes to −0.459 — which is the check working.
+///
+/// At 5× the margin is restored everywhere. The evidence that the threshold is
+/// no longer in the loop is that 3× and 5× give exponents agreeing to better
+/// than 1e-3.
+const G4_E_IGNITE_MULTIPLE: f64 = 5.0;
+/// Settle and measurement windows as **distances** (fractions of the domain),
+/// converted to times via the expected speed. A slower wave therefore gets
+/// proportionally longer to relax, which is what keeps the sweep uniform —
+/// a fixed settle *time* would leave the slow end of each sweep less converged
+/// than the fast end and bias the exponent.
+const G4_SETTLE_FRACTION: f64 = 0.30;
+const G4_WINDOW_FRACTION: f64 = 0.08;
+/// 1.52 decades — the spec asks for at least one.
+const G4_INTENSITIES: [f64; 4] = [3e10, 1e11, 3e11, 1e12];
+/// 1.50 decades about `LSD_AMBIENT.rho`.
+const G4_DENSITIES: [f64; 4] = [0.3875, 1.225, 3.875, 12.25];
+
+/// Front speed (m/s) and the closed form it is being compared to, for one
+/// point of a sweep.
+fn g4_front_speed(gamma: f64, s: f64, rho_0: f64, p_0: f64) -> (f64, f64) {
+    let gas = IdealGas { gamma };
+    let ambient = Primitive {
+        rho: rho_0,
+        u: 0.0,
+        p: p_0,
+    };
+    let d_cj = raizer_lsd_velocity(&gas, s, rho_0);
+    let mut column = LsdColumn::seeded(
+        gas,
+        G4_CELLS,
+        G4_LENGTH,
+        ambient,
+        SeededIgnition {
+            centre: 0.75 * G4_LENGTH,
+            width: 6e-4,
+            pressure: LSD_SEED_MULTIPLE * rho_0 * d_cj * d_cj / (gamma + 1.0),
+        },
+        Absorption::GreyThreshold {
+            alpha: G4_ALPHA,
+            e_ignite: G4_E_IGNITE_MULTIPLE * gas.specific_internal_energy(rho_0, p_0),
+        },
+        s,
+    )
+    .expect("G4 setup");
+    column
+        .advance_to(G4_SETTLE_FRACTION * G4_LENGTH / d_cj)
+        .expect("settle");
+    let d = column
+        .measure_front_speed(G4_WINDOW_FRACTION * G4_LENGTH / d_cj)
+        .expect("front speed");
+    assert!(
+        column.boundaries_undisturbed(),
+        "γ = {gamma}, S = {s:.2e}, ρ₀ = {rho_0}: the wave reached a boundary"
+    );
+    (d, d_cj)
+}
+
+/// Least-squares slope of `ln y` against `ln x` — the fitted power-law exponent.
+fn log_log_slope(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len() as f64;
+    let lx: Vec<f64> = x.iter().map(|v| v.ln()).collect();
+    let ly: Vec<f64> = y.iter().map(|v| v.ln()).collect();
+    let mx = lx.iter().sum::<f64>() / n;
+    let my = ly.iter().sum::<f64>() / n;
+    let cov: f64 = lx.iter().zip(&ly).map(|(a, b)| (a - mx) * (b - my)).sum();
+    let var: f64 = lx.iter().map(|a| (a - mx).powi(2)).sum();
+    cov / var
+}
+
+/// **G4 — the parameter-free one-third scaling (THE PHYSICS GATE).**
+///
+/// `D ∝ S^(1/3)` over 1.52 decades of absorbed intensity and `D ∝ ρ₀^(−1/3)`
+/// over 1.50 decades of ambient density, with the fitted exponents inside
+/// `±0.01` of `±1/3`.
+///
+/// Measured at `γ = 1.4`: **+0.33190** and **−0.33020**. Individual points sit
+/// within 1.2 % of Raizer, and the small drift in that residual across each
+/// sweep is what moves the fitted exponent off `1/3` in the fourth decimal.
+///
+/// **The EOS-independence leg.** The spec asks for the exponent to be shown
+/// EOS-independent, on the reasoning that the exponent is what the model
+/// predicts while the level is coefficient soup. The table EOS is not wired
+/// into the hydro (that is the spec's "production mode", not landed), so the
+/// available demonstration is to move `γ`, which is the coefficient in question:
+/// `2(γ²−1)` runs 0.88 → 3.56 from `γ = 1.2` to `5/3`, shifting the level of
+/// `D` by a factor 1.59. Across that range the fitted exponents move by
+/// `0.001` and `0.002`:
+///
+/// | γ | 2(γ²−1) | D at S = 10¹¹ | S exponent | ρ₀ exponent |
+/// |---|---|---|---|---|
+/// | 1.2 | 0.88 | 4169 m/s | +0.33127 | −0.32895 |
+/// | 1.3 | 1.38 | 4842 m/s | +0.33176 | −0.32977 |
+/// | 1.4 | 1.92 | 5400 m/s | +0.33190 | −0.33020 |
+/// | 5/3 | 3.56 | 6632 m/s | +0.33213 | −0.33096 |
+///
+/// That is the D5 argument made as a measurement rather than an assertion: the
+/// level moves 59 %, the exponent does not move at all. It is **not** a
+/// demonstration that a *real* equilibrium EOS leaves the exponent alone —
+/// `γ_eff` varying with local state is not the same as a different constant
+/// `γ` — and this gate does not claim it is. The gate runs `γ = 1.4` and
+/// `γ = 1.2`; the wider table above is recorded from the same sweep run out of
+/// band.
+#[test]
+fn lsd_velocity_follows_the_parameter_free_one_third_scaling() {
+    const THIRD: f64 = 1.0 / 3.0;
+    const TOLERANCE: f64 = 0.01;
+
+    for gamma in [1.4, 1.2] {
+        // D ∝ S^(1/3) at fixed ambient.
+        let speeds: Vec<f64> = G4_INTENSITIES
+            .iter()
+            .map(|&s| g4_front_speed(gamma, s, LSD_AMBIENT.rho, LSD_AMBIENT.p).0)
+            .collect();
+        let n = log_log_slope(&G4_INTENSITIES, &speeds);
+        assert!(
+            (n - THIRD).abs() < TOLERANCE,
+            "γ = {gamma}: D ∝ S^{n:.5}, off 1/3 by {:.5}. Speeds {speeds:?}",
+            n - THIRD
+        );
+
+        // D ∝ ρ₀^(−1/3). The ambient temperature is held fixed (p₀ scaled with
+        // ρ₀), so the ambient internal energy and sound speed do not move and
+        // the ignition threshold keeps the same meaning across the sweep.
+        let speeds: Vec<f64> = G4_DENSITIES
+            .iter()
+            .map(|&rho_0| {
+                let p_0 = LSD_AMBIENT.p * rho_0 / LSD_AMBIENT.rho;
+                g4_front_speed(gamma, LSD_INTENSITY, rho_0, p_0).0
+            })
+            .collect();
+        let m = log_log_slope(&G4_DENSITIES, &speeds);
+        assert!(
+            (m + THIRD).abs() < TOLERANCE,
+            "γ = {gamma}: D ∝ ρ₀^{m:.5}, off −1/3 by {:.5}. Speeds {speeds:?}",
+            m + THIRD
+        );
+    }
+}
+
+/// The exponent is what M6c predicts; the **level** is the coefficient soup,
+/// and this pins that distinction rather than leaving it as prose.
+///
+/// Moving `γ` from 1.4 to 1.2 changes `2(γ²−1)` from 1.92 to 0.88, which the
+/// closed form says must scale `D` by `(0.88/1.92)^(1/3) = 0.772`. Measured:
+/// 4169.9 / 5400.3 = **0.7722**. So the solver tracks the coefficient exactly
+/// where the coefficient is knowable — which is precisely why agreement on the
+/// level cannot be evidence that the *physics* is right, and why G7 is
+/// documented-but-ungated.
+#[test]
+fn lsd_velocity_level_tracks_the_eos_coefficient() {
+    let (d_14, r_14) = g4_front_speed(1.4, LSD_INTENSITY, LSD_AMBIENT.rho, LSD_AMBIENT.p);
+    let (d_12, r_12) = g4_front_speed(1.2, LSD_INTENSITY, LSD_AMBIENT.rho, LSD_AMBIENT.p);
+    let predicted = r_12 / r_14;
+    let measured = d_12 / d_14;
+    assert!(
+        (measured / predicted - 1.0).abs() < 0.01,
+        "level ratio {measured:.4} vs the closed form's {predicted:.4}"
+    );
 }

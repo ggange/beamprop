@@ -622,11 +622,17 @@ Gates (`tests/validation.rs`):
 - **G3b** (`lsd_front_speed_converges_as_the_absorption_layer_thins`) — the
   refinement that actually bites. Over `1/α = 400 → 200 → 100 → 50 µm` at
   `dx = 10 µm` the residual runs **−8.26 % → −2.66 % → −0.43 % → +0.19 %**,
-  monotone, each halving taking at least 2.3× off the error. The sign is the
-  expected one: a thick deposition zone releases part of the beam energy behind
-  the sonic plane, where it can no longer support the front, so the wave runs
-  slow — it reaches the CJ speed only in the thin-layer limit the closed form
-  assumes.
+  monotone, each halving taking at least 2.3× off the error.
+
+  The residual is a **relaxation transient**, not a permanent thick-layer
+  deficit: held at `1/α = 400 µm` and given longer to settle (0.15 → 0.30 → 0.50
+  of the domain) it runs `−8.3 % → −3.7 % → −1.5 %` and does not plateau. A
+  thicker deposition zone relaxes onto the self-sustaining speed more slowly, so
+  at a fixed settle it sits further from it; given long enough they all reach the
+  same CJ speed. That is the textbook result — a CJ velocity depends on total
+  heat release, not reaction-zone length — and it is worth stating because an
+  earlier version of this entry claimed a steady-state deficit instead, which
+  contradicted the theory the gate checks against.
 - **G3c** (`lsd_front_speed_is_seed_independent`) — the answer must not depend
   on how the wave was lit. A seeded detonation starts overdriven and relaxes
   onto the CJ speed slowly, and G3's 1 % tolerance is the same order as that
@@ -656,11 +662,55 @@ Gates (`tests/validation.rs`):
   ambient gas at both, `(E + p)u` vanishes identically, and
   `boundaries_undisturbed` asserts that premise rather than assuming it.
 
-Not yet gated: **G4**, the parameter-free `D ∝ S^(1/3)`, `ρ₀^(−1/3)` scaling,
-which is the gate that carries the milestone's *physics* claim; and **G7**,
-absolute velocity against measurement, which is expected to land high and is
-documented-but-ungated because a planar 1-D solver has no radial relief. See
-`docs/M6C_SPEC.md`.
+- **G4** (`lsd_velocity_follows_the_parameter_free_one_third_scaling`) — **THE
+  PHYSICS GATE.** `D ∝ S^(1/3)` over 1.52 decades of absorbed intensity and
+  `D ∝ ρ₀^(−1/3)` over 1.50 decades of ambient density, exponents gated inside
+  `±0.01`. Measured at `γ = 1.4`: **+0.33190** and **−0.33020**.
+
+  Everything above this line is verification — it establishes that the code
+  solves the equations it was given, and G3 in particular is checked against a
+  closed form the model is *derived from*. This gate is different in kind. Every
+  quantity uncertain about the *level* of `D` — `γ_eff`, the absorbed fraction,
+  radial relief, radiation losses, the Gaunt factor — enters as a coefficient,
+  and no coefficient can produce a `1/3` exponent. The exponent is what the
+  model predicts independently of the coefficient soup, and it is what measured
+  LSD velocities are reported to follow.
+
+  The EOS-independence leg is done by moving `γ`, since the table EOS is not
+  wired into the hydro. `2(γ²−1)` runs 0.88 → 3.56 from `γ = 1.2` to `5/3`,
+  shifting the level of `D` by 1.59×, while the fitted exponents move by 0.001
+  and 0.002:
+
+  | γ | 2(γ²−1) | D at S = 10¹¹ | S exponent | ρ₀ exponent |
+  |---|---|---|---|---|
+  | 1.2 | 0.88 | 4169 m/s | +0.33127 | −0.32895 |
+  | 1.3 | 1.38 | 4842 m/s | +0.33176 | −0.32977 |
+  | 1.4 | 1.92 | 5400 m/s | +0.33190 | −0.33020 |
+  | 5/3 | 3.56 | 6632 m/s | +0.33213 | −0.33096 |
+
+  This is **not** a demonstration that a real equilibrium EOS leaves the exponent
+  alone — a `γ_eff` varying with local state is not a different constant `γ` —
+  and the gate does not claim it is.
+
+  The density sweep holds ambient **temperature** fixed (`p₀ ∝ ρ₀`), not
+  pressure: at fixed `p₀` a decade of `ρ₀` moves the ambient internal energy by
+  a decade, and at the thin end the undisturbed gas would cross the ignition
+  threshold and the whole column would absorb. The threshold itself is 5×
+  ambient `e₀`, not G3's fixed 2 MJ/kg — at the sweep corner (`γ = 1.2`,
+  `ρ₀ = 12.25`) the post-shock state is only 11× ambient, so a 10× threshold
+  there starts *controlling* the front rather than enabling it and drives the
+  fitted exponent to −0.459. That the exponents agree to 1e-3 between 3× and 5×
+  thresholds is the evidence the threshold is out of the loop.
+- **`lsd_velocity_level_tracks_the_eos_coefficient`** — the counterpart to G4,
+  pinning what the *level* is worth. Moving `γ` 1.4 → 1.2 must scale `D` by
+  `(0.88/1.92)^(1/3) = 0.772`; measured **0.7722**. The solver tracks the
+  coefficient exactly where the coefficient is knowable, which is the sharpest
+  statement of why agreement on the level would not be evidence about the
+  physics.
+
+Not yet gated: **G7**, absolute velocity against measurement, which is expected
+to land high and is documented-but-ungated because a planar 1-D solver has no
+radial relief. See `docs/M6C_SPEC.md`.
 
 References:
 - E. F. Toro, *Riemann Solvers and Numerical Methods for Fluid Dynamics*,

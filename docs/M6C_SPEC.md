@@ -304,10 +304,19 @@ Halving `1/α` from 400 µm to 50 µm walks the residual
 `−8.3 % → −2.7 % → −0.4 % → +0.19 %`, monotonically and by at least 2.3× per
 halving.
 
-The sign is the expected one and worth recording: a thick deposition zone
-releases part of the beam energy *behind the sonic plane*, where it can no
-longer support the front, so the wave runs slow. It reaches the CJ speed only in
-the thin-layer limit the closed form is written in. So G3 gates three things —
+**Corrected during the step-5 review: the residual is a relaxation transient,
+not a permanent thick-layer deficit.** This section first explained the sign by
+saying a thick deposition zone releases energy *behind the sonic plane* where it
+cannot support the front — implying a steady-state deficit. That contradicts the
+theory the gate checks against: a Chapman–Jouguet velocity depends on the total
+heat release, not on the reaction-zone length. Measurement agrees with the
+theory, not with the explanation. Held at `1/α = 400 µm` and given longer to
+settle (0.15 → 0.30 → 0.50 of the domain), the residual runs
+`−8.3 % → −3.7 % → −1.5 %` with no sign of plateauing. A thicker deposition zone
+relaxes onto the self-sustaining speed *more slowly*; at a fixed settle it sits
+further from it; given long enough they all arrive at the same CJ speed. G3b is
+therefore a statement about convergence at a fixed settle, which is what it
+measures and now what it says. So G3 gates three things —
 the level at a thin layer, grid-convergence at fixed `1/α` (which shows the
 residual is physical), and convergence in `1/α` (which is the assumption
 actually being relaxed). Gating grid refinement alone would have been gating the
@@ -355,6 +364,48 @@ statement about the world; a gate on the level would be a statement about the
 coefficient soup.
 
 Run in both EOS modes; the exponent must be EOS-independent (that is the point).
+
+**Landed (step 5).** `lsd_velocity_follows_the_parameter_free_one_third_scaling`,
+over 1.52 decades of `S` and 1.50 decades of `ρ₀`, exponents gated inside
+`±0.01`. Measured at `γ = 1.4`: **+0.33190** and **−0.33020**.
+
+Three amendments this step owes the reader.
+
+1. **The EOS-independence leg is done by moving `γ`, not by running the table
+   EOS.** The table EOS is not wired into the hydro — that is this document's
+   "production mode", and it is not landed — so the honest available
+   demonstration is to vary the coefficient directly. `2(γ²−1)` runs 0.88 → 3.56
+   from `γ = 1.2` to `5/3`, moving the *level* of `D` by a factor 1.59, while
+   the fitted exponents move by 0.001 (`S`) and 0.002 (`ρ₀`). That is the D5
+   argument as a measurement rather than an assertion. It is **not** a
+   demonstration that a real equilibrium EOS leaves the exponent alone: a
+   `γ_eff` that varies with local state is not the same thing as a different
+   constant `γ`, and the gate does not claim it is. Closing that properly needs
+   the production EOS.
+
+2. **The density sweep holds ambient *temperature* fixed** (`p₀` scaled with
+   `ρ₀`), not ambient pressure. At fixed `p₀`, sweeping `ρ₀` over a decade moves
+   the ambient specific internal energy by the same decade, which makes any
+   fixed ignition threshold meaningless at one end — at the thin end the
+   *undisturbed* gas crosses it and the whole column absorbs. Fixing the
+   temperature keeps `e₀` and `c₀` constant and is the physically natural
+   reading of "change the ambient density" anyway.
+
+3. **The ignition threshold had to be re-expressed as a multiple of ambient**
+   `e₀`, and the margin is not generous everywhere. G3 sits at one point where a
+   10× threshold faces an 85× post-shock state. The sweep corners are far
+   tighter: at `γ = 1.2`, `ρ₀ = 12.25` the post-shock state is only 11×
+   ambient, so a 10× threshold stops *enabling* the front and starts
+   *controlling* it — the fitted density exponent goes to **−0.459**, a 38 %
+   error, which is the gate catching a modelling error rather than a bug. At 5×
+   the margin is restored; the evidence that the threshold is out of the loop is
+   that 3× and 5× agree on the exponents to better than 1e-3.
+
+Recorded separately: `lsd_velocity_level_tracks_the_eos_coefficient` checks that
+the *level* follows `(0.88/1.92)^(1/3) = 0.772` when `γ` moves 1.4 → 1.2
+(measured 0.7722). The solver tracks the coefficient exactly where the
+coefficient is knowable — which is the sharpest statement of why agreement on
+the level is not evidence about the physics, and why G7 is ungated.
 
 ### G5 — energy budget closure (verification)
 
@@ -473,7 +524,10 @@ is labelled as such.
    Beer–Lambert attenuation, Strang-split deposition — which is what the closed
    forms are written for; `PlasmaColumn` exposes its `α(x)` to the propagator.
    The propagator↔hydro outer loop is not here (see open question 3).
-5. Scaling sweep. Gate **G4**.
+5. Scaling sweep. Gate **G4**. **Landed**, with the three amendments recorded
+   under G4 (the EOS-independence leg is a `γ` sweep, the density sweep holds
+   ambient temperature fixed, and the ignition threshold is a multiple of
+   ambient `e₀`).
 6. `lsd` CLI case + `scripts/render_lsd.py`; `MODELS.md` updated in the same
    change (equation, site, gate numbers, references), including the inherited
    M6a level limitation and the G3-is-verification labelling.
