@@ -15,6 +15,7 @@
 
 use ndarray::Array2;
 
+use beamprop::euler1d::{Boundary, Euler1d, IdealGas, Primitive};
 use beamprop::field::Field;
 use beamprop::grid::Grid;
 use beamprop::medium::{ConstantDeltaN, Medium, UniformExtinction, Vacuum};
@@ -22,7 +23,8 @@ use beamprop::montecarlo::seeded_ensemble;
 use beamprop::propagate::{DiffractionMethod, Propagator, beam_width, centroid};
 use beamprop::turbulence::{ScreenGenerator, TurbulentPath};
 use beamprop::validate::{
-    GaussianBeam, fried_r0, kolmogorov_structure_function, observed_order, rytov_variance,
+    GaussianBeam, SOD_SHOCK_TUBE, fried_r0, kolmogorov_structure_function, observed_order,
+    rytov_variance,
 };
 
 /// A smooth defocusing Gaussian duct: `δn(r) = -A·exp(-r²/(2s²))`.
@@ -1344,5 +1346,132 @@ fn tt2012_level_ratio_is_bounded_within_scatter() {
         "top ratio is {hi:.2}×, expected ≈7.0× — check whether E_B was converted \
          with the RMS form I = ε₀cE² (correct) or the peak form ½ε₀cE² (wrong, \
          doubles this number)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M6c gates G1 + G2 — the laser-agnostic Euler core (docs/M6C_SPEC.md).
+//
+// Both are **verification**: they check that the code solves the equations
+// written down, against closed forms that involve no laser physics at all. The
+// spec keeps the Riemann core free of deposition precisely so these two gates
+// stay uncontaminated by the model under test.
+// ---------------------------------------------------------------------------
+
+/// L1 error in density against the exact Riemann solution at time `t`, for a
+/// Sod tube discretised into `n` cells over `x ∈ [0, 1]` with the diaphragm at
+/// `x = 0.5`.
+fn sod_density_l1(n: usize, t: f64) -> f64 {
+    let dx = 1.0 / n as f64;
+    let problem = SOD_SHOCK_TUBE;
+    let mut solver = Euler1d::from_fn(problem.gas, Boundary::Transmissive, 0.0, dx, n, |x| {
+        if x < 0.5 { problem.left } else { problem.right }
+    })
+    .expect("sod setup");
+    solver.advance_to(t).expect("sod run");
+    let star = problem.star_state().expect("sod star state");
+    solver
+        .primitives()
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.rho - problem.sample(star, (solver.x_centre(i) - 0.5) / t).rho).abs() * dx)
+        .sum::<f64>()
+}
+
+/// **G1 — Sod shock tube against the exact Riemann solution (verification).**
+///
+/// The bound alone would be a weak gate: any sufficiently diffusive scheme can
+/// be tuned under a fixed number. What makes this a real test is the second
+/// half — the error must *fall* under refinement, at the rate a TVD scheme is
+/// entitled to on a discontinuous solution.
+///
+/// Measured: L1(ρ) = 6.55e-3 at n = 100, halving to 6.55e-4 at n = 1600, with
+/// observed rate 0.79–0.88 across the sequence. First order is the ceiling here
+/// — the solution contains a shock and a contact, so the formal 2nd order of
+/// MUSCL-Hancock cannot show up in L1; ~0.8 is the textbook value for minmod on
+/// Sod, and G2 is where the 2nd order is actually demonstrated.
+#[test]
+fn sod_shock_tube_matches_exact_riemann_solution() {
+    let t = 0.2;
+    let errors: Vec<f64> = [100usize, 200, 400, 800]
+        .iter()
+        .map(|&n| sod_density_l1(n, t))
+        .collect();
+
+    assert!(
+        errors[0] < 7.5e-3,
+        "L1(ρ) at n = 100 is {:.3e}, above the pinned 7.5e-3",
+        errors[0]
+    );
+    for pair in errors.windows(2) {
+        assert!(
+            pair[1] < pair[0],
+            "L1(ρ) did not fall under refinement: {:.3e} → {:.3e}",
+            pair[0],
+            pair[1]
+        );
+    }
+    let rate = observed_order(errors[0], errors[errors.len() - 1]) / (errors.len() - 1) as f64;
+    assert!(
+        (0.7..=1.1).contains(&rate),
+        "Sod convergence rate {rate:.3} outside the 0.7–1.1 a TVD scheme should \
+         show on a discontinuous solution"
+    );
+}
+
+/// **G2 — observed order of accuracy on smooth flow (verification).**
+///
+/// Isentropic advection: `ρ = 1 + 0.2·sin(2πx)` at uniform `u` and `p`, one
+/// full period on a periodic mesh, so the exact solution at `t = 1` is the
+/// initial condition. No shock, no laser, nothing but the reconstruction and
+/// the time integration under test.
+///
+/// Measured: L1(ρ) falls 7.50e-4 → 3.78e-6 over n = 128 → 2048, with the
+/// observed order rising monotonically 1.86 → 1.94. It approaches 2 **from
+/// below** for a known reason: minmod clips the two smooth extrema, degrading
+/// the scheme to 1st order in a region that shrinks with the mesh. The gate is
+/// therefore on the finest pair plus the monotone climb, not on hitting 2.
+#[test]
+fn euler_muscl_hancock_is_second_order_on_smooth_flow() {
+    let wave = |x: f64| Primitive {
+        rho: 1.0 + 0.2 * (2.0 * std::f64::consts::PI * x).sin(),
+        u: 1.0,
+        p: 1.0,
+    };
+    let run = |n: usize| -> f64 {
+        let dx = 1.0 / n as f64;
+        let mut solver =
+            Euler1d::from_fn(IdealGas::AIR, Boundary::Periodic, 0.0, dx, n, wave).expect("setup");
+        solver.advance_to(1.0).expect("advection run");
+        solver
+            .primitives()
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (w.rho - wave(solver.x_centre(i) - 1.0).rho).abs() * dx)
+            .sum::<f64>()
+    };
+
+    let errors: Vec<f64> = [128usize, 256, 512, 1024].iter().map(|&n| run(n)).collect();
+    let orders: Vec<f64> = errors
+        .windows(2)
+        .map(|p| observed_order(p[0], p[1]))
+        .collect();
+
+    let finest = *orders.last().unwrap();
+    assert!(
+        finest > 1.85,
+        "observed order on the finest pair is {finest:.3}, below 1.85 — \
+         MUSCL-Hancock should be 2nd order here: {orders:?}"
+    );
+    for pair in orders.windows(2) {
+        assert!(
+            pair[1] > pair[0] - 1e-3,
+            "observed order stopped climbing toward 2: {orders:?}"
+        );
+    }
+    assert!(
+        finest < 2.1,
+        "observed order {finest:.3} exceeds 2 — check the exact solution, not \
+         the scheme: {orders:?}"
     );
 }

@@ -418,6 +418,61 @@ References:
   `tests/data/tt2012_*.csv`, focal geometry from their Eq. 5, and the cascade
   closed form from their Eq. 4.
 
+## M6c — 1-D gas dynamics (the LSD substrate)
+
+### Compressible Euler equations, HLLC + MUSCL-Hancock
+
+```text
+∂U/∂t + ∂F(U)/∂x = Ṡ
+
+U = (ρ, ρu, E)ᵀ,   F = (ρu, ρu² + p, (E + p)u)ᵀ,   E = p/(γ−1) + ½ρu²
+```
+
+Site: `src/euler1d.rs`. Ideal gas at constant `γ` (the verification EOS of the
+two `docs/M6C_SPEC.md` pins; the plasma-range table EOS attaches later without
+touching the flux routines). HLLC approximate Riemann solver with
+Einfeldt/Davis wave speeds, MUSCL-Hancock reconstruction under a minmod
+limiter, CFL ≤ 0.8 recomputed per step from the current wave speeds, and a
+positivity guard that **bails with the cell and step** rather than clamping.
+
+**No laser physics is in this module**, deliberately (spec gate decision 4).
+`Ṡ` is exposed only as `step_with_source`, the seam the LSD driver attaches to;
+deposition, ignition, and the plasma column live one layer up. That is what
+keeps the two gates below independent of the model that will use them.
+
+Both gates are **verification** — "the code solves the equations written down"
+— not validation. Nothing here is yet a claim about the world; the physics
+gate for M6c is the parameter-free `D ∝ S^(1/3)`, `ρ₀^(−1/3)` scaling (G4),
+which arrives with the deposition layer.
+
+- **G1 — Sod shock tube vs the exact Riemann solution**
+  (`sod_shock_tube_matches_exact_riemann_solution`). Exact solution from the
+  Newton-iterated star-state solver in `src/validate.rs` (`RiemannProblem`,
+  which shares only the plain `(ρ, u, p)` struct with the solver under test).
+  Measured L1(ρ) = 6.55e-3 at n = 100 falling to 6.55e-4 at n = 1600, observed
+  rate 0.79–0.88. First order is the ceiling on a solution containing a shock
+  and a contact; ~0.8 is the textbook minmod value.
+- **G2 — observed order on smooth flow**
+  (`euler_muscl_hancock_is_second_order_on_smooth_flow`). Isentropic advection
+  of `ρ = 1 + 0.2·sin(2πx)` at uniform `u`, `p` over one period. L1(ρ) falls
+  7.50e-4 → 3.78e-6 over n = 128 → 2048, observed order rising monotonically
+  1.86 → 1.94. It approaches 2 **from below** because minmod clips the two
+  smooth extrema, degrading the scheme to 1st order in a shrinking region — so
+  the gate is on the finest pair (> 1.85) plus the monotone climb, not on
+  hitting 2 exactly.
+
+References:
+- E. F. Toro, *Riemann Solvers and Numerical Methods for Fluid Dynamics*,
+  3rd ed., Springer (2009) — HLLC (§10.4–10.6), MUSCL-Hancock (§14.4), and the
+  exact Riemann solver and Test 1 tabulation (§4.3, §6.4) the gates use.
+- B. Einfeldt, *On Godunov-type methods for gas dynamics*, SIAM J. Numer. Anal.
+  **25**, 294 (1988) — the wave-speed estimates.
+- G. A. Sod, *A survey of several finite difference methods…*, J. Comput. Phys.
+  **27**, 1 (1978) — the shock-tube problem.
+
+Full model, the remaining gates (G3–G7), and which of them are verification
+versus validation: `docs/M6C_SPEC.md`.
+
 ## Rendering (not physics)
 
 The solver writes data only (`.npy` arrays + `_meta.json`/`_notes.md`

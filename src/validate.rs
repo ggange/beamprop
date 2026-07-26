@@ -4,9 +4,13 @@
 //! through test files — so every milestone's check cites the same trusted
 //! reference implementations. Grown milestone by milestone: Gaussian-beam
 //! free-space evolution (M1), Beer–Lambert decay (M2), turbulence structure
-//! functions and Rytov statistics (M3).
+//! functions and Rytov statistics (M3), the exact Riemann solution (M6c).
 
 use std::f64::consts::PI;
+
+use anyhow::{Result, bail};
+
+use crate::euler1d::{IdealGas, Primitive};
 
 /// Analytic free-space evolution of a Gaussian beam (the M1 reference).
 ///
@@ -271,6 +275,197 @@ impl BloomingCase {
     }
 }
 
+// ------------------------------------------------------------------------
+// M6c references: the exact solution of the 1-D Riemann problem.
+// ------------------------------------------------------------------------
+
+/// Exact solution of the Riemann problem for the 1-D Euler equations with an
+/// ideal gas — the reference the Sod gate (G1) measures against.
+///
+/// Newton iteration on the star pressure `p*` (Toro §4.3): each non-linear wave
+/// contributes `f_K(p)`, a shock branch above `p_K` and a rarefaction branch
+/// below, and `f_L + f_R + Δu = 0` closes the system. The solution is then
+/// sampled along rays `x/t`, which is all a self-similar solution needs.
+///
+/// It shares only the plain `(ρ, u, p)` struct with
+/// [`euler1d`](crate::euler1d) — no flux, wave-speed, or EOS code in common —
+/// so it stays an independent check on the solver rather than a second copy of
+/// it (`docs/M6C_SPEC.md` gate decision 4).
+#[derive(Debug, Clone, Copy)]
+pub struct RiemannProblem {
+    /// State on the `x < 0` side.
+    pub left: Primitive,
+    /// State on the `x > 0` side.
+    pub right: Primitive,
+    /// Ideal-gas EOS.
+    pub gas: IdealGas,
+}
+
+/// Converged star-region state of a [`RiemannProblem`].
+#[derive(Debug, Clone, Copy)]
+pub struct StarState {
+    /// Pressure between the two non-linear waves (Pa).
+    pub p: f64,
+    /// Velocity of the contact discontinuity (m/s).
+    pub u: f64,
+}
+
+/// Sod's shock tube (Toro Test 1): the standard verification problem, and the
+/// one whose exact solution every published Euler code is checked against.
+pub const SOD_SHOCK_TUBE: RiemannProblem = RiemannProblem {
+    left: Primitive {
+        rho: 1.0,
+        u: 0.0,
+        p: 1.0,
+    },
+    right: Primitive {
+        rho: 0.125,
+        u: 0.0,
+        p: 0.1,
+    },
+    gas: IdealGas { gamma: 1.4 },
+};
+
+impl RiemannProblem {
+    /// Pressure function of one wave and its derivative: `(f_K, f_K')`.
+    fn wave(&self, p: f64, side: Primitive) -> (f64, f64) {
+        let g = self.gas.gamma;
+        let c = self.gas.sound_speed(side.rho, side.p);
+        if p > side.p {
+            // Shock branch (Toro Eq. 4.7).
+            let a = 2.0 / ((g + 1.0) * side.rho);
+            let b = (g - 1.0) / (g + 1.0) * side.p;
+            let root = (a / (b + p)).sqrt();
+            (
+                (p - side.p) * root,
+                root * (1.0 - 0.5 * (p - side.p) / (b + p)),
+            )
+        } else {
+            // Rarefaction branch (Toro Eq. 4.8).
+            let ratio = p / side.p;
+            (
+                2.0 * c / (g - 1.0) * (ratio.powf(0.5 * (g - 1.0) / g) - 1.0),
+                ratio.powf(-0.5 * (g + 1.0) / g) / (side.rho * c),
+            )
+        }
+    }
+
+    /// Solve for the star-region pressure and velocity.
+    ///
+    /// Errs if the two states cannot be joined by a solution at all — the
+    /// pressure-positivity (vacuum-generation) condition
+    /// `2(c_L + c_R)/(γ−1) > u_R − u_L` (Toro Eq. 4.40).
+    pub fn star_state(&self) -> Result<StarState> {
+        let g = self.gas.gamma;
+        let (cl, cr) = (
+            self.gas.sound_speed(self.left.rho, self.left.p),
+            self.gas.sound_speed(self.right.rho, self.right.p),
+        );
+        let du = self.right.u - self.left.u;
+        if 2.0 * (cl + cr) / (g - 1.0) <= du {
+            bail!("riemann: initial data generates vacuum (Δu = {du:.6e} m/s too large)");
+        }
+
+        // Two-rarefaction initial guess, floored off zero.
+        let exp = 0.5 * (g - 1.0) / g;
+        let num = cl + cr - 0.5 * (g - 1.0) * du;
+        let den = cl / self.left.p.powf(exp) + cr / self.right.p.powf(exp);
+        let mut p = (num / den)
+            .powf(1.0 / exp)
+            .max(1e-12 * self.left.p.min(self.right.p));
+
+        // Newton. The pressure function is smooth and monotone in p, so this
+        // converges in a handful of iterations from the TR guess.
+        for _ in 0..100 {
+            let (fl, dfl) = self.wave(p, self.left);
+            let (fr, dfr) = self.wave(p, self.right);
+            let step = (fl + fr + du) / (dfl + dfr);
+            let next = (p - step).max(1e-12 * p);
+            let change = 2.0 * (next - p).abs() / (next + p);
+            p = next;
+            if change < 1e-14 {
+                let (fl, _) = self.wave(p, self.left);
+                let (fr, _) = self.wave(p, self.right);
+                return Ok(StarState {
+                    p,
+                    u: 0.5 * (self.left.u + self.right.u) + 0.5 * (fr - fl),
+                });
+            }
+        }
+        bail!("riemann: star pressure did not converge (last p = {p:.6e} Pa)")
+    }
+
+    /// Sample the self-similar solution along the ray `x/t = speed` (m/s).
+    ///
+    /// The whole solution at time `t` is `sample(star, x/t)` — that is what
+    /// makes it exact at any resolution, and why the gate can refine the mesh
+    /// without re-deriving anything.
+    pub fn sample(&self, star: StarState, speed: f64) -> Primitive {
+        let g = self.gas.gamma;
+        // Work in the frame of whichever side the ray falls on; the right side
+        // is the left side with velocities mirrored.
+        let (side, sign) = if speed <= star.u {
+            (self.left, 1.0)
+        } else {
+            (self.right, -1.0)
+        };
+        let s = sign * speed;
+        let (u_side, u_star) = (sign * side.u, sign * star.u);
+        let c = self.gas.sound_speed(side.rho, side.p);
+        let ratio = star.p / side.p;
+
+        let w = if ratio > 1.0 {
+            // Shock: constant either side of it.
+            let s_shock = u_side - c * (0.5 * (g + 1.0) / g * ratio + 0.5 * (g - 1.0) / g).sqrt();
+            if s <= s_shock {
+                Primitive {
+                    rho: side.rho,
+                    u: u_side,
+                    p: side.p,
+                }
+            } else {
+                Primitive {
+                    rho: side.rho * (ratio + (g - 1.0) / (g + 1.0))
+                        / ((g - 1.0) / (g + 1.0) * ratio + 1.0),
+                    u: u_star,
+                    p: star.p,
+                }
+            }
+        } else {
+            // Rarefaction: constant outside the fan, self-similar inside it.
+            let s_head = u_side - c;
+            let c_star = c * ratio.powf(0.5 * (g - 1.0) / g);
+            let s_tail = u_star - c_star;
+            if s <= s_head {
+                Primitive {
+                    rho: side.rho,
+                    u: u_side,
+                    p: side.p,
+                }
+            } else if s >= s_tail {
+                Primitive {
+                    rho: side.rho * ratio.powf(1.0 / g),
+                    u: u_star,
+                    p: star.p,
+                }
+            } else {
+                let f = 2.0 / (g + 1.0) + (g - 1.0) / ((g + 1.0) * c) * (u_side - s);
+                Primitive {
+                    rho: side.rho * f.powf(2.0 / (g - 1.0)),
+                    u: 2.0 / (g + 1.0) * (c + 0.5 * (g - 1.0) * u_side + s),
+                    p: side.p * f.powf(2.0 * g / (g - 1.0)),
+                }
+            }
+        };
+        Primitive { u: sign * w.u, ..w }
+    }
+
+    /// The exact state at `(x, t)` for a diaphragm at `x = 0`, `t > 0`.
+    pub fn state_at(&self, x: f64, t: f64) -> Result<Primitive> {
+        Ok(self.sample(self.star_state()?, x / t))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +609,74 @@ mod tests {
     #[test]
     fn structure_function_at_r0_is_6_88() {
         assert!((kolmogorov_structure_function(0.05, 0.05) - 6.88).abs() < 1e-12);
+    }
+
+    #[test]
+    fn sod_star_state_matches_published_values() {
+        // Toro Test 1, the tabulated exact solution: p* = 0.30313,
+        // u* = 0.92745. Getting these right is the whole reference.
+        let star = SOD_SHOCK_TUBE.star_state().unwrap();
+        assert!((star.p - 0.30313).abs() < 1e-5, "p* = {}", star.p);
+        assert!((star.u - 0.92745).abs() < 1e-5, "u* = {}", star.u);
+    }
+
+    #[test]
+    fn riemann_solution_is_mirror_symmetric() {
+        // Swapping the two sides and negating velocities must reflect the
+        // solution — the sign handling in `sample` is the easy thing to get
+        // wrong, and it is exactly what the right-running shock depends on.
+        let p = SOD_SHOCK_TUBE;
+        let mirrored = RiemannProblem {
+            left: Primitive {
+                u: -p.right.u,
+                ..p.right
+            },
+            right: Primitive {
+                u: -p.left.u,
+                ..p.left
+            },
+            gas: p.gas,
+        };
+        for i in 0..21 {
+            let s = -2.0 + 0.2 * i as f64;
+            let a = p.state_at(s, 1.0).unwrap();
+            let b = mirrored.state_at(-s, 1.0).unwrap();
+            assert!((a.rho - b.rho).abs() < 1e-12, "ρ asymmetric at x/t = {s}");
+            assert!((a.u + b.u).abs() < 1e-12, "u asymmetric at x/t = {s}");
+            assert!((a.p - b.p).abs() < 1e-12, "p asymmetric at x/t = {s}");
+        }
+    }
+
+    #[test]
+    fn riemann_far_field_recovers_the_initial_states() {
+        let p = SOD_SHOCK_TUBE;
+        let far_left = p.state_at(-100.0, 1.0).unwrap();
+        let far_right = p.state_at(100.0, 1.0).unwrap();
+        assert!((far_left.rho - p.left.rho).abs() < 1e-14);
+        assert!((far_left.p - p.left.p).abs() < 1e-14);
+        assert!((far_right.rho - p.right.rho).abs() < 1e-14);
+        assert!((far_right.p - p.right.p).abs() < 1e-14);
+    }
+
+    #[test]
+    fn riemann_refuses_vacuum_generating_data() {
+        // Two strong rarefactions pulling apart leave vacuum; there is no
+        // star state to find, and the solver must say so rather than iterate.
+        let p = RiemannProblem {
+            left: Primitive {
+                rho: 1.0,
+                u: -20.0,
+                p: 0.4,
+            },
+            right: Primitive {
+                rho: 1.0,
+                u: 20.0,
+                p: 0.4,
+            },
+            gas: IdealGas { gamma: 1.4 },
+        };
+        let err = p.star_state().unwrap_err().to_string();
+        assert!(err.contains("vacuum"), "unexpected error: {err}");
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub mod airprops;
 pub mod blooming;
 pub mod breakdown0d;
 pub mod cases;
+pub mod euler1d;
 pub mod field;
 pub mod grid;
 pub mod medium;
