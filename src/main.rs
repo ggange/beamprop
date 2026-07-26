@@ -12,7 +12,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use beamprop::cases::{
-    BloomingParams, PropagateParams, TurbulenceParams, run_blooming, run_propagate, run_turbulence,
+    BloomingParams, BreakdownParams, PropagateParams, TurbulenceParams, run_blooming,
+    run_breakdown, run_propagate, run_turbulence,
 };
 use beamprop::field::Field;
 use beamprop::grid::Grid;
@@ -37,8 +38,10 @@ struct BeamArgs {
     /// Vacuum wavelength in metres.
     #[arg(long, default_value_t = 1.0e-6)]
     wavelength: f64,
-    /// Gaussian 1/e² waist radius w0 in metres.
-    #[arg(long, default_value_t = 1.0e-2)]
+    /// Gaussian 1/e² waist radius w0 in metres. Default is the Smith 1977
+    /// F₀=5 waist w0 = √(2·F₀·z/k) at z=500 m, λ=1 µm — the blooming default
+    /// run then reproduces the M4 B3 validation geometry end-to-end.
+    #[arg(long, default_value_t = 2.8209e-2)]
     w0: f64,
     /// Output basename (within --out-dir).
     #[arg(long, default_value = "beam")]
@@ -125,15 +128,19 @@ enum Cmd {
     Blooming {
         #[command(flatten)]
         beam: BeamArgs,
-        /// Total beam power in watts.
-        #[arg(long, default_value_t = 1e4)]
+        /// Total beam power in watts. Default places the default geometry at
+        /// Smith number N_c ≈ 1 (N_φ ≈ 8.9) — the blooming rollover, inside the
+        /// M4 B3 validated range N_c ∈ [0.5, 1.8].
+        #[arg(long, default_value_t = 2600.0)]
         power: f64,
         /// Crosswind speed in m/s (blows along +x).
         #[arg(long, default_value_t = 2.0)]
         wind: f64,
         /// Absorbed-power coefficient in 1/m (heats the air and depletes the
-        /// beam; scattering is not blooming-active and belongs to M2).
-        #[arg(long, default_value_t = 1e-5)]
+        /// beam; scattering is not blooming-active and belongs to M2). Default
+        /// matches the α used by every M4 validation gate and the power sweep
+        /// (the Smith 1977 F₀=5 regime; see tests/blooming.rs, scripts/sweep_blooming.py).
+        #[arg(long, default_value_t = 1e-4)]
         alpha_abs: f64,
         /// Ambient temperature in K.
         #[arg(long, default_value_t = 288.15)]
@@ -150,6 +157,45 @@ enum Cmd {
         /// Number of transverse snapshots to record along the path.
         #[arg(long, default_value_t = 5)]
         frames: usize,
+    },
+    /// Sweep the 0-D optical-breakdown threshold against pressure (M6a) and
+    /// record the electron avalanche at a fixed drive intensity. Writes
+    /// <out>_threshold.csv (central curve + the δ_eff literature envelope),
+    /// <out>_ne_traces.npy (the animation frames), and _meta.json/_notes.md.
+    /// Render with `python3 scripts/render_breakdown.py`. Pure rate physics:
+    /// no grid, no propagator — none of the beam arguments apply.
+    Breakdown {
+        /// Vacuum wavelength in metres (1064 nm is the validated case).
+        #[arg(long, default_value_t = 1064e-9)]
+        wavelength: f64,
+        /// Pulse FWHM in seconds (T&T: 6 ns).
+        #[arg(long, default_value_t = 6e-9)]
+        fwhm: f64,
+        /// Lowest sweep pressure in Torr.
+        #[arg(long, default_value_t = 300.0)]
+        p_min: f64,
+        /// Highest sweep pressure in Torr. The default 300–2000 Torr window is
+        /// the one the external T&T slope gate is validated over.
+        #[arg(long, default_value_t = 2000.0)]
+        p_max: f64,
+        /// Number of log-spaced sweep pressures (= animation frames).
+        #[arg(long, default_value_t = 48)]
+        points: usize,
+        /// Time slices per pulse for the rate integration.
+        #[arg(long, default_value_t = 400)]
+        steps: usize,
+        /// Drive intensity for the traces, as a multiple of the threshold at
+        /// --p-max. Must straddle the sweep to be interesting, and the usable
+        /// range is narrow: the corrected model's threshold spans only ~1.17x
+        /// across 300-2000 Torr, so anything above that ignites every frame.
+        #[arg(long, default_value_t = 1.08)]
+        drive: f64,
+        /// Output basename (within --out-dir).
+        #[arg(long, default_value = "breakdown")]
+        out: String,
+        /// Directory for all generated files; created if missing.
+        #[arg(long, default_value = "out")]
+        out_dir: PathBuf,
     },
     /// Remove generated results (.npy, .png, .gif files and *_notes.md /
     /// *_meta.json sidecars) from the output directory. Only those are
@@ -192,6 +238,19 @@ fn main() -> Result<()> {
             steps,
             frames,
         } => blooming(&beam, power, wind, alpha_abs, t0, p0, z, steps, frames),
+        Cmd::Breakdown {
+            wavelength,
+            fwhm,
+            p_min,
+            p_max,
+            points,
+            steps,
+            drive,
+            out,
+            out_dir,
+        } => breakdown(
+            wavelength, fwhm, p_min, p_max, points, steps, drive, &out, &out_dir,
+        ),
         Cmd::Clean { out_dir } => clean(&out_dir),
     }
 }
@@ -540,6 +599,163 @@ fn blooming(
 
 /// Delete `.npy`/`.png`/`.gif` files and `*_notes.md`/`*_meta.json` sidecars
 /// directly inside `dir` (non-recursive).
+/// M6a: 0-D breakdown threshold sweep + avalanche traces. No grid, no
+/// propagator — the compute is a pure rate integration in `beamprop::cases`.
+#[allow(clippy::too_many_arguments)]
+fn breakdown(
+    wavelength: f64,
+    fwhm: f64,
+    p_min: f64,
+    p_max: f64,
+    points: usize,
+    steps: usize,
+    drive: f64,
+    out: &str,
+    out_dir: &Path,
+) -> Result<()> {
+    let run = run_breakdown(&BreakdownParams {
+        wavelength,
+        fwhm,
+        p_min_torr: p_min,
+        p_max_torr: p_max,
+        points,
+        steps,
+        drive,
+    })?;
+
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    let path = |name: &str| out_dir.join(name);
+
+    println!(
+        "breakdown sweep: {p_min:.0}–{p_max:.0} Torr, λ = {:.0} nm, {:.1} ns FWHM",
+        wavelength * 1e9,
+        fwhm * 1e9
+    );
+    println!(
+        "  I_thr ∝ p^-{:.3}   (δ_eff literature envelope n ∈ [{:.3}, {:.3}])",
+        run.slope, run.slope_envelope.0, run.slope_envelope.1
+    );
+    println!(
+        "  I_thr({:.0} Torr) = {:.3e} W/cm²;  traces driven at {:.3e} W/cm²",
+        run.pressure_torr[0], run.threshold[0], run.drive_intensity
+    );
+
+    // Threshold curve + envelope, as CSV: the render script overlays the
+    // digitized T&T points on this.
+    let mut csv = String::from(
+        "# beamprop M6a 0-D optical-breakdown threshold sweep\n\
+         # columns: pressure_torr, i_thr_w_per_cm2, i_thr_delta005, i_thr_delta001,\n\
+         #          n_neutral_per_m3, i_cascade_theory (T&T 2012 Eq. 4)\n\
+         # i_thr_delta005/001 are the edges of the delta_eff literature envelope\n\
+         # (0.05 flattens the slope, 0.01 steepens it); see docs/M6A_SPEC.md.\n\
+         pressure_torr,i_thr_w_per_cm2,i_thr_delta005,i_thr_delta001,n_neutral_per_m3,i_cascade_theory\n",
+    );
+    for i in 0..run.pressure_torr.len() {
+        csv.push_str(&format!(
+            "{:.6},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e}\n",
+            run.pressure_torr[i],
+            run.threshold[i],
+            run.threshold_lo_slope[i],
+            run.threshold_hi_slope[i],
+            run.neutral_density[i],
+            run.cascade_theory[i]
+        ));
+    }
+    let csv_path = path(&format!("{out}_threshold.csv"));
+    fs::write(&csv_path, csv).with_context(|| format!("writing {}", csv_path.display()))?;
+
+    // Avalanche traces [pressure, time] — the animation frames.
+    let npy_path = path(&format!("{out}_ne_traces.npy"));
+    ndarray_npy::write_npy(&npy_path, &run.ne_traces)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", npy_path.display()))?;
+
+    let meta = format!(
+        "{{\n  \"case\": \"breakdown\",\n  \"wavelength\": {wavelength},\n  \
+         \"fwhm\": {fwhm},\n  \"p_min_torr\": {p_min},\n  \"p_max_torr\": {p_max},\n  \
+         \"points\": {points},\n  \"steps\": {steps},\n  \"drive\": {drive},\n  \
+         \"drive_intensity_w_per_cm2\": {di},\n  \"n_bd\": {nbd},\n  \"n_seed\": {nseed},\n  \
+         \"slope\": {slope},\n  \"slope_envelope\": [{env_lo}, {env_hi}],\n  \
+         \"t_min\": {t_min},\n  \"t_max\": {t_max}\n}}\n",
+        di = run.drive_intensity,
+        nbd = run.n_bd,
+        nseed = run.n_seed,
+        slope = run.slope,
+        env_lo = run.slope_envelope.0,
+        env_hi = run.slope_envelope.1,
+        t_min = run.trace_time[0],
+        t_max = run.trace_time[run.trace_time.len() - 1],
+    );
+    let meta_path = path(&format!("{out}_meta.json"));
+    fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
+
+    let notes = format!(
+        "# Test case: 0-D optical-breakdown threshold in dry air (M6a)\n\
+         \n\
+         A single point in the gas sees a {fwhm_ns:.1} ns Gaussian pulse at\n\
+         {lambda_nm:.0} nm. Its electron density avalanches by inverse-bremsstrahlung\n\
+         cascade ionization — driven by the **net** power, heating minus the\n\
+         inelastic excitation losses paid climbing to the ionization potential —\n\
+         and is drained by attachment and diffusion. Breakdown is declared when\n\
+         n_e reaches {nbd:.1e} m^-3 within the pulse.\n\
+         \n\
+         There is no beam and no propagator here: this is a pure rate balance at\n\
+         one point, the kernel the later M6a.2/M6c rungs call per realization.\n\
+         \n\
+         ## What the sweep shows\n\
+         \n\
+         Threshold peak intensity against pressure over {p_min:.0}–{p_max:.0} Torr:\n\
+         I_thr ∝ p^-{slope:.3}, against Thiyagarajan & Thompson's measured p^-0.329.\n\
+         The shaded band in the render is the model's own uncertainty envelope from\n\
+         the δ_eff literature range (n ∈ [{env_lo:.3}, {env_hi:.3}]) — **containment of\n\
+         the measurement in that band is the validated claim**, not the\n\
+         central-curve agreement, which leans on ungated order-of-magnitude\n\
+         constants (see the sensitivity audit in docs/M6A_SPEC.md).\n\
+         \n\
+         The absolute level sits ~7x above T&T, as a *flat* offset — the shape is\n\
+         reproduced, the normalization is not, and it is deliberately not gated\n\
+         (published thresholds scatter 3–10x across labs).\n\
+         \n\
+         ## What the animation shows\n\
+         \n\
+         Every frame drives the *same* peak intensity, {di:.3e} W/cm^2, at a\n\
+         different pressure. The avalanche is a knife edge: below threshold the\n\
+         seed electron never multiplies, above it n_e climbs many orders of\n\
+         magnitude within the pulse and saturates at full ionization. Raising\n\
+         the pressure alone flips the gas from transparent to broken down --\n\
+         though note the corrected model's threshold spans only ~1.17x over\n\
+         300-2000 Torr, so the switch happens over a narrow pressure range.\n\
+         \n\
+         ## Files\n\
+         \n\
+         - `{out}_threshold.csv` — pressure (Torr), threshold (W/cm^2), and the\n\
+           two envelope edges.\n\
+         - `{out}_ne_traces.npy` — n_e(t) as `[pressure, time]`, {points} x {steps},\n\
+           in m^-3, bounded above by the local full-ionization density.\n\
+         - `{out}_meta.json` — the run parameters, fitted slope, and time axis.\n\
+         \n\
+         Measured reference data: `tests/data/tt2012_*.csv`.\n",
+        fwhm_ns = fwhm * 1e9,
+        lambda_nm = wavelength * 1e9,
+        nbd = run.n_bd,
+        slope = run.slope,
+        env_lo = run.slope_envelope.0,
+        env_hi = run.slope_envelope.1,
+        di = run.drive_intensity,
+    );
+    let notes_path = path(&format!("{out}_notes.md"));
+    fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
+
+    println!(
+        "  wrote {}, {} ({points} x {steps}), {} and {}",
+        csv_path.display(),
+        npy_path.display(),
+        meta_path.display(),
+        notes_path.display()
+    );
+    Ok(())
+}
+
 fn clean(dir: &Path) -> Result<()> {
     if !dir.exists() {
         println!("nothing to clean: {} does not exist", dir.display());

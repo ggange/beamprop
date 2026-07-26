@@ -49,6 +49,64 @@ pub fn observed_order(err_h: f64, err_half: f64) -> f64 {
     (err_h / err_half).log2()
 }
 
+/// Published closed-form **collisional-cascade** breakdown threshold for air,
+/// Thiyagarajan & Thompson 2012 (J. Appl. Phys. 111, 073302), their Eq. 4:
+///
+/// ```text
+/// I_B(CC) = 1.44e6 · (p_atm² + 2.2e5·λ_µm⁻²)     W/cm²
+/// ```
+///
+/// a MacDonald/Kroll–Watson microwave scaling extended to laser frequencies.
+/// Arguments and return value are SI (Pa, m, W/m²), per project convention.
+///
+/// **Why this matters as a reference.** At 1064 nm the `λ⁻²` term is
+/// `1.94×10⁵` while `p²` never exceeds 6.9 over 10–2000 Torr, so accepted
+/// cascade theory predicts a threshold that is **flat in pressure** at this
+/// wavelength. That makes it the apples-to-apples target for a cascade-only
+/// kernel — the paper's *measured* curve is not, since it contains multiphoton
+/// ionization (the authors correct for MPI before comparing to this formula,
+/// and quote 88 % cascade / 12 % MPI at 760 Torr).
+///
+/// Not gospel: the authors need a 2.1× scaling factor (1.74× with dust
+/// filtering) to reconcile it with their measurements.
+pub fn tt2012_cascade_threshold(pressure: f64, wavelength: f64) -> f64 {
+    const P_ATM: f64 = 101_325.0;
+    let p_atm = pressure / P_ATM;
+    let lambda_um = wavelength * 1e6;
+    // W/cm² → W/m².
+    1.44e6 * (p_atm * p_atm + 2.2e5 / (lambda_um * lambda_um)) * 1e4
+}
+
+/// Least-squares slope `n` of a power law `y ∝ x^n`, fitted to `(x, y)` pairs
+/// in log-log space. The generic form behind any power-law trend gate (M6a's
+/// threshold-vs-pressure branch is the first user).
+///
+/// The fitted exponent is only meaningful over the range actually sampled — a
+/// curve that crosses between regimes has no single slope, so callers must
+/// restrict the points to one branch before fitting.
+///
+/// Returns `None` for fewer than two points, or if all `x` coincide.
+pub fn loglog_slope(curve: &[(f64, f64)]) -> Option<f64> {
+    if curve.len() < 2 {
+        return None;
+    }
+    let n = curve.len() as f64;
+    let (mut sx, mut sy, mut sxx, mut sxy) = (0.0, 0.0, 0.0, 0.0);
+    for &(x_raw, y_raw) in curve {
+        let x = x_raw.ln();
+        let y = y_raw.ln();
+        sx += x;
+        sy += y;
+        sxx += x * x;
+        sxy += x * y;
+    }
+    let denom = n * sxx - sx * sx;
+    if denom.abs() < f64::EPSILON {
+        return None;
+    }
+    Some((n * sxy - sx * sy) / denom)
+}
+
 // ------------------------------------------------------------------------
 // M3 references: Kolmogorov turbulence statistics (plane-wave forms).
 // ------------------------------------------------------------------------

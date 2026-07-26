@@ -1,0 +1,37 @@
+# Digitized from A. Thiyagarajan, J. B. Thompson, "Optical breakdown threshold
+# investigation of 1064 nm laser induced air plasmas", J. Appl. Phys. 111,
+# 073302 (2012) -- the effective electric field E_eff curve of the figure
+# plotting E_B and E_eff against pressure p on twin vertical scales.
+# Figure: Fig. 4 (pinned at digitization time, plan task T2/D5) -- the same
+#   figure as tests/data/tt2012_E_B_vs_pressure.csv, second curve.
+# Traced with WebPlotDigitizer (curve digitized point-by-point, not by eye).
+#
+# E_eff is the field that would deposit the same energy at zero frequency:
+#   E_eff = E_B * nu_m / sqrt(nu_m^2 + omega^2),
+# so E_eff/E_B measures nu_m/omega directly and is independent of everything in
+# the beamprop kernel except omega = 2*pi*c/lambda. That makes it the external,
+# non-circular anchor for the collision-frequency constant K_m.
+#
+# Note the axis multiplier differs from the E_B curve: E_eff is in 10^3 V/cm
+# while E_B is in 10^6 V/cm. The two are plotted against a shared pressure axis
+# on twin vertical scales, so E_eff appears numerically LARGER than E_B despite
+# being ~500x smaller in absolute field.
+#
+# Setup: see tests/data/tt2012_E_B_vs_pressure.csv.
+#
+# columns: pressure_torr, E_eff_kV_per_cm   (E_eff in 10^3 V/cm)
+pressure_torr,E_eff_kV_per_cm
+9.688433187714395,1.2227921141208529
+17.826369530434995,1.6844045520115403
+31.506774499892373,2.080301330341401
+45.970416258795204,2.472992466741465
+69.70446068194384,3.4471870492066037
+96.26812758980223,4.159480686007373
+160.12961951310206,6.184805257252765
+231.9647374740262,8.024843724955922
+361.15672284212906,11.492066036223754
+548.2008137848812,15.155153069402147
+727.8804686209093,19.93765026446546
+917.6407255232241,22.86376021798365
+1386.977138791732,32.98974194582465
+1857.7747628351485,44.9259496714217

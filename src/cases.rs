@@ -9,18 +9,19 @@
 //! to the pre-refactor implementation, so the operation order here mirrors the
 //! original `main.rs` loops exactly.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ndarray::{Array2, Array3, s};
 
 use crate::airprops::AirTable;
 use crate::blooming::ThermalBlooming;
+use crate::breakdown0d::AirBreakdown;
 use crate::field::Field;
 use crate::grid::Grid;
 use crate::medium::{UniformExtinction, kruse_extinction};
 use crate::montecarlo::seeded_ensemble;
 use crate::propagate::{Propagator, beam_width, centroid};
 use crate::turbulence::TurbulentPath;
-use crate::validate::{BloomingCase, GaussianBeam};
+use crate::validate::{BloomingCase, GaussianBeam, loglog_slope, tt2012_cascade_threshold};
 use crate::viz::XzSliceMap;
 
 /// Stack transverse maps into a `[frame, y, x]` array.
@@ -328,9 +329,218 @@ pub fn run_blooming(p: &BloomingParams) -> Result<BloomingRun> {
     })
 }
 
+/// Parameters of the `breakdown` case (M6a, 0-D — no grid, no propagator).
+pub struct BreakdownParams {
+    /// Vacuum wavelength (m).
+    pub wavelength: f64,
+    /// Pulse FWHM (s).
+    pub fwhm: f64,
+    /// Lowest pressure of the sweep (Torr).
+    pub p_min_torr: f64,
+    /// Highest pressure of the sweep (Torr).
+    pub p_max_torr: f64,
+    /// Number of log-spaced sweep pressures (= animation frames).
+    pub points: usize,
+    /// Time slices per pulse for the rate integration.
+    pub steps: usize,
+    /// Drive intensity for the n_e(t) traces, as a multiple of the threshold
+    /// at `p_max_torr`. A single fixed intensity across all pressures is what
+    /// makes the animation physical: the same pulse ignites the gas at high
+    /// pressure and fizzles at low.
+    pub drive: f64,
+}
+
+/// Results of the `breakdown` case.
+pub struct BreakdownRun {
+    /// Sweep pressures (Torr).
+    pub pressure_torr: Vec<f64>,
+    /// Threshold peak intensity at the literature-central `δ_eff` (W/cm²).
+    pub threshold: Vec<f64>,
+    /// Threshold at `δ_eff = 0.05` — the flat-slope edge of the literature
+    /// envelope (W/cm²).
+    pub threshold_lo_slope: Vec<f64>,
+    /// Threshold at `δ_eff = 0.01` — the steep-slope edge (W/cm²).
+    pub threshold_hi_slope: Vec<f64>,
+    /// Fitted log-log slope `n` of the central curve (`I_thr ∝ p^-n`).
+    pub slope: f64,
+    /// Envelope of `n` over the `δ_eff` literature range.
+    pub slope_envelope: (f64, f64),
+    /// The fixed drive intensity used for the traces (W/cm²).
+    pub drive_intensity: f64,
+    /// Electron-density traces `[pressure, time]` (m⁻³) at `drive_intensity`.
+    pub ne_traces: Array2<f64>,
+    /// Trace time axis (s), relative to the pulse peak.
+    pub trace_time: Vec<f64>,
+    /// Breakdown criterion density (m⁻³) — the line the traces must cross.
+    pub n_bd: f64,
+    /// Seed density (m⁻³): one electron in the focal volume, where every
+    /// trace starts.
+    pub n_seed: f64,
+    /// Neutral density at each sweep pressure (m⁻³) — the ceiling each trace
+    /// saturates against, since it is full ionization.
+    pub neutral_density: Vec<f64>,
+    /// T&T Eq. 4 cascade-theory threshold at each sweep pressure (W/cm²) —
+    /// the apples-to-apples reference for a cascade-only kernel.
+    pub cascade_theory: Vec<f64>,
+}
+
+/// Sweep the 0-D optical-breakdown threshold against pressure and record the
+/// electron-density avalanche at a fixed drive intensity (the `breakdown` CLI
+/// case). Pure rate physics: no field, no grid, no propagator.
+pub fn run_breakdown(p: &BreakdownParams) -> Result<BreakdownRun> {
+    use beamprop_torr::TORR;
+    if !(p.p_min_torr > 0.0 && p.p_max_torr > p.p_min_torr) {
+        anyhow::bail!(
+            "need 0 < p_min < p_max, got {} .. {} Torr",
+            p.p_min_torr,
+            p.p_max_torr
+        );
+    }
+    if p.points < 2 {
+        anyhow::bail!("need at least 2 sweep points, got {}", p.points);
+    }
+    let model = if (p.wavelength - 1064e-9).abs() < 1e-12 {
+        AirBreakdown::air_1064nm()
+    } else {
+        // Same focal geometry as the pinned T&T case, retuned to λ.
+        let r_focus = 20e-6;
+        AirBreakdown::new(
+            p.wavelength,
+            12.06,
+            r_focus / std::f64::consts::PI,
+            288.0,
+            4.0 / 3.0 * std::f64::consts::PI * r_focus.powi(3),
+        )?
+    };
+
+    let curve = |m: &AirBreakdown| -> Result<Vec<(f64, f64)>> {
+        (0..p.points)
+            .map(|i| {
+                let frac = i as f64 / (p.points - 1) as f64;
+                let torr = p.p_min_torr * (p.p_max_torr / p.p_min_torr).powf(frac);
+                let it = m.threshold_intensity(p.fwhm, torr * TORR, p.steps)?;
+                Ok((torr, it))
+            })
+            .collect()
+    };
+
+    let central = curve(&model)?;
+    // Envelope edges: δ_eff = 0.05 flattens the slope, 0.01 steepens it.
+    let lo_slope = curve(&model.with_inelastic_loss(0.05, 3.0))?;
+    let hi_slope = curve(&model.with_inelastic_loss(0.01, 3.0))?;
+
+    let slope = -loglog_slope(&central).context("fitting the threshold slope")?;
+    let env = (
+        -loglog_slope(&lo_slope).context("fitting the flat envelope edge")?,
+        -loglog_slope(&hi_slope).context("fitting the steep envelope edge")?,
+    );
+
+    // One fixed intensity for every trace, referenced to the highest-pressure
+    // threshold so the low-pressure frames genuinely fail to ignite.
+    let drive_intensity = p.drive * central.last().expect("non-empty sweep").1;
+
+    let n_time = p.steps;
+    let dt = 4.0 * p.fwhm / n_time as f64;
+    let c = 4.0 * std::f64::consts::LN_2 / (p.fwhm * p.fwhm);
+    let trace_time: Vec<f64> = (0..n_time)
+        .map(|s| -2.0 * p.fwhm + (s as f64 + 0.5) * dt)
+        .collect();
+
+    let mut ne_traces = Array2::<f64>::zeros((p.points, n_time));
+    for (row, &(torr, _)) in central.iter().enumerate() {
+        let pressure = torr * TORR;
+        let mut n_e = model.seed_density();
+        for (col, &t) in trace_time.iter().enumerate() {
+            let intensity = drive_intensity * (-c * t * t).exp();
+            n_e = model
+                .advance(n_e, intensity, pressure, dt)
+                .max(model.seed_density());
+            // Bounded by construction: the logistic term caps n_e at full
+            // ionization, so no plotting clamp is needed (there used to be one
+            // at 1e40, which was the visible ceiling in the first release).
+            ne_traces[[row, col]] = n_e;
+        }
+    }
+
+    Ok(BreakdownRun {
+        pressure_torr: central.iter().map(|c| c.0).collect(),
+        threshold: central.iter().map(|c| c.1 / 1e4).collect(),
+        threshold_lo_slope: lo_slope.iter().map(|c| c.1 / 1e4).collect(),
+        threshold_hi_slope: hi_slope.iter().map(|c| c.1 / 1e4).collect(),
+        slope,
+        slope_envelope: env,
+        drive_intensity: drive_intensity / 1e4,
+        ne_traces,
+        trace_time,
+        n_bd: model.criterion_density(),
+        n_seed: model.seed_density(),
+        neutral_density: central
+            .iter()
+            .map(|c| model.neutral_density(c.0 * TORR))
+            .collect(),
+        cascade_theory: central
+            .iter()
+            .map(|c| tt2012_cascade_threshold(c.0 * TORR, p.wavelength) / 1e4)
+            .collect(),
+    })
+}
+
+/// Pa per Torr — the pressure unit the breakdown literature and the T&T data
+/// are quoted in, kept local to the one case that needs it.
+mod beamprop_torr {
+    pub const TORR: f64 = 133.322_368_4;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn breakdown_run_shapes_and_physics() {
+        let r = run_breakdown(&BreakdownParams {
+            wavelength: 1064e-9,
+            fwhm: 6e-9,
+            p_min_torr: 300.0,
+            p_max_torr: 2000.0,
+            points: 6,
+            steps: 200,
+            drive: 1.08,
+        })
+        .unwrap();
+        assert_eq!(r.pressure_torr.len(), 6);
+        assert_eq!(r.ne_traces.shape(), &[6, 200]);
+        assert_eq!(r.trace_time.len(), 200);
+        // Threshold falls with pressure, and the envelope straddles the centre.
+        assert!(r.threshold[0] > *r.threshold.last().unwrap());
+        assert!(r.slope > 0.0);
+        assert!(r.slope_envelope.0 < r.slope && r.slope < r.slope_envelope.1);
+        // Traces start from the seed and stay finite despite the avalanche.
+        assert!(r.ne_traces.iter().all(|v| v.is_finite() && *v > 0.0));
+        // The drive must straddle the sweep — above threshold at p_max, below
+        // it at p_min — or the animation shows nothing switching on. The
+        // corrected model makes this a narrow target: I_thr spans only ~1.17x
+        // across 300-2000 Torr, so `drive` has to sit inside that.
+        let (lo, hi) = (*r.threshold.last().unwrap(), r.threshold[0]);
+        assert!(
+            r.drive_intensity > lo && r.drive_intensity < hi,
+            "drive {:.4e} does not straddle the sweep [{lo:.4e}, {hi:.4e}]",
+            r.drive_intensity
+        );
+    }
+
+    #[test]
+    fn breakdown_rejects_bad_pressure_range() {
+        let bad = BreakdownParams {
+            wavelength: 1064e-9,
+            fwhm: 6e-9,
+            p_min_torr: 2000.0,
+            p_max_torr: 300.0,
+            points: 6,
+            steps: 100,
+            drive: 1.5,
+        };
+        assert!(run_breakdown(&bad).is_err());
+    }
 
     #[test]
     fn propagate_run_shapes_and_transmission() {
