@@ -584,6 +584,15 @@ absorption length must be resolved by ≥ 4 cells and be under a quarter of the
 domain (thicker is the LSC regime, out of scope), ≥ 90 % of the beam must reach
 the front, and the front must be a strong detonation (`p₁ ≥ 10·p₀`).
 
+"Reaching the front" is measured at the leading edge of the **strongly
+absorbing** region (first cell with `α ≥ ½·α_max`), not at the pressure
+half-maximum that `front_position` reports. The two genuinely differ — in a
+detonation the reaction zone leads the pressure peak — and using the pressure
+front here would score normal front structure as upstream extinction. Under the
+grey model this check is ~1 by construction, since cold gas is exactly
+transparent; it earns its keep under inverse bremsstrahlung, where a long
+weakly ionized precursor really can eat the beam before it arrives.
+
 **`SECOND_IONIZATION_K` is enforced, not just documented.** The CJ state behind
 a strong LSD front sits at 1.5–2.5×10⁴ K and so legitimately crosses the table's
 singly-ionized ceiling. `IonizationCeiling::Refuse` (the default) bails naming
@@ -596,10 +605,10 @@ instead of being carried silently.
 Gates (`tests/validation.rs`):
 - **G3** (`lsd_front_speed_matches_the_raizer_closed_form`) — **VERIFICATION,
   not validation.** At `S = 10¹¹ W/m²`, `ρ₀ = 1.225 kg/m³`, `γ = 1.4`, and an
-  absorption length `1/α = 50 µm`, the measured front speed is **5399 m/s**
-  against Raizer's `D = [2(γ²−1)S/ρ₀]^(1/3)` = **5392 m/s**, `+0.14 %`;
-  gated below 1 %. Refining `dx` from 10 µm to 2.5 µm moves it by under 0.05 %,
-  so the answer is grid-converged and the residual is physical, not numerical.
+  absorption length `1/α = 50 µm`, the measured front speed is **5402 m/s**
+  against Raizer's `D = [2(γ²−1)S/ρ₀]^(1/3)` = **5392 m/s**, `+0.19 %`;
+  gated below 1 %. Refining `dx` from 10 µm to 5 µm moves it by 5×10⁻⁵, so the
+  answer is grid-converged and the residual is physical, not numerical.
 
   The label matters. Raizer's expression is **not** an independent check on this
   model — it is the Chapman–Jouguet construction the deposition model is built
@@ -612,12 +621,33 @@ Gates (`tests/validation.rs`):
   otherwise, which is precisely the M6a "D5" trap.
 - **G3b** (`lsd_front_speed_converges_as_the_absorption_layer_thins`) — the
   refinement that actually bites. Over `1/α = 400 → 200 → 100 → 50 µm` at
-  `dx = 10 µm` the residual runs **−13.28 % → −5.25 % → −1.22 % → +0.14 %**,
-  monotone, each halving taking at least 2.5× off the error. The sign is the
+  `dx = 10 µm` the residual runs **−8.26 % → −2.66 % → −0.43 % → +0.19 %**,
+  monotone, each halving taking at least 2.3× off the error. The sign is the
   expected one: a thick deposition zone releases part of the beam energy behind
   the sonic plane, where it can no longer support the front, so the wave runs
   slow — it reaches the CJ speed only in the thin-layer limit the closed form
   assumes.
+- **G3c** (`lsd_front_speed_is_seed_independent`) — the answer must not depend
+  on how the wave was lit. A seeded detonation starts overdriven and relaxes
+  onto the CJ speed slowly, and G3's 1 % tolerance is the same order as that
+  transient, so the seed is a free parameter sitting directly under the headline
+  number unless it is checked. Between a 1× and a 2× CJ-pressure seed the
+  results differ by `5.3e-3` at a 1.0 µs settle, `2.7e-3` at 1.4 µs and
+  `1.1e-3` at the 1.8 µs used, both converging on `≈ +0.2 %`. Gated below
+  `2e-3`, with both boundaries asserted undisturbed.
+- **G2b** (`lsd_source_coupling_is_second_order`) — the hydro↔source coupling is
+  2nd order, the M6c counterpart of M1's `split_step_is_second_order` and M4's
+  `coupling_is_second_order`. Refining `dx` and `dt` **together at fixed CFL**
+  (the limit the claim is stated in; MUSCL-Hancock degenerates to forward Euler
+  in time if `dt→0` at fixed `dx`), the Strang cadence gives observed order
+  **1.99 / 2.03 / 1.99**. The gate also runs a deliberate 1st-order contrast —
+  folding the source into the update gives **0.88 / 1.02 / 1.07** — so it
+  demonstrably resolves the difference rather than passing vacuously.
+
+  This is why `Euler1d::step_with_source` carries a warning: used on its own it
+  *is* that 1st-order contrast. Nothing about its output looks wrong; it simply
+  converges half as fast. The driver's four-call Strang sandwich is the
+  supported path.
 - **G5** (`lsd_energy_budget_closes`) — absorbed laser energy versus the
   domain's energy gain. Measured relative residual **2.1×10⁻¹⁶ to 4.6×10⁻¹⁵**,
   five orders inside the 10⁻¹⁰ the spec asks. Exact rather than approximate for

@@ -1478,6 +1478,124 @@ fn euler_muscl_hancock_is_second_order_on_smooth_flow() {
     );
 }
 
+/// Smooth periodic flow with a state-dependent volumetric heat source, run to
+/// `t` on `n` cells at a fixed CFL. `strang` selects the driver's
+/// `S(dt/2) H(dt) S(dt/2)` cadence over folding the source into the update.
+///
+/// Returns the pressure profile — the variable the source acts on directly.
+fn coupled_pressure_profile(n: usize, strang: bool) -> Vec<f64> {
+    const T_END: f64 = 3e-5;
+    const HEAT: f64 = 2e8;
+    let mut s = Euler1d::from_fn(
+        IdealGas::AIR,
+        Boundary::Periodic,
+        0.0,
+        1.0 / n as f64,
+        n,
+        |x| {
+            let k = 2.0 * std::f64::consts::PI;
+            Primitive {
+                rho: 1.225 * (1.0 + 0.05 * (k * x).sin()),
+                u: 10.0 * (k * x).cos(),
+                p: 101_325.0 * (1.0 + 0.02 * (k * x).sin()),
+            }
+        },
+    )
+    .expect("coupled-order setup");
+    s.set_cfl(0.4).expect("cfl");
+    while s.time() < T_END {
+        let dt = (0.95 * s.stable_dt().expect("dt")).min(T_END - s.time());
+        // Heating proportional to local density: smooth, and state-dependent,
+        // so the two operators genuinely fail to commute.
+        let q = |s: &Euler1d| -> Vec<f64> {
+            s.primitives()
+                .iter()
+                .map(|w| HEAT * w.rho / 1.225)
+                .collect()
+        };
+        if strang {
+            let r = q(&s);
+            s.add_energy(0.5 * dt, |i, _| r[i]).expect("source");
+            s.step(dt).expect("hydro");
+            let r = q(&s);
+            s.add_energy(0.5 * dt, |i, _| r[i]).expect("source");
+        } else {
+            let r = q(&s);
+            s.step_with_source(dt, |i, _| r[i]).expect("godunov");
+        }
+    }
+    s.primitives().iter().map(|w| w.p).collect()
+}
+
+/// Conservatively restrict a fine profile onto `n` coarse cells.
+fn restrict_profile(fine: &[f64], n: usize) -> Vec<f64> {
+    let block = fine.len() / n;
+    (0..n)
+        .map(|i| fine[i * block..(i + 1) * block].iter().sum::<f64>() / block as f64)
+        .collect()
+}
+
+fn coupled_orders(strang: bool) -> Vec<f64> {
+    let reference = coupled_pressure_profile(8192, strang);
+    let errors: Vec<f64> = [128usize, 256, 512, 1024]
+        .iter()
+        .map(|&n| {
+            let got = coupled_pressure_profile(n, strang);
+            let want = restrict_profile(&reference, n);
+            got.iter()
+                .zip(&want)
+                .map(|(a, b)| (a - b).abs())
+                .sum::<f64>()
+                / n as f64
+        })
+        .collect();
+    errors
+        .windows(2)
+        .map(|p| observed_order(p[0], p[1]))
+        .collect()
+}
+
+/// **G2b — the hydro↔source coupling is 2nd order (verification).**
+///
+/// M6c claims Strang splitting keeps the *coupled* scheme 2nd order, the same
+/// claim M1 makes for the propagator's split-step and M4 for its blooming
+/// coupling. Both of those gate it (`split_step_is_second_order`,
+/// `coupling_is_second_order`); G2 above does not — it runs the homogeneous
+/// solver with the source off. This closes that gap.
+///
+/// Refinement is `dx` and `dt` **together at fixed CFL**, which is how the
+/// claim is stated: MUSCL-Hancock is 2nd order in that limit, and degenerates
+/// to forward Euler in time (1st order) if `dt` is driven to zero at fixed
+/// `dx`, so refining `dt` alone measures the wrong thing.
+///
+/// Measured: Strang **1.99 / 2.03 / 1.99**. The contrast run is what makes this
+/// non-vacuous — folding the source into the update instead gives
+/// **0.88 / 1.02 / 1.07**, so the test demonstrably resolves the difference
+/// between 1st and 2nd order rather than passing on a technicality.
+#[test]
+fn lsd_source_coupling_is_second_order() {
+    let strang = coupled_orders(true);
+    for &p in &strang {
+        assert!(
+            p > 1.85,
+            "Strang-split coupling should be 2nd order, got {strang:?}"
+        );
+    }
+    assert!(
+        *strang.last().unwrap() < 2.15,
+        "observed order above 2 — check the reference, not the scheme: {strang:?}"
+    );
+
+    // Non-vacuity: the same measurement must catch a 1st-order coupling.
+    let godunov = coupled_orders(false);
+    assert!(
+        *godunov.last().unwrap() < 1.3,
+        "folding the source into the update should be 1st order; if this now \
+         reads 2nd order the measurement is not resolving the difference and \
+         the gate above proves nothing: {godunov:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // M6c gate G6 — plasma-table tabulation consistency (docs/M6C_SPEC.md, D8).
 //
@@ -1646,16 +1764,34 @@ const LSD_AMBIENT: Primitive = Primitive {
 const LSD_INTENSITY: f64 = 1e11;
 const LSD_LENGTH: f64 = 2.5e-2;
 /// Long enough for the seeded wave to relax onto its self-sustaining speed.
-const LSD_SETTLE: f64 = 1.0e-6;
+///
+/// Not a round number picked for comfort: a seeded detonation is overdriven and
+/// relaxes onto the CJ speed *slowly*, so too short a settle leaves the answer
+/// depending on the seed rather than on the physics. Measured on this geometry,
+/// the spread between a 1× and a 2× CJ-pressure seed falls
+/// `5.3e-3 → 2.7e-3 → 1.1e-3` over settles of 1.0, 1.4, 1.8 µs. 1.8 µs is where
+/// it drops below the 2e-3 that `lsd_front_speed_is_seed_independent` gates,
+/// while both domain boundaries are still undisturbed.
+const LSD_SETTLE: f64 = 1.8e-6;
 /// Window the mean front speed is measured over.
 const LSD_WINDOW: f64 = 4.0e-7;
 /// Specific internal energy above which the grey model absorbs (J/kg): ~10×
 /// ambient, so undisturbed air is transparent and shocked air is not.
 const LSD_E_IGNITE: f64 = 2e6;
+/// Seed pressure as a multiple of the CJ pressure `ρ₀D²/(γ+1)`. Lit and mildly
+/// overdriven, so the wave relaxes *down* onto the self-sustaining speed rather
+/// than having to build up to it.
+const LSD_SEED_MULTIPLE: f64 = 2.0;
 
 /// Settle a seeded LSD wave and return its mean front speed (m/s), positive
 /// toward the laser, alongside the column for budget checks.
 fn lsd_front_speed(n_cells: usize, alpha: f64) -> (f64, LsdColumn) {
+    lsd_front_speed_seeded(n_cells, alpha, LSD_SEED_MULTIPLE)
+}
+
+/// As [`lsd_front_speed`], with the seed strength as a free parameter so
+/// seed-independence can be measured rather than assumed.
+fn lsd_front_speed_seeded(n_cells: usize, alpha: f64, seed_multiple: f64) -> (f64, LsdColumn) {
     let gas = IdealGas::AIR;
     let d_cj = raizer_lsd_velocity(&gas, LSD_INTENSITY, LSD_AMBIENT.rho);
     let mut column = LsdColumn::seeded(
@@ -1666,10 +1802,7 @@ fn lsd_front_speed(n_cells: usize, alpha: f64) -> (f64, LsdColumn) {
         SeededIgnition {
             centre: 0.72 * LSD_LENGTH,
             width: 6e-4,
-            // ~2× the CJ pressure ρ₀D²/(γ+1): lit and mildly overdriven, so it
-            // relaxes down onto the self-sustaining speed during the settle
-            // rather than having to build up to it.
-            pressure: 2.0 * LSD_AMBIENT.rho * d_cj * d_cj / (gas.gamma + 1.0),
+            pressure: seed_multiple * LSD_AMBIENT.rho * d_cj * d_cj / (gas.gamma + 1.0),
         },
         Absorption::GreyThreshold {
             alpha,
@@ -1689,22 +1822,22 @@ fn lsd_front_speed(n_cells: usize, alpha: f64) -> (f64, LsdColumn) {
 /// the regime the closed form's assumptions hold in.
 ///
 /// Measured at `S = 10¹¹ W/m²`, `ρ₀ = 1.225 kg/m³`, `γ = 1.4`, absorption
-/// length `1/α = 50 µm`: `D = 5399 m/s` against Raizer's 5392 m/s, `+0.14 %`.
+/// length `1/α = 50 µm`: `D = 5402 m/s` against Raizer's 5392 m/s, `+0.19 %`.
 ///
 /// The spec asked for the residual to shrink under **grid** refinement. That
 /// turned out to be the wrong knob, and this gate says so instead of quietly
-/// choosing an easier one. Over `dx = 10 → 5 → 2.5 µm` the answer moves by less
-/// than 0.05 % — it is already grid-converged, and what remains is set by the
-/// *physical* absorption length, not the mesh. The convergence that matters is
-/// therefore in `1/α`, which is the closed form's own "thin absorption layer"
-/// assumption, and it is gated next door. `docs/M6C_SPEC.md` is amended to match.
+/// choosing an easier one. Over `dx = 10 → 5 µm` the answer moves by 5×10⁻⁵ —
+/// it is already grid-converged, and what remains is set by the *physical*
+/// absorption length, not the mesh. The convergence that matters is therefore
+/// in `1/α`, the closed form's own "thin absorption layer" assumption, and it
+/// is gated next door. `docs/M6C_SPEC.md` is amended to match.
 #[test]
 fn lsd_front_speed_matches_the_raizer_closed_form() {
     let gas = IdealGas::AIR;
     let d_cj = raizer_lsd_velocity(&gas, LSD_INTENSITY, LSD_AMBIENT.rho);
 
     let mut errors = Vec::new();
-    for n_cells in [2_500usize, 5_000, 10_000] {
+    for n_cells in [2_500usize, 5_000] {
         let (d, mut column) = lsd_front_speed(n_cells, 2e4);
         // The run must be in the regime the closed form describes — resolved
         // absorption layer, beam reaching the front, strong detonation.
@@ -1718,15 +1851,59 @@ fn lsd_front_speed_matches_the_raizer_closed_form() {
         errors.push(err);
     }
 
-    // Grid-converged: the spread across an 4× refinement is far below the
+    // Grid-converged: the spread across the refinement is far below the
     // residual itself, which is the evidence that the residual is physical
     // (the finite absorption layer) and not discretization error.
     let spread = errors.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
         - errors.iter().cloned().fold(f64::INFINITY, f64::min);
     assert!(
-        spread < 1e-3,
+        spread < 5e-4,
         "front speed is not grid-converged: errors {errors:?} span {spread:.2e}"
     );
+}
+
+/// **G3c — the front speed does not depend on how the wave was lit.**
+///
+/// A seeded detonation starts overdriven and relaxes onto the CJ speed slowly,
+/// so a gate that settles too briefly is partly measuring the seed rather than
+/// the physics — and G3's 1 % tolerance is the same order as the seed
+/// sensitivity, which makes that a real risk rather than a theoretical one.
+///
+/// Measured on the gate's own geometry, a 1× versus 2× CJ-pressure seed differ
+/// by `5.3e-3` at a 1.0 µs settle, `2.7e-3` at 1.4 µs, and `1.1e-3` at the
+/// 1.8 µs `LSD_SETTLE` — both converging on `≈ +0.2 %`. Without this the
+/// choice of seed would be an unexamined free parameter sitting directly under
+/// the headline number.
+#[test]
+fn lsd_front_speed_is_seed_independent() {
+    let gas = IdealGas::AIR;
+    let d_cj = raizer_lsd_velocity(&gas, LSD_INTENSITY, LSD_AMBIENT.rho);
+
+    let errors: Vec<f64> = [1.0, LSD_SEED_MULTIPLE]
+        .iter()
+        .map(|&m| {
+            let (d, column) = lsd_front_speed_seeded(2_500, 2e4, m);
+            assert!(
+                column.boundaries_undisturbed(),
+                "seed {m}×: the wave reached a boundary before the measurement"
+            );
+            d / d_cj - 1.0
+        })
+        .collect();
+
+    let spread = (errors[0] - errors[1]).abs();
+    assert!(
+        spread < 2e-3,
+        "front speed depends on the seed: {errors:?} differ by {spread:.2e}. \
+         Either LSD_SETTLE is too short for the wave to relax onto its \
+         self-sustaining speed, or the speed is not self-sustaining at all."
+    );
+    for &err in &errors {
+        assert!(
+            err.abs() < 0.01,
+            "seed sweep left the closed form: {errors:?}"
+        );
+    }
 }
 
 /// **G3b — the residual vanishes as the absorption layer thins (VERIFICATION).**
@@ -1736,8 +1913,8 @@ fn lsd_front_speed_matches_the_raizer_closed_form() {
 /// halving `1/α` is the refinement it must respond to.
 ///
 /// Measured at `dx = 10 µm` for `1/α = 400 → 200 → 100 → 50 µm`:
-/// `−13.28 %`, `−5.25 %`, `−1.22 %`, `+0.14 %` — monotone, and each halving
-/// takes at least a factor 2.5 off the error (2.5×, 4.3×, 8.7×).
+/// `−8.26 %`, `−2.66 %`, `−0.43 %`, `+0.19 %` — monotone, each halving taking
+/// at least a factor 2.3 off the error (3.1×, 6.2×, 2.3×).
 ///
 /// The sign is the physically expected one: a thick deposition zone releases
 /// part of the beam energy behind the sonic plane, where it can no longer

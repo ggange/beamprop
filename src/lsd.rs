@@ -565,15 +565,33 @@ impl LsdColumn {
 
     /// Fraction of the incident beam that survives the gas upstream of the
     /// front and actually reaches it.
+    ///
+    /// "The front" here is the leading edge of the **strongly absorbing**
+    /// region — the first cell whose `α` reaches half the column's maximum —
+    /// and not [`front_position`](Self::front_position)'s pressure half-maximum.
+    /// The two are deliberately different, and using the pressure front here
+    /// would be a category error: in a detonation the reaction zone *leads* the
+    /// pressure peak, so beam energy absorbed between the two is the front
+    /// doing its job, not the front starving. Keying on `α` measures what the
+    /// check is named for — extinction in the gas *ahead* of the absorbing
+    /// zone.
+    ///
+    /// Note this is ~1 by construction under
+    /// [`Absorption::GreyThreshold`], where cold gas is exactly transparent.
+    /// That is the honest answer for that model, not a strong check; the
+    /// quantity earns its keep under
+    /// [`Absorption::InverseBremsstrahlung`], where a long weakly ionized
+    /// precursor genuinely can eat the beam before it arrives.
     pub fn fraction_reaching_front(&mut self) -> Result<f64> {
-        let Some(x_front) = self.front_position() else {
+        let alpha = self.alpha_profile()?;
+        let alpha_max = alpha.iter().copied().fold(0.0, f64::max);
+        if alpha_max <= 0.0 {
+            return Ok(1.0);
+        }
+        let Some(k) = alpha.iter().position(|&a| a >= 0.5 * alpha_max) else {
             return Ok(1.0);
         };
-        let dx = self.hydro.dx();
         let profile = self.intensity_profile()?;
-        // The face at or just before the front.
-        let k = ((x_front - self.hydro.x_centre(0) + 0.5 * dx) / dx).floor();
-        let k = (k.max(0.0) as usize).min(profile.len() - 1);
         Ok(profile[k] / self.incident)
     }
 

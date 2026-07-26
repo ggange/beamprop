@@ -296,12 +296,12 @@ are integrator unit tests".
 **Amended (step 4): the refinement knob is the absorption length, not the
 grid.** This document originally required the residual to shrink under *grid*
 refinement. Measurement says that is the wrong parameter. At a fixed absorption
-length `1/α = 50 µm`, refining `dx` from 10 µm to 2.5 µm moves `D` by under
-0.05 % — the answer is already grid-converged, and the residual that remains is
-not discretization error. It is set by the *physical* thickness of the
-deposition layer, which is the closed form's own "thin absorption layer"
-assumption. Halving `1/α` from 400 µm to 50 µm walks the residual
-`−13.3 % → −5.3 % → −1.2 % → +0.14 %`, monotonically and by at least 2.5× per
+length `1/α = 50 µm`, refining `dx` from 10 µm to 5 µm moves `D` by 5×10⁻⁵ —
+the answer is already grid-converged, and the residual that remains is not
+discretization error. It is set by the *physical* thickness of the deposition
+layer, which is the closed form's own "thin absorption layer" assumption.
+Halving `1/α` from 400 µm to 50 µm walks the residual
+`−8.3 % → −2.7 % → −0.4 % → +0.19 %`, monotonically and by at least 2.3× per
 halving.
 
 The sign is the expected one and worth recording: a thick deposition zone
@@ -312,6 +312,32 @@ the level at a thin layer, grid-convergence at fixed `1/α` (which shows the
 residual is physical), and convergence in `1/α` (which is the assumption
 actually being relaxed). Gating grid refinement alone would have been gating the
 knob that does not move the answer.
+
+**Amended again (review before step 5): G3c, seed-independence.** A seeded
+detonation starts overdriven and relaxes onto the CJ speed *slowly*, so the
+settle time is not a free choice — and at the 1.0 µs originally used, the
+answer moved by 5.3×10⁻³ between a 1× and a 2× CJ-pressure seed, against G3's
+own 1 % tolerance. The seed was therefore an unexamined parameter sitting
+directly under the headline number. `LSD_SETTLE` is now 1.8 µs, where the same
+spread is 1.1×10⁻³, and `lsd_front_speed_is_seed_independent` gates it below
+2×10⁻³ rather than leaving it to be assumed.
+
+### G2b — the hydro↔source coupling is 2nd order (verification)
+
+**Added (review before step 5).** This document and `MODELS.md` both claim
+Strang splitting keeps the *coupled* scheme 2nd order. M1 gates that claim for
+the propagator's split-step and M4 gates it for the blooming coupling; M6c
+asserted it and gated nothing — G2 runs the homogeneous solver with the source
+off. That was a gap in exactly the place this project's discipline exists to
+cover.
+
+Refinement is `dx` and `dt` **together at fixed CFL**, which is the limit the
+claim is stated in: MUSCL-Hancock is 2nd order there, and degenerates to forward
+Euler in time (1st order) if `dt` is driven to zero at fixed `dx`, so refining
+`dt` alone measures the wrong thing. Measured: Strang **1.99 / 2.03 / 1.99**;
+the deliberate 1st-order contrast (folding the source into the update)
+**0.88 / 1.02 / 1.07**. The contrast is part of the gate — without it, a
+measurement that could not resolve 1st from 2nd order would pass silently.
 
 ### G4 — parameter-free scaling exponent (THE PHYSICS GATE)
 

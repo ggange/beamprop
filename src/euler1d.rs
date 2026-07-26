@@ -334,15 +334,28 @@ impl Euler1d {
 
     /// Bail loudly on any non-physical cell, naming it and the step. The spec's
     /// failure-mode table: detect every update, never clamp.
-    fn assert_physical(&self, cells: &[Conserved], stage: &str) -> Result<()> {
-        for (i, &u) in cells.iter().enumerate() {
+    ///
+    /// `first_index` is the **interior** index of `cells[0]`, because not every
+    /// caller passes the interior array: the MUSCL stage checks a padded slice
+    /// that starts one cell *before* the domain. Without it the bail names the
+    /// wrong cell, which defeats the point of bailing loudly — the index is
+    /// what you go and look at. Negative indices and indices ≥ `len()` are
+    /// ghost cells and are reported as such.
+    fn assert_physical(&self, cells: &[Conserved], stage: &str, first_index: isize) -> Result<()> {
+        for (k, &u) in cells.iter().enumerate() {
             let w = u.to_primitive(&self.gas);
             if !is_positive(w.rho) || !is_positive(w.p) || !w.u.is_finite() {
+                let i = k as isize + first_index;
+                let ghost = if i < 0 || i >= self.cells.len() as isize {
+                    " (ghost)"
+                } else {
+                    ""
+                };
                 bail!(
-                    "euler1d: non-physical state after {stage} at step {}, cell {i} \
+                    "euler1d: non-physical state after {stage} at step {}, cell {i}{ghost} \
                      (x = {:.6e} m, t = {:.6e} s): ρ = {:.6e}, u = {:.6e}, p = {:.6e}",
                     self.step_count,
-                    self.x_centre(i),
+                    self.x_min + (i as f64 + 0.5) * self.dx,
                     self.time,
                     w.rho,
                     w.u,
@@ -456,8 +469,19 @@ impl Euler1d {
             left_face[i] = l.zip(df.map(|d| half * d), |a, b| a + b);
             right_face[i] = r.zip(df.map(|d| half * d), |a, b| a + b);
         }
-        self.assert_physical(&left_face[1..n_pad - 1], "MUSCL half-step (left face)")?;
-        self.assert_physical(&right_face[1..n_pad - 1], "MUSCL half-step (right face)")?;
+        // The slice starts at padded index 1, which is the last ghost cell —
+        // interior index `1 - N_GHOST`.
+        let first = 1 - N_GHOST as isize;
+        self.assert_physical(
+            &left_face[1..n_pad - 1],
+            "MUSCL half-step (left face)",
+            first,
+        )?;
+        self.assert_physical(
+            &right_face[1..n_pad - 1],
+            "MUSCL half-step (right face)",
+            first,
+        )?;
 
         // Interface j sits between padded cells N_GHOST-1+j and N_GHOST+j.
         Ok((0..=self.cells.len())
@@ -478,8 +502,24 @@ impl Euler1d {
     /// and its positivity guard stay in one place; the module still knows
     /// nothing about where the energy comes from.
     ///
-    /// Note the driver, not this method, owns the Strang splitting: the spec's
-    /// cadence applies the source symmetrically around the hydro update.
+    /// # This method alone is only 1st-order accurate
+    ///
+    /// It folds the source into the conservative update, which is Godunov
+    /// splitting. **Measured** on smooth flow with an active source, refining
+    /// `dx` and `dt` together at fixed CFL: this gives observed order
+    /// **0.88 / 1.02 / 1.07**, against **1.99 / 2.03 / 1.99** for the Strang
+    /// sandwich
+    ///
+    /// ```text
+    /// add_energy(dt/2) → step(dt) → recompute the source → add_energy(dt/2)
+    /// ```
+    ///
+    /// which is what [`LsdColumn::advance`](crate::lsd::LsdColumn::advance)
+    /// does and what gate G2b holds to. Reaching for this method because it is
+    /// one call instead of four silently costs an order of accuracy, and
+    /// nothing about the result looks wrong — it just converges half as fast.
+    /// Prefer the driver; use this only where 1st order is genuinely acceptable
+    /// and say so at the call site.
     pub fn step_with_source(&mut self, dt: f64, source: impl Fn(usize, f64) -> f64) -> Result<()> {
         if !is_positive(dt) {
             bail!(
@@ -509,7 +549,7 @@ impl Euler1d {
             })
             .collect();
 
-        self.assert_physical(&updated, "conservative update")?;
+        self.assert_physical(&updated, "conservative update", 0)?;
         self.cells = updated;
         self.time += dt;
         self.step_count += 1;
@@ -544,7 +584,7 @@ impl Euler1d {
                 u
             })
             .collect();
-        self.assert_physical(&updated, "energy source")?;
+        self.assert_physical(&updated, "energy source", 0)?;
         self.cells = updated;
         Ok(())
     }
@@ -745,6 +785,56 @@ mod tests {
         let err = s.add_energy(1e-9, |_, _| -1e15).unwrap_err().to_string();
         assert!(err.contains("non-physical"), "unexpected error: {err}");
         assert!(err.contains("energy source"), "stage not named: {err}");
+    }
+
+    #[test]
+    fn the_positivity_bail_names_the_cell_it_means() {
+        // The whole point of bailing loudly is that the index is the one you go
+        // and look at. The MUSCL stage checks a slice that starts one cell
+        // *before* the domain, so it passes a negative first index; getting
+        // that offset wrong silently misreports every blow-up.
+        let s = sod(16);
+        let gas = IdealGas::AIR;
+        let good = Primitive {
+            rho: 1.0,
+            u: 0.0,
+            p: 1.0,
+        }
+        .to_conserved(&gas);
+        let mut cells = vec![good; 5];
+        cells[3] = Conserved { rho: -1.0, ..good };
+
+        // Interior array: element 3 is cell 3.
+        let err = s
+            .assert_physical(&cells, "test", 0)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cell 3"), "wrong cell named: {err}");
+        assert!(
+            err.contains(&format!("{:.6e}", s.x_centre(3))),
+            "x does not match the named cell: {err}"
+        );
+        assert!(!err.contains("(ghost)"), "cell 3 is interior: {err}");
+
+        // MUSCL slice: element 3 is interior cell 3 + (1 - N_GHOST) = 2.
+        let err = s
+            .assert_physical(&cells, "test", 1 - N_GHOST as isize)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cell 2"), "wrong cell named: {err}");
+        assert!(
+            err.contains(&format!("{:.6e}", s.x_centre(2))),
+            "x does not match the named cell: {err}"
+        );
+
+        // And a genuine ghost is labelled rather than passed off as interior.
+        let mut ghost = vec![good; 2];
+        ghost[0] = Conserved { rho: -1.0, ..good };
+        let err = s
+            .assert_physical(&ghost, "test", 1 - N_GHOST as isize)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cell -1 (ghost)"), "ghost not flagged: {err}");
     }
 
     #[test]
