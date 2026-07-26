@@ -183,6 +183,13 @@ frozen air table (`src/airprops.rs`, embedded `data/air_properties.npy`,
 bilinear in `(T, p)`, refractivity rescaled to the run wavelength by Ciddor
 dispersion). The absorbed power also leaves the beam (`extinction = α_abs`).
 
+The absolute intensity the heating needs comes from
+[`IntensityScale`](../src/field.rs) — `I_phys = (P_beam/P_field)·|u|²`, pinned
+from the **launch** field, since propagation conserves `P_field` and any
+extinction is already carried by `|u|²`. Blooming computed this inline until
+M6c's T4 extraction moved it to `src/field.rs` for the LSD driver to share;
+the move is gated as an exact no-op (G0a below).
+
 Gates (`tests/blooming.rs`):
 - **B1** closed-form crosswind phase (erf profile) reproduced to 0.39 % max
   over all points with `I > 10⁻⁶·I₀`;
@@ -440,8 +447,18 @@ positivity guard that **bails with the cell and step** rather than clamping.
 deposition, ignition, and the plasma column live one layer up. That is what
 keeps the two gates below independent of the model that will use them.
 
-Both gates are **verification** — "the code solves the equations written down"
-— not validation. Nothing here is yet a claim about the world; the physics
+Gate **G0** guards the T4 extraction that this milestone required
+(`tests/blooming.rs`): **G0a** reproduces the pre-extraction `δn` arithmetic
+from scratch and demands bit-for-bit equality with `ThermalBlooming`'s output —
+a tolerance would not see a reassociation — and **G0b** pins the size and hash
+of `data/air_properties.npy`, since M4's numbers are calibrated to that table
+and M6c's plasma properties belong in a separate file (D8). G0a deliberately
+avoids FFTs so it stays deterministic on every platform the M5 wheels target;
+a whole-run field fingerprint would look stronger and be flakier, as FFT
+results are not bit-portable across libraries.
+
+The G1/G2 gates are **verification** — "the code solves the equations written
+down" — not validation. Nothing here is yet a claim about the world; the physics
 gate for M6c is the parameter-free `D ∝ S^(1/3)`, `ρ₀^(−1/3)` scaling (G4),
 which arrives with the deposition layer.
 

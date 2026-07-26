@@ -19,6 +19,7 @@ use anyhow::{Result, bail};
 use ndarray::Array2;
 
 use crate::airprops::AirProperties;
+use crate::field::IntensityScale;
 use crate::grid::Grid;
 use crate::medium::Medium;
 
@@ -35,9 +36,10 @@ const MAX_DELTA_T_FRAC: f64 = 0.1;
 pub struct ThermalBlooming {
     n: usize,
     dx: f64,
-    /// Physical-intensity scale: `I_phys = intensity_scale · |u|²`, fixed from
-    /// the initial field so `|u|²` (arbitrary units) becomes W/m².
-    intensity_scale: f64,
+    /// Physical-intensity scale, fixed from the initial field so `|u|²`
+    /// (arbitrary units) becomes W/m². Extracted to [`IntensityScale`] by T4;
+    /// blooming was its first consumer, M6c's LSD driver is its second.
+    intensity_scale: IntensityScale,
     /// `α_abs / (ρ·c_p·v)`: intensity line-integral → temperature rise.
     heat_coeff: f64,
     /// `(n₀ − 1)/T₀`: temperature rise → index drop.
@@ -77,12 +79,7 @@ impl ThermalBlooming {
         if !(wind_speed > 0.0 && wind_speed.is_finite()) {
             bail!("wind speed must be positive and finite, got {wind_speed}");
         }
-        if !(beam_power > 0.0 && beam_power.is_finite()) {
-            bail!("beam power must be positive and finite, got {beam_power}");
-        }
-        if initial_field_power <= 0.0 {
-            bail!("initial field power must be positive, got {initial_field_power}");
-        }
+        let intensity_scale = IntensityScale::from_beam_power(beam_power, initial_field_power)?;
         if !(alpha_abs >= 0.0 && alpha_abs.is_finite()) {
             bail!("absorption coefficient must be non-negative and finite, got {alpha_abs}");
         }
@@ -96,7 +93,7 @@ impl ThermalBlooming {
         Ok(Self {
             n: grid.n,
             dx: grid.dx,
-            intensity_scale: beam_power / initial_field_power,
+            intensity_scale,
             heat_coeff: alpha_abs / (air.rho * air.cp * wind_speed),
             index_coeff: air.n_minus_1 / t0,
             t0,
@@ -132,7 +129,8 @@ impl Medium for ThermalBlooming {
         let midpoint_decay = (-0.5 * self.alpha_abs * dz).exp();
         // δn coefficient combining physical-intensity scaling, the heat
         // integral, and the index drop: δn = −(index·heat·scale)·∫I_arb dx.
-        let coeff = -self.index_coeff * self.heat_coeff * self.intensity_scale * midpoint_decay;
+        let scale = self.intensity_scale.per_unit_intensity();
+        let coeff = -self.index_coeff * self.heat_coeff * scale * midpoint_decay;
         let mut dn = Array2::zeros((ny, nx));
         let mut max_delta_t = 0.0_f64;
         for iy in 0..ny {
@@ -146,7 +144,7 @@ impl Medium for ThermalBlooming {
                 cum += 0.5 * (prev + cur) * self.dx;
                 dn[[iy, ix]] = coeff * cum;
                 // ΔT = |δn| / index_coeff; track the largest for the guard.
-                let delta_t = self.heat_coeff * self.intensity_scale * cum;
+                let delta_t = self.heat_coeff * scale * cum;
                 if delta_t > max_delta_t {
                     max_delta_t = delta_t;
                 }

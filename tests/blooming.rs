@@ -566,3 +566,98 @@ fn b3_smith1977_curve_quantitative() {
         100.0 * worst
     );
 }
+
+// ---------------------------------------------------------------------------
+// M6c gate G0 — the T4 extraction changed nothing (CRITICAL, verification).
+//
+// `docs/M6C_SPEC.md` makes this non-negotiable: pulling the physical-intensity
+// scale out of `ThermalBlooming` into `IntensityScale` must leave M4 exactly
+// where it was. The gates above already cover M4's physics; these two pin the
+// part a tolerance-based gate cannot see — that the refactor is arithmetically
+// a no-op, and that the frozen air table is untouched.
+// ---------------------------------------------------------------------------
+
+/// FNV-1a over a byte stream. Enough to pin a frozen data file; not a
+/// cryptographic claim.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// **G0a — the extracted scale is bit-for-bit the inline one it replaced.**
+///
+/// `ThermalBlooming` used to compute `beam_power / initial_field_power` inline
+/// and multiply it into the `δn` coefficient. This reproduces that arithmetic
+/// from scratch, in the original order, and demands **exact** equality with the
+/// medium's output — not a tolerance. Any reassociation introduced by routing
+/// through `IntensityScale` would show up here as a last-bit difference.
+///
+/// Deliberately free of FFTs: it compares `index_response` against closed
+/// arithmetic, so it is deterministic on every platform the M5 wheels build
+/// for. A whole-run field fingerprint would have been a stronger-looking gate
+/// and a flakier one — FFT results are not bit-portable across libraries.
+#[test]
+fn g0_intensity_scale_extraction_is_arithmetically_identical() {
+    let grid = Grid::new(256, 0.5e-3);
+    let w = 10e-3;
+    let (wind, power, dz) = (1.0, 1e4, 20.0);
+    let air = standard_air();
+
+    let field = Field::gaussian(grid, WAVELENGTH, w);
+    let p_init = field.power();
+    let bloom = ThermalBlooming::new(grid, air, ALPHA_ABS, wind, power, p_init, w, T0).unwrap();
+    let intensity = field.intensity();
+    let dn = bloom.index_response(0, &intensity, dz).unwrap();
+
+    // The pre-extraction formula, verbatim: scale inline, same operand order.
+    let scale = power / p_init;
+    let heat_coeff = ALPHA_ABS / (air.rho * air.cp * wind);
+    let index_coeff = air.n_minus_1 / T0;
+    let midpoint_decay = (-0.5 * ALPHA_ABS * dz).exp();
+    let coeff = -index_coeff * heat_coeff * scale * midpoint_decay;
+
+    let (ny, nx) = intensity.dim();
+    let mut reference = Array2::zeros((ny, nx));
+    for iy in 0..ny {
+        let mut cum = 0.0;
+        let mut prev = intensity[[iy, 0]];
+        reference[[iy, 0]] = 0.0;
+        for ix in 1..nx {
+            let cur = intensity[[iy, ix]];
+            cum += 0.5 * (prev + cur) * grid.dx;
+            reference[[iy, ix]] = coeff * cum;
+            prev = cur;
+        }
+    }
+
+    for (i, (got, want)) in dn.iter().zip(reference.iter()).enumerate() {
+        assert_eq!(
+            got.to_bits(),
+            want.to_bits(),
+            "δn differs from the pre-extraction arithmetic at flat index {i}: \
+             {got:.17e} vs {want:.17e} — T4 was supposed to be a no-op"
+        );
+    }
+}
+
+/// **G0b — `data/air_properties.npy` is byte-identical.**
+///
+/// M4's green gate rests on this table. Nothing in M6c may perturb it: the
+/// plasma-range properties go in a separate file (D8), and this is the guard
+/// that says so out loud rather than trusting the convention.
+#[test]
+fn g0_m4_air_table_is_untouched() {
+    let path = format!("{}/data/air_properties.npy", env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(&path).expect("M4 air table missing");
+    assert_eq!(bytes.len(), 93_856, "air table size changed");
+    assert_eq!(
+        fnv1a(&bytes),
+        0x24da_07d3_e1a2_370d,
+        "data/air_properties.npy changed — M4's gate numbers are pinned to this \
+         table, and M6c's plasma properties belong in a separate file (D8)"
+    );
+}
