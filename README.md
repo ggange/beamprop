@@ -6,12 +6,13 @@ An open, validation-first solver for **laser beam propagation through the atmosp
 
 *One Monte-Carlo realization of a 1 µm beam over 1 km of turbulence (`beamprop turbulence`, rendered by `scripts/render.py`): the instantaneous beam wanders and breaks into speckle; averaging 48 realizations recovers the smooth long-exposure profile that theory predicts to within 0.5%.*
 
-Four effects stack when a laser crosses air, and `beamprop` aims to model each one rigorously and reproducibly:
+Several effects stack when a laser crosses air, and `beamprop` aims to model each one rigorously and reproducibly:
 
 - **Diffraction** — split-step wave-optics propagation.
 - **Attenuation** — molecular and aerosol extinction (Beer–Lambert).
 - **Turbulence** — Kolmogorov/von Kármán phase screens: beam wander, spreading, scintillation.
 - **Thermal blooming** — the beam heats the air, the refractive index changes, wind and slew clear it, and the beam self-distorts. A coupled radiative-transport ↔ thermal-fluid problem.
+- **Optical breakdown** *(in progress)* — above a threshold irradiance the air ionizes: an electron avalanche, then a plasma that absorbs the beam that made it. Currently a standalone 0-D rate kernel (M6a); coupling it back into propagation is later work.
 
 ## Scope
 
@@ -32,6 +33,7 @@ Early, built one validated milestone at a time.
 | M3.5 | M4 pre-spec gate ([docs/M4_SPEC.md](docs/M4_SPEC.md)): fluid model (steady-state isobaric, convection-dominated), slab-local predictor–corrector coupling with a 2nd-order gate, stability/resolution bounds, closed-form anchor benchmark (erf blooming phase) + Gebhardt/Smith trend curve, air-property tabulation pinned (no FFI) | **done** |
 | M4 | Coupled thermal blooming (steady-state isobaric, convection-dominated) through a field-aware `Medium`, frozen air-property table, validated: closed-form erf blooming phase 0.39% max, coupling 2nd-order by self-convergence (slope 2.000), weak-blooming first-order limit 0.008% with quadratic back-reaction residual (ratio 3.65 vs 4), stable at N_φ = 20 with closed power budget, upwind bend + crescent + irradiance-rollover signatures, and the Smith-1977 whole-beam I_REL(N) curve reproduced to 7.2% over N ∈ [0.5, 1.8] (F₀ = 5) | **done** |
 | M5 | Python bindings (PyO3, abi3) + CI wheels ([docs/M5_SPEC.md](docs/M5_SPEC.md)): `import beamprop` exposes the core classes and `run_*` helpers, validated: CLI compute loops extracted to shared pure runners with bit-identical `.npy` outputs, Python results bit-identical to the CLI for all three cases, closed-form Gaussian width <1% (≈2e-11 observed), seed-exact Monte-Carlo determinism, solver validity errors as `ValueError`; wheels built+gated on linux/macOS/windows in CI | **done** |
+| M6a | 0-D optical-breakdown threshold kernel ([docs/M6A_SPEC.md](docs/M6A_SPEC.md)): electron-avalanche balance (inverse-bremsstrahlung heating − inelastic loss − attachment − diffusion), exact per-slice logistic integrator, log-bisection threshold, pressure sweep, `breakdown` CLI case. Validated against Thiyagarajan & Thompson 2012 (Fig. 4, digitized): collision frequency 1.05× of literature and flat over 46–1858 Torr, `E_eff(p)` slope `p^+0.695` vs predicted `p^+0.642`, wavelength scaling `λ^-2.000` over a 20× span matching the paper's cascade closed form (Eq. 4) with the plateau coefficient agreeing to 1.01×. **Known red gate:** the measured `I_thr(p)` slope (`p^-0.329`) is unreachable by any cascade-only kernel — the measurement is 12% multiphoton at 760 Torr — so that gate is `#[ignore]`d and the model is bracketed instead; absolute level sits inside the ungated 3–10× inter-lab scatter. The independent-anchor debt this leaves open is recorded in [docs/MODELS.md](docs/MODELS.md) | **done, one gate red by design** |
 
 ## Build & run
 
@@ -79,7 +81,7 @@ maturin develop --release -m beamprop-py/Cargo.toml   # or: pip install a CI whe
 ```python
 import beamprop as bp
 
-# high-level: one call per CLI case, numpy arrays + diagnostics back
+# high-level: one call per field-propagation case, numpy arrays + diagnostics back
 r = bp.run_blooming(w0=5e-2, power=2e4, wind=2.0, alpha_abs=1e-4, z=500.0)
 print(r["n_phi"], r["centroid_x"], r["final"].shape)
 
@@ -91,7 +93,7 @@ bp.Propagator(g, 1.0e-6).propagate(f, m, dz=1000.0 / 10, steps=10)
 speckle = f.intensity          # numpy, ready to plot
 ```
 
-The bindings return **data only** (rendering stays in `scripts/render.py`), and their gate suite requires Python results to be bit-identical to the CLI (`beamprop-py/tests/`, run in CI and against every built wheel).
+The bindings return **data only** (rendering stays in `scripts/render.py`), and their gate suite requires Python results to be bit-identical to the CLI (`beamprop-py/tests/`, run in CI and against every built wheel). They cover the three field-propagation cases; the 0-D `breakdown` case is Rust/CLI-only for now.
 
 Every physical model in the solver — equation, implementation site, validation gate, and literature reference — is catalogued in [docs/MODELS.md](docs/MODELS.md).
 

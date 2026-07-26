@@ -55,6 +55,9 @@ When you change or add a model, update the docs in the same PR:
   literature reference.
 - **`docs/M*_SPEC.md`** — per-milestone pre-spec gates and design records. New
   milestone work is spec'd here before it is implemented.
+- **`README.md`** — the milestone status table and the CLI examples. A finished
+  milestone gets a row with its measured gate numbers, and any gate that is red
+  on purpose says so there; a new CLI case gets an example line.
 
 ## Pull requests
 
