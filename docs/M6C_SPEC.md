@@ -97,9 +97,28 @@ E = ρ·e(ρ, p) + ½ρu²
 ```
 
 The source is the **absorbed** laser power density; the beam is attenuated
-through the column by Beer–Lambert, `dI/dx = +α_pl·I` marching from the laser
-side, so energy is conserved between the two halves by construction (gated:
-G5).
+through the column by Beer–Lambert marching from the laser side, so energy is
+conserved between the two halves by construction (gated: G5).
+
+**Amended (step 4): the attenuation is `dI/dx = −α_pl·I`, not `+`.** The beam
+travels in `+x` (the laser sits beyond `x_min`; the front runs back up the beam
+toward it, in `−x`), and an absorbing medium marched in the direction of travel
+decays. The `+` written above would amplify the beam, and contradicts every
+other statement in this document — Beer–Lambert, "the **absorbed** laser power
+density", and the closed energy budget of G5. A sign slip, corrected here rather
+than silently in the code.
+
+**Also amended (step 4): the deposition is discretised conservatively, not as a
+midpoint sample of `α·I`.** Each cell takes the intensity it actually removes
+from the beam,
+
+```text
+I_{k+1} = I_k·exp(−α_k·dx),     q_k = (I_k − I_{k+1})/dx
+```
+
+so `Σ q_k·dx` is *identically* `I_in − I_out` with no quadrature error, and
+reduces to `α·I` for small `α·dx`. This is what lets G5 close to round-off
+(measured 2×10⁻¹⁶) instead of to a discretization tolerance.
 
 ### Equation of state
 
@@ -182,8 +201,15 @@ per hydro step dt:
 ```
 
 - `PlasmaColumn` is a new read-only `Medium`: `extinction(z_slab) -> Option<Array2<f64>>`,
-  filled from the current hydro state. `index_perturbation` is the unreachable
-  stub, exactly as `ThermalBlooming` does it today.
+  filled from the current hydro state.
+
+  **Amended (step 4): `index_perturbation` returns zeros, not an unreachable
+  stub.** The `ThermalBlooming` precedent does not carry: that medium sets
+  `needs_intensity() = true`, so the propagator routes around
+  `index_perturbation` and never calls it. `PlasmaColumn` is *linear*, so the
+  propagator does call it, and an `unreachable!` there would panic on the first
+  slab. D7's "absorption only" is expressed correctly as `δn ≡ 0`, which is what
+  zeros are.
 - **`physical_intensity_scale` (T4/D4) is required here.** The driver must turn
   `on_step`'s `|u|²` into W/m² both to test the M6a trigger and to size the
   deposition. D4 scheduled this extraction for "when M6a.2 first needs it",
@@ -214,6 +240,19 @@ the M6a D5 debt is worth paying.
   ~30,000 K. Properties: `e(ρ,p)` (or `h`, `c_p`), `γ_eff`, `Z̄`, and the
   inputs to `α_pl` (inverse bremsstrahlung: `α_IB ∝ n_e·n_i·Z̄ / (ω²·T^½)`
   with the stimulated-emission correction `1 − exp(−ħω/kT)`).
+
+  **Landed (step 3), with two amendments this document owes the reader.**
+  Shipped as `(4, 597, 33)` over `[ln ρ, e, γ_eff, ln n_e]`, uniform in `T`,
+  uniform in `log₁₀ p`. (a) `n_i` is **not stored**: with only singly charged
+  ions, quasi-neutrality makes it identical to `n_e` (6.2×10⁻¹¹, gated), so a
+  stored copy would be redundant. (b) `Z̄` is **not stored and is not a
+  prediction** — it is identically 1 because the RRHO database has no doubly
+  ionized N or O. Real air doubly ionizes above ~20,000–25,000 K, so above
+  `SECOND_IONIZATION_K` = 20,000 K the table understates `n_e` and hence
+  `α_IB`, and is a singly-ionized approximation. That ceiling was not
+  anticipated when this spec was written; it is a property of the available
+  thermodynamic data, not of the mixture choice, and it bounds where the LSD
+  absorption coefficient can be trusted.
 - Same discipline as `airprops.rs`: shape/dtype asserted at load, uniform axes,
   bilinear interpolation, generation script committed, no runtime FFI, no LGPL
   in the build or the M5 wheels.
@@ -249,10 +288,30 @@ Isentropic advection or a smooth acoustic pulse; `validate::observed_order`
 
 Constant-`γ` ideal gas, planar, thin absorption layer, strong detonation — the
 regime where the closed form's assumptions hold. The measured front speed must
-match `D = [2(γ²−1)S/ρ₀]^(1/3)` within a pinned tolerance, and the residual must
-shrink under grid refinement. **Labelled in the code and in `MODELS.md` as
-solver verification**, for the reason given in § "The circularity". This is the
-M6c analogue of M6a's "closed-form sub-gates are integrator unit tests".
+match `D = [2(γ²−1)S/ρ₀]^(1/3)` within a pinned tolerance. **Labelled in the
+code and in `MODELS.md` as solver verification**, for the reason given in
+§ "The circularity". This is the M6c analogue of M6a's "closed-form sub-gates
+are integrator unit tests".
+
+**Amended (step 4): the refinement knob is the absorption length, not the
+grid.** This document originally required the residual to shrink under *grid*
+refinement. Measurement says that is the wrong parameter. At a fixed absorption
+length `1/α = 50 µm`, refining `dx` from 10 µm to 2.5 µm moves `D` by under
+0.05 % — the answer is already grid-converged, and the residual that remains is
+not discretization error. It is set by the *physical* thickness of the
+deposition layer, which is the closed form's own "thin absorption layer"
+assumption. Halving `1/α` from 400 µm to 50 µm walks the residual
+`−13.3 % → −5.3 % → −1.2 % → +0.14 %`, monotonically and by at least 2.5× per
+halving.
+
+The sign is the expected one and worth recording: a thick deposition zone
+releases part of the beam energy *behind the sonic plane*, where it can no
+longer support the front, so the wave runs slow. It reaches the CJ speed only in
+the thin-layer limit the closed form is written in. So G3 gates three things —
+the level at a thin layer, grid-convergence at fixed `1/α` (which shows the
+residual is physical), and convergence in `1/α` (which is the assumption
+actually being relaxed). Gating grid refinement alone would have been gating the
+knob that does not move the answer.
 
 ### G4 — parameter-free scaling exponent (THE PHYSICS GATE)
 
@@ -348,14 +407,33 @@ is labelled as such.
    provenance header at digitization time, and the setup quoted so the solver's
    inputs are fixed by the source rather than chosen. Until then G7 compares
    against a literature-quoted band.
-2. **Constant-`γ` vs table EOS for G3.** Spec'd as constant-`γ` above (the
-   closed form assumes it); revisit if the table mode turns out to be the only
-   configuration anyone runs.
-3. **Sub-cycling default** — set by the convergence check, not chosen.
-4. **Where the front is initialized.** Ignite from the M6a trigger at the focal
-   plane (physical, inherits the ungated level) or from a seeded hot spot
-   (clean, decouples the gates from M6a). Probably both: seeded for G3/G4,
-   triggered for the demonstration run.
+2. **Constant-`γ` vs table EOS for G3.** *Resolved (step 4): constant-`γ`, as
+   spec'd.* G3 runs the `GreyThreshold` absorption model too — a fixed `α` above
+   an internal-energy threshold — so that the residual it measures is the
+   solver's and carries nothing from the property table's interpolation.
+3. **Sub-cycling default** — set by the convergence check, not chosen. *Still
+   open (step 4): it cannot be answered yet.* `propagation_every` only means
+   something once the 3-D propagator is in the loop, and step 4 deliberately
+   does not put it there — G3 and G5 are 1-D statements, and the closed forms
+   are written for a planar wave with a prescribed `S`. The knob, its
+   convergence check, and its default land with the CLI case.
+4. **Where the front is initialized.** *Resolved (step 4): both, as
+   anticipated.* `SeededIgnition` is implemented and is what G3 uses, so the
+   velocity gates carry nothing from M6a's ungated absolute threshold. The
+   `AirBreakdown`-triggered path is the demonstration run's, and lands with the
+   CLI case along with the inherited-limitation note.
+5. **How hot the run is allowed to get** — *new, and answered (step 4).* The
+   `Z̄ ≡ 1` ceiling recorded under "Property closure" bounds where `α_IB` can be
+   trusted, and the CJ state behind a strong LSD front (1.5–2.5×10⁴ K)
+   legitimately crosses it. Rather than extend the thermodynamic database —
+   which would mean hand-entering N⁺⁺/O⁺⁺ spectroscopic data that no shipped
+   Mutation++ database contains, and which would then itself need a validation
+   gate against published equilibrium-air composition — the ceiling is
+   *enforced*: `IonizationCeiling::Refuse` (the default) bails naming the
+   temperature, `::Flag` proceeds and records it on the run. An unquantified
+   bias becomes an explicit boundary. Revisit only if a gate is found to need
+   the range, which G3 and G4 do not: they run constant-`γ` with a grey
+   absorber and never query the table.
 
 ## Implementation order
 
@@ -363,6 +441,12 @@ is labelled as such.
 2. **T4** — extract `physical_intensity_scale`, refactor blooming to it. Gate G0.
 3. Plasma table + `src/plasmaprops.rs`. Gate G6.
 4. `src/lsd.rs` — deposition, `PlasmaColumn` `Medium`, the driver. Gates G3, G5.
+   **Landed**, with the four amendments marked above (the Beer–Lambert sign, the
+   conservative deposition discretisation, G3's refinement knob, and
+   `index_perturbation`). `LsdColumn` is the 1-D coupled driver — hydro,
+   Beer–Lambert attenuation, Strang-split deposition — which is what the closed
+   forms are written for; `PlasmaColumn` exposes its `α(x)` to the propagator.
+   The propagator↔hydro outer loop is not here (see open question 3).
 5. Scaling sweep. Gate **G4**.
 6. `lsd` CLI case + `scripts/render_lsd.py`; `MODELS.md` updated in the same
    change (equation, site, gate numbers, references), including the inherited

@@ -202,6 +202,54 @@ impl PlasmaTable {
             n_e: bilinear(3).exp(),
         })
     }
+
+    /// Invert the table for temperature: the `T` at which equilibrium air has
+    /// density `rho` (kg/m³) at pressure `p` (Pa).
+    ///
+    /// The hydro carries `(ρ, p)`; the ionization state that sets the
+    /// absorption coefficient is tabulated against `(T, p)`, so something has to
+    /// bridge them. At fixed `p`, `ρ(T)` is strictly decreasing — the ideal-gas
+    /// `1/T` plus a mean molecular weight that only falls as the gas
+    /// dissociates and ionizes — so a bisection is both safe and monotone.
+    /// (Gated by `density_is_monotone_in_temperature`.)
+    ///
+    /// Errors, rather than clamping, when `rho` lies outside the densities the
+    /// table spans at that pressure.
+    pub fn temperature(&self, rho: f64, p: f64) -> Result<f64> {
+        if !is_positive(rho) {
+            bail!("plasma table inverted at non-positive density {rho} kg/m³");
+        }
+        let (mut lo, mut hi) = (T_MIN, Self::t_max());
+        let rho_hot = self.at(hi, p)?.rho;
+        let rho_cold = self.at(lo, p)?.rho;
+        if rho > rho_cold || rho < rho_hot {
+            bail!(
+                "density {rho:.6e} kg/m³ at {p:.4e} Pa is outside the table's range \
+                 [{rho_hot:.6e}, {rho_cold:.6e}] kg/m³ (T ∈ [{T_MIN}, {}] K)",
+                Self::t_max()
+            );
+        }
+        // ~50 halvings takes a 30,000 K bracket below 1e-11 K; the tolerance
+        // exit means the usual cost is far less.
+        for _ in 0..50 {
+            if hi - lo <= 1e-9 * hi {
+                break;
+            }
+            let mid = 0.5 * (lo + hi);
+            if self.at(mid, p)?.rho > rho {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(0.5 * (lo + hi))
+    }
+}
+
+/// `true` for a strictly positive, finite number — false for NaN, which is the
+/// point (see the twin in `euler1d`).
+fn is_positive(x: f64) -> bool {
+    x > 0.0 && x.is_finite()
 }
 
 #[cfg(test)]
@@ -272,6 +320,51 @@ mod tests {
         assert!(table.at(5_000.0, 1e9).is_err(), "above p range");
         assert!(table.at(5_000.0, -1.0).is_err(), "negative pressure");
         assert!(table.at(f64::NAN, 101_325.0).is_err(), "NaN temperature");
+    }
+
+    #[test]
+    fn density_is_monotone_in_temperature() {
+        // The premise `temperature` bisects on. Checked on the stored nodes, at
+        // both ends of the pressure range and in the middle of the onset.
+        let table = PlasmaTable::load().unwrap();
+        for p in [PlasmaTable::p_min(), 101_325.0, PlasmaTable::p_max()] {
+            let mut prev = f64::INFINITY;
+            for i in 0..N_T {
+                let t = T_MIN + i as f64 * T_STEP;
+                let rho = table.at(t, p).unwrap().rho;
+                assert!(rho < prev, "ρ rose at T = {t} K, p = {p:.3e} Pa");
+                prev = rho;
+            }
+        }
+    }
+
+    #[test]
+    fn temperature_inverts_density() {
+        let table = PlasmaTable::load().unwrap();
+        for &t in &[300.0, 3_000.0, 9_500.0, 15_000.0, 29_000.0] {
+            for &p in &[1e5, 1e7] {
+                let rho = table.at(t, p).unwrap().rho;
+                let back = table.temperature(rho, p).unwrap();
+                assert!(
+                    (back - t).abs() < 1e-4,
+                    "T = {t} K → ρ = {rho:.6e} → {back} K"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn temperature_refuses_densities_off_the_table() {
+        let table = PlasmaTable::load().unwrap();
+        assert!(
+            table.temperature(1e3, 1e5).is_err(),
+            "denser than 200 K air"
+        );
+        assert!(
+            table.temperature(1e-12, 1e5).is_err(),
+            "thinner than 30,000 K"
+        );
+        assert!(table.temperature(-1.0, 1e5).is_err(), "negative density");
     }
 
     #[test]

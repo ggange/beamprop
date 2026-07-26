@@ -245,6 +245,11 @@ impl Euler1d {
         Ok(())
     }
 
+    /// Courant number in force.
+    pub fn cfl(&self) -> f64 {
+        self.cfl
+    }
+
     /// Elapsed simulated time (s).
     pub fn time(&self) -> f64 {
         self.time
@@ -511,6 +516,39 @@ impl Euler1d {
         Ok(())
     }
 
+    /// Apply the volumetric energy source `source(i, x)` (W/m³) for `dt`,
+    /// **without** the flux update.
+    ///
+    /// This is the source half of a Strang split: the driver calls it for
+    /// `dt/2`, then [`step`](Self::step) for `dt`, then it again for `dt/2`,
+    /// which is what keeps the coupled scheme 2nd order (the spec's cadence,
+    /// and the propagator's own discipline one dimension up). Deliberately does
+    /// **not** advance [`time`](Self::time) or [`steps`](Self::steps) — a Strang
+    /// sandwich is one step, not three — and deliberately does not check CFL,
+    /// which constrains the flux update and not this.
+    ///
+    /// The positivity guard still runs: a source that empties a cell bails with
+    /// the cell and step, exactly as [`step_with_source`](Self::step_with_source)
+    /// does.
+    pub fn add_energy(&mut self, dt: f64, source: impl Fn(usize, f64) -> f64) -> Result<()> {
+        if !dt.is_finite() || dt < 0.0 {
+            bail!(
+                "euler1d: bad source interval dt = {dt} at step {}",
+                self.step_count
+            );
+        }
+        let updated: Vec<Conserved> = (0..self.cells.len())
+            .map(|i| {
+                let mut u = self.cells[i];
+                u.energy += dt * source(i, self.x_centre(i));
+                u
+            })
+            .collect();
+        self.assert_physical(&updated, "energy source")?;
+        self.cells = updated;
+        Ok(())
+    }
+
     /// Run to `t_end`, sizing every step from the current wave speeds and
     /// clipping the last one to land exactly on `t_end`.
     pub fn advance_to(&mut self, t_end: f64) -> Result<()> {
@@ -670,6 +708,43 @@ mod tests {
         s.step_with_source(dt, |_, _| s_dot).unwrap();
         let expected = e0 + s_dot * dt * 32.0 * 1e-3;
         assert!((s.total_energy() - expected).abs() / expected < 1e-14);
+    }
+
+    #[test]
+    fn add_energy_deposits_without_advancing_the_clock() {
+        // The source half-step of the driver's Strang split: energy lands, the
+        // flux update does not run, and the step counter does not move.
+        let w = Primitive {
+            rho: 1.0,
+            u: 0.0,
+            p: 1e5,
+        };
+        let mut s =
+            Euler1d::from_fn(IdealGas::AIR, Boundary::Periodic, 0.0, 1e-3, 32, |_| w).unwrap();
+        let e0 = s.total_energy();
+        s.add_energy(1e-9, |_, _| 1e12).unwrap();
+        let expected = e0 + 1e12 * 1e-9 * 32.0 * 1e-3;
+        assert!((s.total_energy() - expected).abs() / expected < 1e-14);
+        assert_eq!(s.time(), 0.0, "add_energy advanced the clock");
+        assert_eq!(s.steps(), 0, "add_energy counted a step");
+        // Zero interval is a no-op, not an error: an empty Strang half-step.
+        s.add_energy(0.0, |_, _| 1e12).unwrap();
+        assert!((s.total_energy() - expected).abs() / expected < 1e-14);
+    }
+
+    #[test]
+    fn add_energy_that_empties_a_cell_bails_loudly() {
+        let mut s = Euler1d::from_fn(IdealGas::AIR, Boundary::Periodic, 0.0, 1e-3, 8, |_| {
+            Primitive {
+                rho: 1.0,
+                u: 0.0,
+                p: 1e5,
+            }
+        })
+        .unwrap();
+        let err = s.add_energy(1e-9, |_, _| -1e15).unwrap_err().to_string();
+        assert!(err.contains("non-physical"), "unexpected error: {err}");
+        assert!(err.contains("energy source"), "stage not named: {err}");
     }
 
     #[test]

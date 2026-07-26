@@ -18,8 +18,10 @@ use ndarray::Array2;
 use beamprop::euler1d::{Boundary, Euler1d, IdealGas, Primitive};
 use beamprop::field::Field;
 use beamprop::grid::Grid;
+use beamprop::lsd::{Absorption, LsdColumn, SeededIgnition, raizer_lsd_velocity};
 use beamprop::medium::{ConstantDeltaN, Medium, UniformExtinction, Vacuum};
 use beamprop::montecarlo::seeded_ensemble;
+use beamprop::plasmaprops::{NE_ACCURACY_FLOOR, PlasmaTable, SECOND_IONIZATION_K};
 use beamprop::propagate::{DiffractionMethod, Propagator, beam_width, centroid};
 use beamprop::turbulence::{ScreenGenerator, TurbulentPath};
 use beamprop::validate::{
@@ -1474,4 +1476,331 @@ fn euler_muscl_hancock_is_second_order_on_smooth_flow() {
         "observed order {finest:.3} exceeds 2 — check the exact solution, not \
          the scheme: {orders:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// M6c gate G6 — plasma-table tabulation consistency (docs/M6C_SPEC.md, D8).
+//
+// D8 trusts Mutation++ for the physics and gates the TABULATION: the frozen
+// data/plasma_properties.npy, interpolated to points that are deliberately OFF
+// its grid, against direct Mutation++ evaluation at those same points. The
+// solver cannot call Mutation++ (no runtime FFI), so the direct evaluations
+// were frozen at generation time into tests/data/plasma_reference_samples.csv
+// — the same treatment tests/data/tt2012_*.csv got.
+// ---------------------------------------------------------------------------
+
+/// One direct-Mutation++ reference point.
+struct PlasmaSample {
+    t: f64,
+    p: f64,
+    rho: f64,
+    e: f64,
+    gamma_eff: f64,
+    n_e: f64,
+}
+
+/// Load the off-grid reference samples. `None` if absent, so the gate skips
+/// rather than fails on a checkout without the generated data.
+fn load_plasma_samples() -> Option<Vec<PlasmaSample>> {
+    let path = format!(
+        "{}/tests/data/plasma_reference_samples.csv",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(path).ok()?;
+    let rows: Vec<PlasmaSample> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("T_K"))
+        .filter_map(|l| {
+            let c: Vec<f64> = l.split(',').filter_map(|f| f.trim().parse().ok()).collect();
+            (c.len() == 6).then(|| PlasmaSample {
+                t: c[0],
+                p: c[1],
+                rho: c[2],
+                e: c[3],
+                gamma_eff: c[4],
+                n_e: c[5],
+            })
+        })
+        .collect();
+    (!rows.is_empty()).then_some(rows)
+}
+
+/// **G6 — the frozen table reproduces direct Mutation++ off-grid.**
+///
+/// Measured over 99 samples, 75 of them in the 6,000–18,000 K ionization onset
+/// where bilinear interpolation is worst: max relative error 4.10e-4 in `ρ`,
+/// 8.61e-4 in `e`, 1.68e-4 in `γ_eff`, 1.48e-3 in `n_e`. (The generator's own
+/// cell-midpoint sweep, a harsher sampling, reports 4.53e-4 / 1.05e-3 /
+/// 2.40e-4 / 3.61e-3 — the limits here are set from that harsher number.)
+///
+/// `n_e` is the loosest of the four and structurally so — it is the quantity
+/// that moves over decades through the onset, which is why the table stores its
+/// logarithm. The samples carry no point below `NE_ACCURACY_FLOOR`: there the
+/// cold-tail `n_e` is nearly linear in `1/T` rather than `T` and the uniform-`T`
+/// grid interpolates it badly, but the values involved (~10³ m⁻³, against ~10²³
+/// in an LSD plasma) cannot influence any result. The table says as much, and
+/// this gate holds to the same line rather than quietly averaging the tail away.
+#[test]
+fn plasma_table_matches_direct_mutationpp_off_grid() {
+    let Some(samples) = load_plasma_samples() else {
+        eprintln!("skipping G6: tests/data/plasma_reference_samples.csv absent");
+        return;
+    };
+    let table = PlasmaTable::load().expect("plasma table");
+    assert!(
+        samples.len() >= 50,
+        "G6 sampled too few points ({})",
+        samples.len()
+    );
+
+    let (mut w_rho, mut w_e, mut w_gamma, mut w_ne) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+    let mut worst_ne_at = (0.0, 0.0);
+    let mut onset = 0usize;
+    for s in &samples {
+        assert!(
+            s.n_e >= NE_ACCURACY_FLOOR,
+            "sample at T = {:.0} K carries n_e = {:.3e}, below the table's \
+             accuracy floor — the generator should not have written it",
+            s.t,
+            s.n_e
+        );
+        if (6_000.0..=18_000.0).contains(&s.t) {
+            onset += 1;
+        }
+        let got = table.at(s.t, s.p).expect("sample inside table range");
+        w_rho = w_rho.max((got.rho / s.rho - 1.0).abs());
+        w_e = w_e.max((got.e - s.e).abs() / s.e.abs().max(1e-30));
+        w_gamma = w_gamma.max((got.gamma_eff / s.gamma_eff - 1.0).abs());
+        let ne_err = (got.n_e / s.n_e - 1.0).abs();
+        if ne_err > w_ne {
+            w_ne = ne_err;
+            worst_ne_at = (s.t, s.p);
+        }
+        // Quasi-neutrality is what licenses not storing n_i at all.
+        assert_eq!(got.n_i(), got.n_e);
+    }
+    println!(
+        "G6 over {} samples ({onset} in the onset band): ρ {w_rho:.2e}, e {w_e:.2e}, \
+         γ {w_gamma:.2e}, n_e {w_ne:.2e} (worst at T = {:.0} K, p = {:.3e} Pa)",
+        samples.len(),
+        worst_ne_at.0,
+        worst_ne_at.1
+    );
+    assert!(
+        onset >= 20,
+        "G6 under-samples the ionization onset ({onset})"
+    );
+    assert!(w_rho < 2e-3, "ρ off by {w_rho:.3e}");
+    assert!(w_e < 5e-3, "e off by {w_e:.3e}");
+    assert!(w_gamma < 1e-3, "γ_eff off by {w_gamma:.3e}");
+    assert!(w_ne < 1e-2, "n_e off by {w_ne:.3e}");
+}
+
+/// The table's own stated limitation, asserted rather than left in prose: `Z̄`
+/// is pinned at 1 because the RRHO database has no doubly ionized N or O, so
+/// above `SECOND_IONIZATION_K` the table is a singly-ionized approximation and
+/// understates `n_e`. If a future mixture ever changes that, this fails and the
+/// docs get revisited with it.
+#[test]
+fn plasma_table_charge_state_ceiling_is_pinned() {
+    let table = PlasmaTable::load().expect("plasma table");
+    for &t in &[5_000.0, 15_000.0, 25_000.0, 29_000.0] {
+        let a = table.at(t, 101_325.0).expect("in range");
+        assert_eq!(a.z_bar(), 1.0, "Z̄ moved off 1 at {t} K");
+        assert_eq!(a.n_i(), a.n_e, "quasi-neutrality broke at {t} K");
+    }
+    assert!(!PlasmaTable::is_singly_ionized_approximation(
+        SECOND_IONIZATION_K - 1.0
+    ));
+    assert!(PlasmaTable::is_singly_ionized_approximation(
+        SECOND_IONIZATION_K + 1.0
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// M6c gates G3 + G5 — the laser-supported detonation wave
+// (docs/M6C_SPEC.md, step 4).
+//
+// G3 is SOLVER VERIFICATION, not physics validation, and the spec is emphatic
+// about why: Raizer's `D = [2(γ²−1)S/ρ₀]^(1/3)` is not an independent check on
+// the model — it IS the Chapman–Jouguet construction the deposition model is
+// built from, with the chemical heat release replaced by `q = S/(ρ₀D)`. Asking
+// the solver to reproduce it checks that HLLC, the Strang-split source, and the
+// EOS together produce a nontrivial self-similar solution. It says nothing
+// about whether that solution describes the world. That is G4's job (the
+// parameter-free exponent), and G7's, and this is exactly the M6a "D5" trap
+// caught before the code rather than after. `raizer_lsd_velocity` deliberately
+// lives in `lsd.rs` next to the model, not in `validate.rs` among the
+// independent reference solutions.
+// ---------------------------------------------------------------------------
+
+/// Undisturbed air ahead of the front.
+const LSD_AMBIENT: Primitive = Primitive {
+    rho: 1.225,
+    u: 0.0,
+    p: 101_325.0,
+};
+/// Absorbed intensity at the front (W/m²) — 10⁷ W/cm², the spec's
+/// representative LSD drive.
+const LSD_INTENSITY: f64 = 1e11;
+const LSD_LENGTH: f64 = 2.5e-2;
+/// Long enough for the seeded wave to relax onto its self-sustaining speed.
+const LSD_SETTLE: f64 = 1.0e-6;
+/// Window the mean front speed is measured over.
+const LSD_WINDOW: f64 = 4.0e-7;
+/// Specific internal energy above which the grey model absorbs (J/kg): ~10×
+/// ambient, so undisturbed air is transparent and shocked air is not.
+const LSD_E_IGNITE: f64 = 2e6;
+
+/// Settle a seeded LSD wave and return its mean front speed (m/s), positive
+/// toward the laser, alongside the column for budget checks.
+fn lsd_front_speed(n_cells: usize, alpha: f64) -> (f64, LsdColumn) {
+    let gas = IdealGas::AIR;
+    let d_cj = raizer_lsd_velocity(&gas, LSD_INTENSITY, LSD_AMBIENT.rho);
+    let mut column = LsdColumn::seeded(
+        gas,
+        n_cells,
+        LSD_LENGTH,
+        LSD_AMBIENT,
+        SeededIgnition {
+            centre: 0.72 * LSD_LENGTH,
+            width: 6e-4,
+            // ~2× the CJ pressure ρ₀D²/(γ+1): lit and mildly overdriven, so it
+            // relaxes down onto the self-sustaining speed during the settle
+            // rather than having to build up to it.
+            pressure: 2.0 * LSD_AMBIENT.rho * d_cj * d_cj / (gas.gamma + 1.0),
+        },
+        Absorption::GreyThreshold {
+            alpha,
+            e_ignite: LSD_E_IGNITE,
+        },
+        LSD_INTENSITY,
+    )
+    .expect("LSD setup");
+    column.advance_to(LSD_SETTLE).expect("settle");
+    let d = column.measure_front_speed(LSD_WINDOW).expect("front speed");
+    (d, column)
+}
+
+/// **G3 — LSD front velocity against Raizer's closed form (VERIFICATION).**
+///
+/// Constant-`γ` ideal gas, planar, thin absorption layer, strong detonation —
+/// the regime the closed form's assumptions hold in.
+///
+/// Measured at `S = 10¹¹ W/m²`, `ρ₀ = 1.225 kg/m³`, `γ = 1.4`, absorption
+/// length `1/α = 50 µm`: `D = 5399 m/s` against Raizer's 5392 m/s, `+0.14 %`.
+///
+/// The spec asked for the residual to shrink under **grid** refinement. That
+/// turned out to be the wrong knob, and this gate says so instead of quietly
+/// choosing an easier one. Over `dx = 10 → 5 → 2.5 µm` the answer moves by less
+/// than 0.05 % — it is already grid-converged, and what remains is set by the
+/// *physical* absorption length, not the mesh. The convergence that matters is
+/// therefore in `1/α`, which is the closed form's own "thin absorption layer"
+/// assumption, and it is gated next door. `docs/M6C_SPEC.md` is amended to match.
+#[test]
+fn lsd_front_speed_matches_the_raizer_closed_form() {
+    let gas = IdealGas::AIR;
+    let d_cj = raizer_lsd_velocity(&gas, LSD_INTENSITY, LSD_AMBIENT.rho);
+
+    let mut errors = Vec::new();
+    for n_cells in [2_500usize, 5_000, 10_000] {
+        let (d, mut column) = lsd_front_speed(n_cells, 2e4);
+        // The run must be in the regime the closed form describes — resolved
+        // absorption layer, beam reaching the front, strong detonation.
+        column.check_regime().expect("LSD regime");
+        let err = d / d_cj - 1.0;
+        assert!(
+            err.abs() < 0.01,
+            "n = {n_cells}: D = {d:.1} m/s vs Raizer {d_cj:.1} m/s ({:+.3} %)",
+            100.0 * err
+        );
+        errors.push(err);
+    }
+
+    // Grid-converged: the spread across an 4× refinement is far below the
+    // residual itself, which is the evidence that the residual is physical
+    // (the finite absorption layer) and not discretization error.
+    let spread = errors.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+        - errors.iter().cloned().fold(f64::INFINITY, f64::min);
+    assert!(
+        spread < 1e-3,
+        "front speed is not grid-converged: errors {errors:?} span {spread:.2e}"
+    );
+}
+
+/// **G3b — the residual vanishes as the absorption layer thins (VERIFICATION).**
+///
+/// The closed form assumes deposition in a layer thin against the flow
+/// structure. Relaxing that assumption is what the residual measures, so
+/// halving `1/α` is the refinement it must respond to.
+///
+/// Measured at `dx = 10 µm` for `1/α = 400 → 200 → 100 → 50 µm`:
+/// `−13.28 %`, `−5.25 %`, `−1.22 %`, `+0.14 %` — monotone, and each halving
+/// takes at least a factor 2.5 off the error (2.5×, 4.3×, 8.7×).
+///
+/// The sign is the physically expected one: a thick deposition zone releases
+/// part of the beam energy behind the sonic plane, where it can no longer
+/// support the front, so the wave runs **slow**. It reaches the CJ speed only
+/// in the thin-layer limit the closed form is written in.
+#[test]
+fn lsd_front_speed_converges_as_the_absorption_layer_thins() {
+    let gas = IdealGas::AIR;
+    let d_cj = raizer_lsd_velocity(&gas, LSD_INTENSITY, LSD_AMBIENT.rho);
+
+    let mut errors = Vec::new();
+    for alpha in [2.5e3, 5e3, 1e4, 2e4] {
+        let (d, _) = lsd_front_speed(2_500, alpha);
+        errors.push((d / d_cj - 1.0).abs());
+    }
+    for pair in errors.windows(2) {
+        assert!(
+            pair[1] < 0.5 * pair[0],
+            "halving the absorption length did not halve the error: {errors:?}"
+        );
+    }
+    assert!(
+        errors[errors.len() - 1] < 5e-3,
+        "the thin-layer limit does not reach the closed form: {errors:?}"
+    );
+}
+
+/// **G5 — energy budget closure (verification).**
+///
+/// Absorbed laser energy = Δ(internal + kinetic) in the domain + flux through
+/// the boundaries. M4's closed power budget, one dimension down.
+///
+/// Two things make this exact rather than approximate. The deposition is
+/// discretely conservative by construction — each cell removes exactly
+/// `I_k − I_{k+1}` from the beam, so `Σ q·dx` carries no quadrature error — and
+/// the boundary term is *verified zero* rather than estimated: with
+/// transmissive ends and undisturbed ambient gas at both of them, the energy
+/// flux `(E + p)u` vanishes identically. `boundaries_undisturbed` is what checks
+/// that premise, and it is asserted here rather than assumed, because the whole
+/// budget rests on it.
+///
+/// Measured: relative residual 2.1e-16 to 4.6e-15 across every configuration
+/// the G3 gates run — five orders inside the 1e-10 the spec asks for.
+#[test]
+fn lsd_energy_budget_closes() {
+    for (n_cells, alpha) in [(2_500usize, 2.5e3), (2_500, 2e4), (5_000, 2e4)] {
+        let (_, column) = lsd_front_speed(n_cells, alpha);
+        assert!(
+            column.boundaries_undisturbed(),
+            "n = {n_cells}, α = {alpha:.1e}: the wave reached a boundary, so the \
+             budget's zero-flux premise no longer holds and the residual below \
+             would be meaningless"
+        );
+        assert!(
+            column.deposited_energy() > 0.0,
+            "n = {n_cells}, α = {alpha:.1e}: nothing was absorbed"
+        );
+        let residual = column.energy_residual();
+        assert!(
+            residual < 1e-10,
+            "n = {n_cells}, α = {alpha:.1e}: energy budget off by {residual:.3e} \
+             (absorbed {:.6e} J/m²)",
+            column.deposited_energy()
+        );
+    }
 }

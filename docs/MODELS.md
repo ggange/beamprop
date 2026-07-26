@@ -478,10 +478,172 @@ which arrives with the deposition layer.
   the gate is on the finest pair (> 1.85) plus the monotone climb, not on
   hitting 2 exactly.
 
+### Equilibrium plasma-range air properties (frozen table)
+
+Equilibrium air from 200 K to 30,000 K and 10⁴–10⁸ Pa, tabulated offline by
+`scripts/make_plasma_table.py` from Mutation++ (`air_11` mixture, RRHO thermo
+database, equilibrium state model) into `data/plasma_properties.npy`, and read
+through `src/plasmaprops.rs`. Shape `(4, 597, 33)`, property axis
+`[ln ρ, e, γ_eff, ln n_e]`, on a grid uniform in `T` and uniform in `log₁₀ p`,
+bilinearly interpolated. The pressure ceiling is set by the CJ state behind an
+LSD front (~1.5×10⁷ Pa) and the temperature ceiling by its post-front
+temperature. No runtime FFI, no LGPL in the build or the M5 wheels — the
+`airprops.rs` discipline. `data/air_properties.npy` (M4) is a separate file and
+is untouched (G0b).
+
+`ρ` and `n_e` are stored as **logarithms**: both cross dozens of decades
+through the ionization onset, where interpolating raw values fails badly.
+`e` changes sign near 800 K so no log is available, and neither it nor `γ_eff`
+needs one.
+
+Two quantities are deliberately absent. **`n_i` is not stored** — every ion in
+the mixture is singly charged, so quasi-neutrality makes it identical to `n_e`
+(verified to 6.2×10⁻¹¹ wherever `n_e` matters); it is returned as `n_e`.
+**`Z̄` is not stored and is not a prediction**: it is identically 1 and cannot
+be otherwise, because the RRHO database ships no doubly ionized N or O (He⁺⁺ is
+the only `++` species in it).
+
+**Limitation — no second ionization.** Real equilibrium air begins to doubly
+ionize above ~20,000–25,000 K; `air_11` structurally cannot. Toward the top of
+the range the table therefore understates `n_e`, and so understates the
+inverse-bremsstrahlung absorption `α_IB ∝ n_e·n_i·Z̄²` the LSD front runs on.
+The range is still built to 30,000 K because the CJ state needs it, but above
+`SECOND_IONIZATION_K` = 20,000 K the table is a singly-ionized approximation,
+flagged by `PlasmaTable::is_singly_ionized_approximation`.
+
+Per D8, Mutation++ is **trusted for the physics** and the gate is on the
+**tabulation**:
+- **G6** (`plasma_table_matches_direct_mutationpp_off_grid`) interpolates the
+  frozen table to 99 points deliberately **off** its grid — 75 of them in the
+  6,000–18,000 K ionization onset, where bilinear interpolation is worst — and
+  compares against direct Mutation++ evaluations frozen into
+  `tests/data/plasma_reference_samples.csv` at generation time (the
+  `tt2012_*.csv` precedent, since the solver cannot call Mutation++). Measured
+  max relative error: **ρ 4.10e-4, e 8.61e-4, γ_eff 1.68e-4, n_e 1.48e-3**.
+- The generator runs its own harsher cell-midpoint sweep over 17,683 points
+  before it will write anything (ρ 4.53e-4, e 1.05e-3, γ_eff 2.40e-4,
+  n_e 3.61e-3), plus a quasi-neutrality gate and a cold-limit check that
+  `γ_eff(300 K, 1 atm)` = 1.39883 — the one point whose answer is known without
+  Mutation++.
+- Neither gate makes an accuracy claim below `NE_ACCURACY_FLOOR` = 10¹⁵ m⁻³.
+  There `ln n_e` is nearly linear in `1/T` rather than `T`, so the uniform-`T`
+  grid interpolates it poorly — but the values are ~10³ m⁻³ against ~10²³ in an
+  LSD plasma, and gating that error would be theatre.
+
+### Laser-supported detonation (the coupled wave)
+
+The beam ignites a plasma and the resulting absorption wave runs **back up the
+beam** toward the laser as a detonation. `src/lsd.rs`, driven by
+`LsdColumn::advance`.
+
+The column's `x` axis is the beam axis: the laser sits beyond `x_min`, so the
+beam travels in `+x` and the front travels in `−x`. Everything upstream of the
+front is cold transparent air, which is why the front sees the full incident
+intensity `S`. Beam attenuation is Beer–Lambert in the direction of travel,
+`dI/dx = −α_pl·I`, and the source term in the energy equation is the absorbed
+power density:
+
+```text
+∂U/∂t + ∂F(U)/∂x = (0, 0, q)ᵀ,     I_{k+1} = I_k·exp(−α_k·dx),
+q_k = (I_k − I_{k+1})/dx
+```
+
+The deposition is discretised **conservatively** — each cell takes exactly what
+it removes from the beam, so `Σ q·dx ≡ I_in − I_out` with no quadrature error.
+Hydro and source are coupled by **Strang splitting**
+(`source(dt/2) → hydro(dt) → recompute α, I → source(dt/2)`), matching the
+propagator's own splitting discipline and for the same reason. The step is sized
+from the *post-deposition* wave speeds: the leading half-step raises `p` and so
+`c` before the flux update sees it, and sizing from the pre-deposition state
+overshoots the CFL bound.
+
+Two absorption closures:
+- `Absorption::GreyThreshold` — verification. A fixed `α` wherever the specific
+  internal energy exceeds a threshold, zero below. Nothing that can drift
+  between refinements. Keying on internal energy rather than temperature keeps
+  it well defined under the constant-`γ` EOS, which has no gas constant.
+- `Absorption::InverseBremsstrahlung` — production. Thermal free-free
+  absorption, `α_IB = C·Z̄² n_e n_i T^(−1/2) ν^(−3) (1 − e^(−hν/kT))·ḡ`, with
+  `n_e` from the plasma table above (`n_i = n_e`, `Z̄ ≡ 1`, both structural).
+  `C = 3.7×10⁻²` in SI, converted from the CGS `3.7×10⁸` of Rybicki & Lightman
+  Eq. 5.18b. The Gaunt factor `ḡ` is a dimensionless multiplier of order unity,
+  set to 1: a proper Gaunt table is out of scope, and it need not be in scope,
+  because `ḡ` enters as a *coefficient* and no coefficient can shift the `1/3`
+  exponent the physics gate measures. One honest inconsistency: the hydro
+  carries a constant-`γ` ideal gas while the ionization comes from the
+  equilibrium table, so `T` is the table's inversion of the hydro's `(ρ, p)`
+  rather than a self-consistent EOS.
+
+Per D7 the plasma couples to the beam through **absorption only**. `PlasmaColumn`
+is the read-only `Medium` the propagator sees: `extinction(z_slab)` from the
+hydro state, and `δn ≡ 0` — no Drude index, which is what keeps M6c clear of the
+near-critical failure that broke M6b as specified.
+
+In the M4 Péclet spirit, `check_regime` refuses rather than mis-models: the
+absorption length must be resolved by ≥ 4 cells and be under a quarter of the
+domain (thicker is the LSC regime, out of scope), ≥ 90 % of the beam must reach
+the front, and the front must be a strong detonation (`p₁ ≥ 10·p₀`).
+
+**`SECOND_IONIZATION_K` is enforced, not just documented.** The CJ state behind
+a strong LSD front sits at 1.5–2.5×10⁴ K and so legitimately crosses the table's
+singly-ionized ceiling. `IonizationCeiling::Refuse` (the default) bails naming
+the temperature; `::Flag` proceeds and records it on the run
+(`used_singly_ionized_approximation`). Extending the table is not currently
+possible from shipped data — no Mutation++ thermodynamic database contains
+doubly ionized N or O — so the bias is converted into an explicit boundary
+instead of being carried silently.
+
+Gates (`tests/validation.rs`):
+- **G3** (`lsd_front_speed_matches_the_raizer_closed_form`) — **VERIFICATION,
+  not validation.** At `S = 10¹¹ W/m²`, `ρ₀ = 1.225 kg/m³`, `γ = 1.4`, and an
+  absorption length `1/α = 50 µm`, the measured front speed is **5399 m/s**
+  against Raizer's `D = [2(γ²−1)S/ρ₀]^(1/3)` = **5392 m/s**, `+0.14 %`;
+  gated below 1 %. Refining `dx` from 10 µm to 2.5 µm moves it by under 0.05 %,
+  so the answer is grid-converged and the residual is physical, not numerical.
+
+  The label matters. Raizer's expression is **not** an independent check on this
+  model — it is the Chapman–Jouguet construction the deposition model is built
+  from, with the chemical heat release replaced by `q = S/(ρ₀D)`. Reproducing it
+  establishes that HLLC, the Strang-split source, and the EOS together solve a
+  nontrivial self-similar problem correctly. It establishes nothing about
+  whether that problem describes the world. `raizer_lsd_velocity` therefore
+  lives in `src/lsd.rs` beside the model and *not* in `src/validate.rs` among
+  the independent reference solutions — filing it there would quietly assert
+  otherwise, which is precisely the M6a "D5" trap.
+- **G3b** (`lsd_front_speed_converges_as_the_absorption_layer_thins`) — the
+  refinement that actually bites. Over `1/α = 400 → 200 → 100 → 50 µm` at
+  `dx = 10 µm` the residual runs **−13.28 % → −5.25 % → −1.22 % → +0.14 %**,
+  monotone, each halving taking at least 2.5× off the error. The sign is the
+  expected one: a thick deposition zone releases part of the beam energy behind
+  the sonic plane, where it can no longer support the front, so the wave runs
+  slow — it reaches the CJ speed only in the thin-layer limit the closed form
+  assumes.
+- **G5** (`lsd_energy_budget_closes`) — absorbed laser energy versus the
+  domain's energy gain. Measured relative residual **2.1×10⁻¹⁶ to 4.6×10⁻¹⁵**,
+  five orders inside the 10⁻¹⁰ the spec asks. Exact rather than approximate for
+  two reasons: the conservative deposition above, and a boundary flux that is
+  *verified* zero rather than estimated — with transmissive ends and undisturbed
+  ambient gas at both, `(E + p)u` vanishes identically, and
+  `boundaries_undisturbed` asserts that premise rather than assuming it.
+
+Not yet gated: **G4**, the parameter-free `D ∝ S^(1/3)`, `ρ₀^(−1/3)` scaling,
+which is the gate that carries the milestone's *physics* claim; and **G7**,
+absolute velocity against measurement, which is expected to land high and is
+documented-but-ungated because a planar 1-D solver has no radial relief. See
+`docs/M6C_SPEC.md`.
+
 References:
 - E. F. Toro, *Riemann Solvers and Numerical Methods for Fluid Dynamics*,
   3rd ed., Springer (2009) — HLLC (§10.4–10.6), MUSCL-Hancock (§14.4), and the
   exact Riemann solver and Test 1 tabulation (§4.3, §6.4) the gates use.
+- Yu. P. Raizer, *Laser-Induced Discharge Phenomena*, Consultants Bureau (1977)
+  — LSD wave theory, the detonation analogy, and the velocity closed form.
+- G. B. Rybicki, A. P. Lightman, *Radiative Processes in Astrophysics*, Wiley
+  (1979), Eq. 5.18b — the thermal free-free absorption coefficient.
+- G. Strang, SIAM J. Numer. Anal. **5**, 506 (1968) — the operator splitting.
+- J. B. Scoggins et al., *Mutation++: multicomponent thermodynamic and
+  transport properties for ionized gases*, SoftwareX **12**, 100575 (2020) —
+  the equilibrium thermochemistry behind the plasma table.
 - B. Einfeldt, *On Godunov-type methods for gas dynamics*, SIAM J. Numer. Anal.
   **25**, 294 (1988) — the wave-speed estimates.
 - G. A. Sod, *A survey of several finite difference methods…*, J. Comput. Phys.

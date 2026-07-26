@@ -12,8 +12,11 @@
 *.png
 *.gif
 !docs/**/*.png
-# frozen air-property table (canonical input data, see docs/M4_SPEC.md)
+# frozen property tables (canonical input data, embedded via include_bytes!:
+# a fresh checkout without these does not build). See docs/M4_SPEC.md and
+# docs/M6C_SPEC.md.
 !data/air_properties.npy
+!data/plasma_properties.npy
 
 # Python bytecode (beamprop-py tests)
 __pycache__/
