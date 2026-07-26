@@ -1,0 +1,72 @@
+{
+  "schema": "beamprop-plasma-table-v1",
+  "generated": "2026-07-26T14:25:38+00:00",
+  "properties": [
+    "ln_rho",
+    "e",
+    "gamma_eff",
+    "ln_ne"
+  ],
+  "units": [
+    "ln(kg/m^3)",
+    "J/kg",
+    "1",
+    "ln(1/m^3)"
+  ],
+  "shape": [
+    4,
+    597,
+    33
+  ],
+  "T_axis_K": {
+    "min": 200.0,
+    "max": 30000.0,
+    "step": 50.0,
+    "n": 597,
+    "spacing": "uniform"
+  },
+  "p_axis_Pa": {
+    "log10_min": 4.0,
+    "log10_max": 8.0,
+    "per_decade": 8,
+    "n": 33,
+    "spacing": "uniform in log10"
+  },
+  "interpolation": "bilinear in (T, log10 p); rho and n_e are logs",
+  "mixture": {
+    "name": "air_11",
+    "thermo_database": "RRHO",
+    "state_model": "Equil"
+  },
+  "not_stored": {
+    "n_i": "identical to n_e by quasi-neutrality (singly charged ions only); gated to GATE_QUASINEUTRALITY",
+    "Z_bar": "identically 1 -- the RRHO database has no doubly ionized N or O, so air_11 cannot represent second ionization"
+  },
+  "limitations": {
+    "second_ionization_absent": true,
+    "trustworthy_below_K": 20000.0,
+    "note": "above trustworthy_below_K the table understates n_e and therefore alpha_IB; it is a singly-ionized approximation, not a prediction",
+    "n_e_accuracy_floor_m3": 1000000000000000.0
+  },
+  "gates": {
+    "cold_limit_gamma_300K_1atm": 1.3988341078772395,
+    "quasineutrality_max_rel": 6.236878268812768e-11,
+    "interpolation_max_rel": {
+      "rho": 0.00045315971284165535,
+      "e": 0.0010468426250356342,
+      "gamma_eff": 0.00024029207521869544,
+      "n_e": 0.0036131245594094308
+    },
+    "reference_samples": 99
+  },
+  "sources": {
+    "all": "Mutation++ (VKI) equilibrium thermochemistry; trusted for the physics per D8, with the TABULATION gated here and in tests (G6)"
+  },
+  "provenance": {
+    "script": "scripts/make_plasma_table.py",
+    "beamprop_git": "b6ff252",
+    "python": "3.10.20",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "mutationpp": "/opt/homebrew/lib/python3.10/site-packages/mutationpp/__init__.py"
+  }
+}
