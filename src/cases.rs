@@ -1242,6 +1242,11 @@ pub struct IgnitionRun {
 /// probability here carries that offset, and it must be labelled so wherever it
 /// is plotted (`docs/M6A2_SPEC.md` § "What this rung can and cannot claim").
 ///
+/// That offset is not a limitation of this driver and cannot be fixed here: it
+/// is the open D5 debt recorded in `docs/M6A_SPEC.md` § Fallback, which needs an
+/// independent threshold dataset to close. Named at the call site so the
+/// dependency is visible from the code that inherits it.
+///
 /// Everything upstream of that one boolean *is* independent of M6a and is
 /// gated: the pupil phase statistics against Noll, the focal-intensity
 /// estimator against its closed forms, and this driver's own convergence and

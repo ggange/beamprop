@@ -74,6 +74,12 @@ inherits that offset. The curve's location on the `Cn²` axis is therefore **a
 statement about the model, not about the world**, and must be labelled so
 wherever it is plotted or quoted.
 
+**What would change that** is the open D5 debt in `docs/M6A_SPEC.md` § Fallback:
+an independent threshold dataset anchoring the *level*. Named here because that
+spec warns the debt "must not be allowed to go implicit as the ladder climbs",
+and this rung is the second milestone to inherit it. Until it is discharged, no
+amount of work inside M6a.2 can make the position of this curve a claim.
+
 **Gateable, and genuinely independent of M6a:** everything upstream of the
 kernel call. The aperture phase statistics, the focal-intensity estimator, and
 the ensemble machinery are all checkable against closed forms that know nothing
