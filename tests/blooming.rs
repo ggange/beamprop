@@ -328,9 +328,20 @@ fn strong_blooming_is_stable() {
         "power budget: accounted {accounted:.4e} vs expected {expected:.4e}"
     );
 
-    // dz refinement: receiver intensity at 400 vs 800 steps within 10 %.
-    let coarse = field.intensity();
-    let fine = s.run(power, 800).intensity();
+    // dz refinement: the 400-step answer must not move against a 2× coarser
+    // run. Refining *downward* rather than upward is the same 2× ratio and the
+    // same claim — that 400 is dz-converged — at a quarter of the slabs, and
+    // 200 steps still clears `check_phase_sampling` at this N_φ (measured: it
+    // clears at 150 too). Comparing against 800 cost 800 slabs to say the same
+    // thing.
+    //
+    // Measured residual **2.1e-6** against a 10 % gate — the tolerance carries
+    // about five orders of magnitude of slack, and did at 400-vs-800 too. That
+    // is pre-existing and left alone here deliberately: this trim was scoped to
+    // change no physics, and tightening a tolerance is a separate judgement
+    // about how portable the last digits of an FFT are.
+    let fine = field.intensity();
+    let coarse = s.run(power, 200).intensity();
     let mid = s.grid.n / 2;
     let rel = (coarse[[mid, mid]] - fine[[mid, mid]]).abs() / fine[[mid, mid]];
     assert!(rel < 0.10, "dz refinement peak change {rel:.3e}");
@@ -359,6 +370,10 @@ fn b3_qualitative_signatures() {
     let vac_peak = vac.intensity()[[mid, mid]];
 
     let mut last = vac_peak;
+    // The N_φ = 3 field is wanted twice — once for the monotonicity rung and
+    // again for the shape assertions below — so keep it rather than propagate
+    // it a second time. The recomputation it replaces was bit-for-bit identical.
+    let mut mid_field = None;
     for n_phi in [1.0, 3.0, 6.0] {
         let f = s.run(s.power_for(n_phi), steps);
         let peak = f.intensity().iter().cloned().fold(0.0_f64, f64::max);
@@ -367,10 +382,13 @@ fn b3_qualitative_signatures() {
             "peak irradiance not decreasing at N_φ = {n_phi}: {peak:.3e} vs {last:.3e}"
         );
         last = peak;
+        if n_phi == 3.0 {
+            mid_field = Some(f);
+        }
     }
 
     // At N_φ ≈ 3: peak shifted upwind and a downwind crescent.
-    let f = s.run(s.power_for(3.0), steps);
+    let f = mid_field.expect("the N_φ = 3 rung ran");
     let inten = f.intensity();
     // Location of the global peak.
     let (mut pmax, mut pix, mut piy) = (0.0, 0, 0);
@@ -539,7 +557,10 @@ fn b3_smith1977_curve_quantitative() {
         let power = unit.power_for_smith_number(n, B3_Z);
         let bloom = ThermalBlooming::new(grid, air, ALPHA_ABS, wind, power, p0, w0, T0).unwrap();
         let mut field = launch.clone();
-        let mut prop = Propagator::new(grid, WAVELENGTH).unwrap();
+        // Reuse the propagator built for the vacuum reference: `dz` is the same
+        // for all five propagations here, so rebuilding it per sample threw away
+        // a warm diffraction transfer function five times. Nothing this loop
+        // reads accumulates across calls (`guard_absorbed` is not consulted).
         prop.propagate(&mut field, &bloom, B3_Z / steps as f64, 0, steps, |_, _| {})
             .unwrap();
         let peak = field.intensity().iter().cloned().fold(0.0_f64, f64::max);
