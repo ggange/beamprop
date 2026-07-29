@@ -24,6 +24,12 @@ import beamprop as bp
 PROP = dict(n=512, dx=1e-3, w0=1e-2, z=200.0, steps=50, frames=3, visibility=5000.0)
 TURB = dict(n=256, dx=2e-3, w0=1e-2, z=1000.0, screens=5, cn2=1.5e-14, realizations=4, seed=7)
 BLOOM = dict(n=512, dx=1e-3, w0=5e-2, power=2e4, wind=2.0, alpha_abs=1e-4, z=500.0, steps=50, frames=3)
+# The M6 cases. Kept small: the LSD run needs its full 2500 cells to keep the
+# absorption layer resolved (check_regime refuses coarser), so the frame count
+# is what shrinks. The ignition sweep costs points x realizations propagations.
+LSD = dict(frames=4)
+BREAKDOWN = dict(points=5, steps=100)
+IGNITION = dict(points=3, realizations=6, n=128, dx=4e-3)
 
 
 def run_cli(binary, tmp_path, case, params, out):
@@ -57,6 +63,24 @@ class TestCliParity:
         assert np.array_equal(r["xz"], np.load(tmp_path / "par_xz.npy"))
         assert np.array_equal(r["frames"], np.load(tmp_path / "par_frames.npy"))
         assert np.array_equal(r["final"], np.load(tmp_path / "par_final.npy"))
+
+    def test_lsd(self, cli_binary, tmp_path):
+        run_cli(cli_binary, tmp_path, "lsd", LSD, "par")
+        r = bp.run_lsd(**LSD)
+        assert np.array_equal(r["profiles"], np.load(tmp_path / "par_profiles.npy"))
+
+    def test_breakdown(self, cli_binary, tmp_path):
+        run_cli(cli_binary, tmp_path, "breakdown", BREAKDOWN, "par")
+        r = bp.run_breakdown(**BREAKDOWN)
+        assert np.array_equal(r["ne_traces"], np.load(tmp_path / "par_ne_traces.npy"))
+
+    def test_ignition(self, cli_binary, tmp_path):
+        run_cli(cli_binary, tmp_path, "ignition", IGNITION, "par")
+        r = bp.run_ignition(**IGNITION)
+        # The CLI stacks [focal_ratio, strehl]; the binding returns them apart.
+        cli = np.load(tmp_path / "par_realizations.npy")
+        assert np.array_equal(r["focal_ratio"], cli[0])
+        assert np.array_equal(r["strehl"], cli[1])
 
 
 class TestClosedForm:
@@ -223,3 +247,88 @@ class TestPropagatorReuse:
         second = p.guard_frac
         # Identical runs → identical per-call fraction (no accumulation).
         assert second == pytest.approx(first, abs=1e-18)
+
+class TestM6Cases:
+    """The M6 cases carry claims the propagation cases do not, and the ones
+    that are *not* claims have to survive the FFI as clearly as the ones that
+    are."""
+
+    def test_lsd_reproduces_the_closed_form(self):
+        r = bp.run_lsd(frames=4)
+        assert r["ignited"] is True
+        # G3's number, through the bindings. Verification, not validation:
+        # Raizer's expression is the construction the model is built from.
+        assert abs(r["d_measured"] / r["d_raizer"] - 1.0) < 0.01
+        assert r["energy_residual"] < 1e-10
+        assert r["boundaries_undisturbed"] is True
+        assert r["profiles"].shape == (4, 5, 2500)
+        assert r["quantities"] == [
+            "p_Pa", "rho_kg_m3", "u_m_s", "alpha_1_m", "I_W_m2",
+        ]
+
+    def test_lsd_below_threshold_reports_cleanly(self):
+        """Not an error and not a hang: the spec's failure-mode contract has to
+        cross the FFI intact, or a caller learns about it as an exception."""
+        r = bp.run_lsd(ignite_power=1.0)
+        assert r["ignited"] is False
+        assert r["profiles"].size == 0
+        assert np.isnan(r["d_measured"])
+
+    def test_lsd_headline_gap_survives_the_binding(self):
+        """The sustaining drive sits orders of magnitude below the intensity
+        that could light the wave. Pinned here too, so a binding that silently
+        swapped the two intensities would fail rather than look plausible."""
+        r = bp.run_lsd(frames=2)
+        assert r["drive"] / r["i_threshold"] < 1e-4
+
+    def test_ignition_carries_its_binomial_error(self):
+        """p_ignite is a Bernoulli mean; a caller plotting it without the error
+        bar is over-claiming, so the binding must hand both back together."""
+        n = 6
+        r = bp.run_ignition(points=3, realizations=n, n=128, dx=4e-3)
+        p = np.asarray(r["p_ignite"])
+        se = np.asarray(r["p_ignite_se"])
+        assert p.shape == se.shape == (3,)
+        assert np.allclose(se, np.sqrt(p * (1 - p) / n))
+        assert r["focal_ratio"].shape == (3, n)
+        # The two degradations stay distinct across the FFI. Note neither
+        # bounds the other: they have different denominators — the Strehl
+        # normalises against this beam's own pupil amplitude, the ratio against
+        # the vacuum run — and turbulence flattens the pupil amplitude, which
+        # raises the Strehl's denominator. What does hold is the triangle
+        # inequality on the coherent sum, and that both fall as turbulence
+        # strengthens.
+        assert np.all(r["strehl"] > 0) and np.all(r["strehl"] <= 1.0 + 1e-12)
+        assert np.all(r["focal_ratio"] > 0)
+        assert r["focal_ratio"].mean(axis=1)[0] > r["focal_ratio"].mean(axis=1)[-1]
+        assert r["strehl"].mean(axis=1)[0] > r["strehl"].mean(axis=1)[-1]
+
+    def test_ignition_is_seed_reproducible(self):
+        kw = dict(points=2, realizations=4, n=128, dx=4e-3)
+        a = bp.run_ignition(seed=11, **kw)
+        b = bp.run_ignition(seed=11, **kw)
+        c = bp.run_ignition(seed=12, **kw)
+        assert np.array_equal(a["focal_ratio"], b["focal_ratio"])
+        assert not np.array_equal(a["focal_ratio"], c["focal_ratio"])
+
+    def test_breakdown_shapes_and_units(self):
+        r = bp.run_breakdown(points=5, steps=80)
+        assert r["ne_traces"].shape == (5, 80)
+        assert len(r["pressure_torr"]) == 5
+        # W/cm^2, the unit the literature is quoted in, as the CLI writes.
+        assert 1e10 < r["drive_intensity"] < 1e14
+        assert r["n_seed"] < r["n_bd"]
+
+    def test_m6_validity_errors_are_value_errors(self):
+        """The refuse-do-not-mis-model guards must arrive as ValueError with
+        their message intact, not as a panic across the FFI."""
+        with pytest.raises(ValueError, match="unresolved"):
+            bp.run_lsd(cells=200)          # absorption layer under-resolved
+        with pytest.raises(ValueError, match="cross"):
+            bp.run_lsd(cross=0.9)          # front would reach the boundary
+        with pytest.raises(ValueError, match="aperture"):
+            bp.run_ignition(aperture=50.0, points=2, realizations=2)
+        with pytest.raises(ValueError):
+            bp.run_ignition(points=1, realizations=2)
+        with pytest.raises(ValueError):
+            bp.run_breakdown(p_min_torr=2000.0, p_max_torr=300.0)

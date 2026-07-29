@@ -72,7 +72,41 @@ built wheel):
   case appears.
 - Rendering stays in `scripts/render.py`; the bindings return data only,
   matching the solver's data/image split.
-- **The M6 cases are not bound.** `run_breakdown` (M6a) and `run_lsd` (M6c) have
-  no Python entry point; the bindings cover the propagation cases. Recorded here
-  because it was not a decision when it happened — M5 shipped before M6a
-  existed.
+- Rendering stays in the `scripts/render*.py` family for the M6 cases too — the
+  bindings return data only, which is the same data/image split the solver
+  keeps.
+
+## Bindings v2 — the M6 cases
+
+Every CLI case now has a Python entry point: `run_breakdown` (M6a), `run_lsd`
+(M6c) and `run_ignition` (M6a.2) join the three propagation helpers. They mirror
+`run_blooming`'s shape — `#[pyo3(signature = ...)]` defaults matching the CLI, a
+`PyDict` of numpy arrays plus derived scalars — so nothing structurally new
+crosses the boundary.
+
+The M6 cases carry claims the propagation cases do not, and the gates cover the
+ones that are *not* claims as carefully as the ones that are:
+
+- **CLI parity** extends to all three: `profiles`, `ne_traces` and the
+  realization stack are `np.array_equal` to the CLI's `.npy` output.
+- **The clean-report contract survives the FFI.** An LSD run whose igniting
+  pulse is below threshold returns `ignited=False` with empty arrays — not an
+  exception. A binding that mapped it to an error would turn a documented
+  outcome into a failure.
+- **`p_ignite` arrives with its binomial standard error**, because a caller
+  plotting a Bernoulli mean without one is over-claiming and the API should not
+  make that the easy path.
+- **The refuse-don't-mis-model guards arrive as `ValueError`** with their
+  message intact — an under-resolved absorption layer, a front that would reach
+  the boundary, an aperture larger than the grid.
+- **The LSD headline gap is pinned here too**, so a binding that silently
+  swapped the igniting and sustaining intensities would fail rather than look
+  plausible.
+
+One correction worth recording, because the first version of the gate asserted
+it: `strehl` does **not** bound `focal_ratio`. They have different denominators
+— the Strehl normalises against the beam's own pupil amplitude, the ratio
+against the vacuum run — and turbulence flattens the pupil amplitude, which
+raises the Strehl's denominator. Neither bounds the other; what holds is the
+triangle inequality on the coherent sum (`strehl ≤ 1`) and that both fall as
+turbulence strengthens.

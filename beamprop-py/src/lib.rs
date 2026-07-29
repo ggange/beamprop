@@ -3,8 +3,14 @@
 //! Exposes the core objects (`Grid`, `Field`, `Medium`, `Propagator`), the
 //! analytic references used by the validation suite (`GaussianBeam`,
 //! `fried_r0`, `rytov_variance`, `kruse_extinction`), and high-level
-//! `run_propagate` / `run_turbulence` / `run_blooming` helpers that mirror the
-//! CLI cases and return numpy arrays plus derived diagnostics.
+//! `run_*` helpers that mirror the CLI cases and return numpy arrays plus
+//! derived diagnostics.
+//!
+//! The helpers cover every case the CLI has: the three propagation cases
+//! (`run_propagate`, `run_turbulence`, `run_blooming`) and the M6 cases
+//! (`run_breakdown`, `run_lsd`, `run_ignition`). Rendering deliberately stays
+//! in `scripts/render*.py` — these return data only, which is the same
+//! data/image split the solver keeps.
 //!
 //! Conventions across the boundary:
 //! - SI units and `float64`/`complex128` everywhere, matching the Rust core.
@@ -21,7 +27,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use beamprop::cases::{
-    BloomingParams, PropagateParams, TurbulenceParams, run_blooming, run_propagate, run_turbulence,
+    BloomingParams, BreakdownParams, IgnitionParams, IgnitionSweepParams, LsdParams,
+    PropagateParams, TurbulenceParams, run_blooming, run_breakdown, run_ignition_sweep, run_lsd,
+    run_propagate, run_turbulence,
 };
 
 /// Map a solver error onto a Python `ValueError`, preserving the message.
@@ -630,6 +638,210 @@ fn py_run_blooming<'py>(
     Ok(d)
 }
 
+/// Sweep the 0-D optical-breakdown threshold against pressure and record the
+/// electron avalanche (the CLI `breakdown` case, M6a). Returns a dict of numpy
+/// arrays and scalar diagnostics.
+///
+/// Pure rate physics: no grid, no propagator, so none of the beam arguments
+/// apply. `threshold*` and `drive_intensity` come back in **W/cm²**, the unit
+/// the breakdown literature is quoted in, matching the CLI's CSV.
+#[pyfunction(name = "run_breakdown")]
+#[pyo3(signature = (wavelength=1064e-9, fwhm=6e-9, p_min_torr=300.0, p_max_torr=2000.0,
+                    points=48, steps=400, drive=1.08))]
+#[allow(clippy::too_many_arguments)]
+fn py_run_breakdown<'py>(
+    py: Python<'py>,
+    wavelength: f64,
+    fwhm: f64,
+    p_min_torr: f64,
+    p_max_torr: f64,
+    points: usize,
+    steps: usize,
+    drive: f64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let r = run_breakdown(&BreakdownParams {
+        wavelength,
+        fwhm,
+        p_min_torr,
+        p_max_torr,
+        points,
+        steps,
+        drive,
+    })
+    .map_err(to_py)?;
+    let d = PyDict::new(py);
+    d.set_item("pressure_torr", r.pressure_torr)?;
+    d.set_item("threshold", r.threshold)?;
+    d.set_item("threshold_lo_slope", r.threshold_lo_slope)?;
+    d.set_item("threshold_hi_slope", r.threshold_hi_slope)?;
+    d.set_item("cascade_theory", r.cascade_theory)?;
+    d.set_item("neutral_density", r.neutral_density)?;
+    d.set_item("ne_traces", r.ne_traces.into_pyarray(py))?;
+    d.set_item("trace_time", r.trace_time)?;
+    d.set_item("slope", r.slope)?;
+    d.set_item("slope_envelope", r.slope_envelope)?;
+    d.set_item("drive_intensity", r.drive_intensity)?;
+    d.set_item("n_bd", r.n_bd)?;
+    d.set_item("n_seed", r.n_seed)?;
+    Ok(d)
+}
+
+/// Ignite a spark at the M6a threshold and run the laser-supported detonation
+/// wave the sustaining beam drives back up itself (the CLI `lsd` case, M6c).
+///
+/// `profiles` is `[frame, quantity, cell]` with quantities ordered
+/// `p (Pa), rho (kg/m^3), u (m/s), alpha (1/m), I (W/m^2)`; `quantities` in the
+/// returned dict names them, so a caller never has to hard-code the order.
+///
+/// If the igniting pulse is below threshold the run returns with
+/// `ignited=False` and empty arrays — a clean report rather than an error, the
+/// same contract the CLI has.
+#[pyfunction(name = "run_lsd")]
+#[pyo3(signature = (wavelength=1064e-9, fwhm=6e-9, ignite_power=1.5e7, w_focus=20e-6,
+                    drive=1e11, p0=101_325.0, t0=288.0, length=2.5e-2, cells=2500,
+                    alpha=2e4, cross=0.5, frames=48, ignition_steps=400))]
+#[allow(clippy::too_many_arguments)]
+fn py_run_lsd<'py>(
+    py: Python<'py>,
+    wavelength: f64,
+    fwhm: f64,
+    ignite_power: f64,
+    w_focus: f64,
+    drive: f64,
+    p0: f64,
+    t0: f64,
+    length: f64,
+    cells: usize,
+    alpha: f64,
+    cross: f64,
+    frames: usize,
+    ignition_steps: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let r = run_lsd(&LsdParams {
+        wavelength,
+        fwhm,
+        ignite_power,
+        w_focus,
+        drive,
+        p0,
+        t0,
+        length,
+        cells,
+        alpha,
+        cross_fraction: cross,
+        frames,
+        ignition_steps,
+    })
+    .map_err(to_py)?;
+    let d = PyDict::new(py);
+    d.set_item("ignited", r.ignited)?;
+    d.set_item("i_peak", r.i_peak)?;
+    d.set_item("i_threshold", r.i_threshold)?;
+    d.set_item("drive", r.drive)?;
+    d.set_item("rho_0", r.rho_0)?;
+    d.set_item("d_measured", r.d_measured)?;
+    d.set_item("d_raizer", r.d_raizer)?;
+    d.set_item("x", r.x)?;
+    d.set_item("frame_time", r.frame_time)?;
+    d.set_item("profiles", r.profiles.into_pyarray(py))?;
+    d.set_item(
+        "quantities",
+        vec!["p_Pa", "rho_kg_m3", "u_m_s", "alpha_1_m", "I_W_m2"],
+    )?;
+    d.set_item("front_x", r.front_x)?;
+    d.set_item("optical_depth", r.optical_depth)?;
+    d.set_item("log10_transmission", r.log10_transmission)?;
+    d.set_item("deposited_energy", r.deposited_energy)?;
+    d.set_item("energy_residual", r.energy_residual)?;
+    d.set_item("boundaries_undisturbed", r.boundaries_undisturbed)?;
+    d.set_item("ib_alpha", r.ib_alpha)?;
+    d.set_item("ib_optical_depth", r.ib_optical_depth)?;
+    d.set_item("ib_alpha_co2", r.ib_alpha_co2)?;
+    d.set_item("ib_optical_depth_co2", r.ib_optical_depth_co2)?;
+    Ok(d)
+}
+
+/// Sweep turbulence strength and report how often a focused beam still ignites
+/// the air, and where the spark lands (the CLI `ignition` case, M6a.2).
+///
+/// **`p_ignite`'s position on the `cn2` axis is not a validated claim.** It is
+/// set by M6a's absolute breakdown threshold, which is explicitly ungated, so
+/// the shape of the curve is the result and its position is not. `p_ignite_se`
+/// is the binomial standard error and any plot must carry it — a Bernoulli mean
+/// over `realizations` samples has no tighter error than that.
+///
+/// `realizations` is per sweep point, so the run costs `points × realizations`
+/// propagations.
+#[pyfunction(name = "run_ignition")]
+#[pyo3(signature = (n=256, dx=2e-3, wavelength=1064e-9, w0=0.05, z=1000.0, screens=10,
+                    l0=100.0, aperture=0.3, focal_length=10.0, power=3e9, fwhm=6e-9,
+                    p0=101_325.0, ignition_steps=200, realizations=48, seed=7,
+                    cn2_min=1e-16, cn2_max=1e-13, points=13))]
+#[allow(clippy::too_many_arguments)]
+fn py_run_ignition<'py>(
+    py: Python<'py>,
+    n: usize,
+    dx: f64,
+    wavelength: f64,
+    w0: f64,
+    z: f64,
+    screens: usize,
+    l0: f64,
+    aperture: f64,
+    focal_length: f64,
+    power: f64,
+    fwhm: f64,
+    p0: f64,
+    ignition_steps: usize,
+    realizations: usize,
+    seed: u64,
+    cn2_min: f64,
+    cn2_max: f64,
+    points: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    checked_grid(n, dx)?;
+    checked_beam(wavelength, w0)?;
+    let r = run_ignition_sweep(&IgnitionSweepParams {
+        base: IgnitionParams {
+            n,
+            dx,
+            wavelength,
+            w0,
+            z,
+            screens,
+            cn2: cn2_min,
+            l0,
+            aperture,
+            focal_length,
+            power,
+            fwhm,
+            p0,
+            ignition_steps,
+            realizations,
+            seed,
+        },
+        cn2_min,
+        cn2_max,
+        points,
+    })
+    .map_err(to_py)?;
+    let d = PyDict::new(py);
+    d.set_item("cn2", r.cn2)?;
+    d.set_item("r0", r.r0)?;
+    d.set_item("d_over_r0", r.d_over_r0)?;
+    d.set_item("p_ignite", r.p_ignite)?;
+    d.set_item("p_ignite_se", r.p_ignite_se)?;
+    d.set_item("mean_focal_ratio", r.mean_ratio)?;
+    d.set_item("median_focal_ratio", r.median_ratio)?;
+    d.set_item("wander_rms", r.wander_rms)?;
+    set_array2(&d, "focal_ratio", r.focal_ratio)?;
+    set_array2(&d, "strehl", r.strehl)?;
+    d.set_item("i_focus_vacuum", r.i_focus_vacuum)?;
+    d.set_item("i_threshold", r.i_threshold)?;
+    d.set_item("transition_decades", r.transition_decades)?;
+    Ok(d)
+}
+
 #[pymodule(name = "beamprop")]
 fn beamprop_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGrid>()?;
@@ -643,6 +855,9 @@ fn beamprop_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_run_propagate, m)?)?;
     m.add_function(wrap_pyfunction!(py_run_turbulence, m)?)?;
     m.add_function(wrap_pyfunction!(py_run_blooming, m)?)?;
+    m.add_function(wrap_pyfunction!(py_run_breakdown, m)?)?;
+    m.add_function(wrap_pyfunction!(py_run_lsd, m)?)?;
+    m.add_function(wrap_pyfunction!(py_run_ignition, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
