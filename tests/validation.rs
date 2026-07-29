@@ -1387,8 +1387,9 @@ fn sod_density_l1(n: usize, t: f64) -> f64 {
 /// half — the error must *fall* under refinement, at the rate a TVD scheme is
 /// entitled to on a discontinuous solution.
 ///
-/// Measured: L1(ρ) = 6.55e-3 at n = 100, halving to 6.55e-4 at n = 1600, with
-/// observed rate 0.79–0.88 across the sequence. First order is the ceiling here
+/// Measured: L1(ρ) = 6.55e-3 at n = 100, falling tenfold to 6.55e-4 at
+/// n = 1600, with observed rate 0.79–0.88 per doubling across the sequence
+/// (the gate itself refines to n = 800). First order is the ceiling here
 /// — the solution contains a shock and a contact, so the formal 2nd order of
 /// MUSCL-Hancock cannot show up in L1; ~0.8 is the textbook value for minmod on
 /// Sod, and G2 is where the 2nd order is actually demonstrated.
@@ -1842,6 +1843,15 @@ fn lsd_front_speed_matches_the_raizer_closed_form() {
         // The run must be in the regime the closed form describes — resolved
         // absorption layer, beam reaching the front, strong detonation.
         column.check_regime().expect("LSD regime");
+        // And the front must still be *inside* the domain. `front_position`
+        // degrades to the first cell centre once the wave runs off the
+        // laser-side end, which would report a plausible-looking speed from a
+        // front that no longer exists. G3c and G4 assert this; G3 relied on
+        // G5 happening to run the same two configurations.
+        assert!(
+            column.boundaries_undisturbed(),
+            "n = {n_cells}: the wave reached a boundary before the measurement"
+        );
         let err = d / d_cj - 1.0;
         assert!(
             err.abs() < 0.01,
@@ -1938,7 +1948,11 @@ fn lsd_front_speed_converges_as_the_absorption_layer_thins() {
 
     let mut errors = Vec::new();
     for alpha in [2.5e3, 5e3, 1e4, 2e4] {
-        let (d, _) = lsd_front_speed(2_500, alpha);
+        let (d, column) = lsd_front_speed(2_500, alpha);
+        assert!(
+            column.boundaries_undisturbed(),
+            "α = {alpha:.1e}: the wave reached a boundary before the measurement"
+        );
         errors.push((d / d_cj - 1.0).abs());
     }
     for pair in errors.windows(2) {

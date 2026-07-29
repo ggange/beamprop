@@ -608,7 +608,11 @@ Gates (`tests/validation.rs`):
   absorption length `1/α = 50 µm`, the measured front speed is **5402 m/s**
   against Raizer's `D = [2(γ²−1)S/ρ₀]^(1/3)` = **5392 m/s**, `+0.19 %`;
   gated below 1 %. Refining `dx` from 10 µm to 5 µm moves it by 5×10⁻⁵, so the
-  answer is grid-converged and the residual is physical, not numerical.
+  answer is grid-converged and the residual is physical, not numerical. Both
+  boundaries are asserted undisturbed alongside `check_regime`: once the wave
+  runs off the laser-side end, `front_position` degrades to the first cell
+  centre and would report a plausible speed for a front that no longer exists.
+  G3b carries the same assertion.
 
   The label matters. Raizer's expression is **not** an independent check on this
   model — it is the Chapman–Jouguet construction the deposition model is built
