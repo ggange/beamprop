@@ -430,7 +430,8 @@ struct SmithPoint {
 }
 
 /// Load `tests/data/smith1977_F<F0>.csv` — two columns `N_c,I_rel`, one header
-/// line, ascending in N_c. Returns `None` if the file is absent (gate skips).
+/// line, ascending in N_c. `None` if the file is absent; the caller turns that
+/// into a failure rather than a skip, since the CSV is committed data.
 fn load_smith_curve() -> Option<Vec<SmithPoint>> {
     let path = format!(
         "{}/tests/data/smith1977_F{}.csv",
@@ -492,8 +493,9 @@ fn interp_i_rel(curve: &[SmithPoint], n_c: f64) -> f64 {
 /// no absorption, so we divide the measured peak ratio by the transmission
 /// `e^(−αz)` to match Smith's normalization (identical to the B2 fix).
 ///
-/// Ignored until the digitized figure is supplied as
-/// `tests/data/smith1977_F<F0>.csv`; enabling it is the final M4 step.
+/// Reads the digitized figure from `tests/data/smith1977_F<F0>.csv`. That file
+/// is committed, so its absence is a broken checkout and this fails rather than
+/// skipping — the same line the M6a and M6c external gates hold.
 #[test]
 fn b3_smith1977_curve_quantitative() {
     let curve = load_smith_curve()

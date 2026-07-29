@@ -854,11 +854,19 @@ fn monte_carlo_reproducible_across_thread_counts() {
 // ---------------------------------------------------------------------------
 
 /// Load a two-column `tests/data/*.csv` with `#` comments and one header row,
-/// ascending in the first column. `None` if absent, so the gate skips rather
-/// than fails on a fresh checkout without the digitized data.
-fn load_tt_curve(name: &str) -> Option<Vec<(f64, f64)>> {
+/// ascending in the first column.
+///
+/// **Panics if the file is missing or yields too few points**, rather than
+/// returning `None` for the caller to quietly skip on. These CSVs are committed,
+/// so their absence is a broken checkout, not a configuration — and three of
+/// M6a's external anchors read them. A skip would report the suite green while
+/// gating nothing, which is the one failure mode this suite exists to prevent.
+/// `b3_smith1977_curve_quantitative` in `tests/blooming.rs` sets the precedent.
+fn load_tt_curve(name: &str) -> Vec<(f64, f64)> {
     let path = format!("{}/tests/data/{}", env!("CARGO_MANIFEST_DIR"), name);
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("digitized anchor {path} is unreadable ({e}); it is committed data, so this is a broken checkout, not a missing option")
+    });
     let pts: Vec<(f64, f64)> = text
         .lines()
         .map(str::trim)
@@ -870,14 +878,16 @@ fn load_tt_curve(name: &str) -> Option<Vec<(f64, f64)>> {
             Some((x, y))
         })
         .collect();
-    if pts.len() < 2 {
-        return None;
-    }
+    assert!(
+        pts.len() >= 2,
+        "{name} parsed to {} point(s); the gate that reads it would prove nothing",
+        pts.len()
+    );
     assert!(
         pts.windows(2).all(|w| w[1].0 > w[0].0),
         "{name} must be strictly ascending in pressure"
     );
-    Some(pts)
+    pts
 }
 
 /// Log-linear interpolation of an ascending curve; `None` outside its range.
@@ -911,12 +921,8 @@ const TT_P_HI: f64 = 2000.0;
 /// amplitude — read as a peak it would miss by a flat √2.
 #[test]
 fn tt2012_collision_frequency_matches_literature() {
-    let (Some(e_b), Some(e_eff)) = (
-        load_tt_curve("tt2012_E_B_vs_pressure.csv"),
-        load_tt_curve("tt2012_E_eff_vs_pressure.csv"),
-    ) else {
-        return; // digitized data absent — gate skips
-    };
+    let e_b = load_tt_curve("tt2012_E_B_vs_pressure.csv");
+    let e_eff = load_tt_curve("tt2012_E_eff_vs_pressure.csv");
     // The kernel's constant, and the wavelength it is used at.
     const K_M: f64 = 3.9e7; // s⁻¹·Pa⁻¹
     let omega = 2.0 * std::f64::consts::PI * 299_792_458.0 / 1064e-9;
@@ -969,9 +975,7 @@ fn tt2012_collision_frequency_matches_literature() {
 /// falls. In the opposite (`ν_m ≫ ω`) limit it would fall.
 #[test]
 fn tt2012_effective_field_rises_with_pressure() {
-    let Some(e_eff) = load_tt_curve("tt2012_E_eff_vs_pressure.csv") else {
-        return;
-    };
+    let e_eff = load_tt_curve("tt2012_E_eff_vs_pressure.csv");
     let slope = beamprop::validate::loglog_slope(&e_eff).expect("E_eff slope");
     assert!(
         (0.55..=0.85).contains(&slope),
@@ -1031,9 +1035,7 @@ fn tt2012_effective_field_rises_with_pressure() {
 #[test]
 #[ignore = "RED on purpose: measured n=0.329 is outside the default model's literature envelope [0.023, 0.231] (see docs/M6A_SPEC.md)"]
 fn tt2012_threshold_slope_matches_measurement() {
-    let Some(e_b) = load_tt_curve("tt2012_E_B_vs_pressure.csv") else {
-        return;
-    };
+    let e_b = load_tt_curve("tt2012_E_B_vs_pressure.csv");
     let high: Vec<_> = e_b
         .iter()
         .copied()
@@ -1303,9 +1305,7 @@ fn tt2012_wavelength_scaling_matches_cascade_theory() {
 /// deliberately not a level agreement, and no longer a flatness claim.
 #[test]
 fn tt2012_level_ratio_is_bounded_within_scatter() {
-    let Some(e_b) = load_tt_curve("tt2012_E_B_vs_pressure.csv") else {
-        return;
-    };
+    let e_b = load_tt_curve("tt2012_E_B_vs_pressure.csv");
     const EPS0: f64 = 8.854_187_812_8e-12;
     const C: f64 = 299_792_458.0;
     let m = beamprop::breakdown0d::AirBreakdown::air_1064nm();
@@ -1617,14 +1617,19 @@ struct PlasmaSample {
     n_e: f64,
 }
 
-/// Load the off-grid reference samples. `None` if absent, so the gate skips
-/// rather than fails on a checkout without the generated data.
-fn load_plasma_samples() -> Option<Vec<PlasmaSample>> {
+/// Load the off-grid reference samples.
+///
+/// **Panics if the file is missing**, for the reason given on
+/// [`load_tt_curve`]: it is committed data, and G6 reporting green because its
+/// reference vanished is worse than G6 failing.
+fn load_plasma_samples() -> Vec<PlasmaSample> {
     let path = format!(
         "{}/tests/data/plasma_reference_samples.csv",
         env!("CARGO_MANIFEST_DIR")
     );
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("G6 reference {path} is unreadable ({e}); it is committed data, so this is a broken checkout, not a missing option")
+    });
     let rows: Vec<PlasmaSample> = text
         .lines()
         .map(str::trim)
@@ -1641,7 +1646,11 @@ fn load_plasma_samples() -> Option<Vec<PlasmaSample>> {
             })
         })
         .collect();
-    (!rows.is_empty()).then_some(rows)
+    assert!(
+        !rows.is_empty(),
+        "G6 reference {path} parsed to zero samples"
+    );
+    rows
 }
 
 /// **G6 — the frozen table reproduces direct Mutation++ off-grid.**
@@ -1661,10 +1670,7 @@ fn load_plasma_samples() -> Option<Vec<PlasmaSample>> {
 /// this gate holds to the same line rather than quietly averaging the tail away.
 #[test]
 fn plasma_table_matches_direct_mutationpp_off_grid() {
-    let Some(samples) = load_plasma_samples() else {
-        eprintln!("skipping G6: tests/data/plasma_reference_samples.csv absent");
-        return;
-    };
+    let samples = load_plasma_samples();
     let table = PlasmaTable::load().expect("plasma table");
     assert!(
         samples.len() >= 50,
