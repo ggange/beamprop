@@ -15,10 +15,13 @@ use ndarray::{Array2, Array3, s};
 use crate::airprops::AirTable;
 use crate::blooming::ThermalBlooming;
 use crate::breakdown0d::AirBreakdown;
-use crate::field::Field;
+use crate::euler1d::{IdealGas, Primitive};
+use crate::field::{Field, IntensityScale};
 use crate::grid::Grid;
+use crate::lsd::{Absorption, IonizationCeiling, LsdColumn, SeededIgnition, raizer_lsd_velocity};
 use crate::medium::{UniformExtinction, kruse_extinction};
 use crate::montecarlo::seeded_ensemble;
+use crate::plasmaprops::PlasmaTable;
 use crate::propagate::{Propagator, beam_width, centroid};
 use crate::turbulence::TurbulentPath;
 use crate::validate::{BloomingCase, GaussianBeam, loglog_slope, tt2012_cascade_threshold};
@@ -491,6 +494,403 @@ mod beamprop_torr {
     pub const TORR: f64 = 133.322_368_4;
 }
 
+/// Specific gas constant for dry air, `R_u/M` (J/(kg·K)) — the one place the
+/// `lsd` case needs to turn an ambient `(T, p)` into the `ρ₀` the closed form
+/// is written in.
+const R_AIR: f64 = 287.052_874;
+
+/// The CO₂ wavelength (m). Not a parameter: it is the wavelength LSD
+/// experiments are done at, and the `lsd` case quotes the inverse-bremsstrahlung
+/// closure there as a fixed reference point against whatever `--wavelength` the
+/// run itself used.
+const CO2_WAVELENGTH: f64 = 10.6e-6;
+
+/// Where the focus (and so the spark) sits along the column, as a fraction of
+/// its length. The front runs back toward the laser from here, so this is also
+/// how much room it has: three quarters of the domain.
+const LSD_FOCUS_FRACTION: f64 = 0.75;
+
+/// Seed pressure as a multiple of the Chapman–Jouguet pressure.
+///
+/// A free parameter, and deliberately so: M6a's kernel says *whether* the gas
+/// breaks down, not how much energy the spark carries, so nothing in the model
+/// fixes this. It does not need fixing — `lsd_front_speed_is_seed_independent`
+/// (G3c) gates the front speed as insensitive to it at the 1e-3 level, which is
+/// exactly the statement that the number below cannot influence the result the
+/// run reports. Mildly overdriven, so the wave relaxes *down* onto its
+/// self-sustaining speed.
+const LSD_SEED_MULTIPLE: f64 = 2.0;
+
+/// Parameters of the `lsd` case (M6c step 6 — the demonstration run).
+///
+/// The two intensities are deliberately separate, and the reason is the
+/// headline result of this case — see [`run_lsd`].
+#[derive(Debug, Clone)]
+pub struct LsdParams {
+    /// Vacuum wavelength (m).
+    pub wavelength: f64,
+    /// Igniting-pulse FWHM (s) for the M6a test.
+    pub fwhm: f64,
+    /// Peak power of the **igniting** pulse (W) — the short spark, not the
+    /// sustaining beam.
+    pub ignite_power: f64,
+    /// Focal spot `1/e²` intensity radius of the igniting pulse (m).
+    pub w_focus: f64,
+    /// **Sustaining** drive intensity into the column (W/m²) — the long-pulse
+    /// beam the detonation runs on.
+    pub drive: f64,
+    /// Ambient pressure (Pa).
+    pub p0: f64,
+    /// Ambient temperature (K).
+    pub t0: f64,
+    /// Column length (m).
+    pub length: f64,
+    /// Hydro cells across the column.
+    pub cells: usize,
+    /// Grey-plasma absorption coefficient (1/m).
+    pub alpha: f64,
+    /// Fraction of the column the front is asked to cross; sets the run
+    /// duration from the expected speed rather than from a chosen time.
+    pub cross_fraction: f64,
+    /// Number of recorded profile snapshots.
+    pub frames: usize,
+    /// Time slices per pulse for the M6a rate integration.
+    pub ignition_steps: usize,
+}
+
+/// Results of the `lsd` case.
+pub struct LsdRun {
+    /// Peak on-axis intensity of the igniting pulse (W/m²), via
+    /// [`IntensityScale`](crate::field::IntensityScale).
+    pub i_peak: f64,
+    /// M6a breakdown threshold at the ambient pressure (W/m²).
+    pub i_threshold: f64,
+    /// Sustaining drive intensity the column runs on (W/m²).
+    pub drive: f64,
+    /// Whether the igniting pulse lit the gas at all.
+    pub ignited: bool,
+    /// Ambient density derived from `(T₀, p₀)` (kg/m³).
+    pub rho_0: f64,
+    /// Raizer's closed-form LSD velocity for this drive (m/s).
+    pub d_raizer: f64,
+    /// Front speed fitted over the settled half of the trajectory (m/s).
+    pub d_measured: f64,
+    /// Cell axis (m).
+    pub x: Vec<f64>,
+    /// Snapshot times (s).
+    pub frame_time: Vec<f64>,
+    /// Profiles `[frame, quantity, cell]`, quantities ordered
+    /// `[p (Pa), ρ (kg/m³), u (m/s), α (1/m), I (W/m²)]`.
+    pub profiles: Array3<f64>,
+    /// Front position at each frame (m); `NaN` before a front exists.
+    pub front_x: Vec<f64>,
+    /// Column optical depth at each frame (dimensionless).
+    pub optical_depth: Vec<f64>,
+    /// `log₁₀` of the transmitted fraction at each frame. Logged because an
+    /// established LSD plasma reaches hundreds of optical depths, where the
+    /// fraction itself is numerically indistinguishable from zero.
+    pub log10_transmission: Vec<f64>,
+    /// Absorbed laser energy (J/m²) and the relative closure of the budget.
+    pub deposited_energy: f64,
+    pub energy_residual: f64,
+    /// Both ends still ambient, so the run is uncontaminated by the boundary.
+    pub boundaries_undisturbed: bool,
+    /// What the inverse-bremsstrahlung closure gives at this run's own measured
+    /// post-front state, at the run's wavelength: `α` (1/m) and the column's
+    /// optical depth under it. Reported, not used — see [`run_lsd`].
+    pub ib_alpha: f64,
+    pub ib_optical_depth: f64,
+    /// The same two at 10.6 µm, the CO₂ wavelength LSD experiments are actually
+    /// done at. The comparison is the point, not either number alone.
+    pub ib_alpha_co2: f64,
+    pub ib_optical_depth_co2: f64,
+}
+
+/// Ignite a spark at the M6a threshold and run the laser-supported detonation
+/// wave the sustaining beam then drives back up itself (the `lsd` CLI case,
+/// M6c step 6).
+///
+/// # Why there are two intensities, and why that is the result
+///
+/// The case takes a short **igniting** pulse and a separate long **sustaining**
+/// drive, which looks like an extra knob and is really this run's headline
+/// finding. Putting M6a's kernel and M6c's wave in the same file forces the
+/// question "does the beam that drives the detonation also light it?", and the
+/// answer the two models give together is **no, by five orders of magnitude**:
+///
+/// - M6a's breakdown threshold in air at 1 atm **saturates at ≈1.14×10¹⁶ W/m²
+///   and does not fall with pulse length** — 6 ns and 1 ms give 1.18×10¹⁶ and
+///   1.14×10¹⁶. It is an intensity floor, not a fluence one: below it the
+///   inelastic losses paid climbing to the ionization potential exceed the
+///   inverse-bremsstrahlung heating, the net cascade rate is negative, and no
+///   exposure time rescues it. Widening the focus does not help either — over a
+///   500× range of spot radius the threshold moves by 4 %, because diffusion
+///   loss is not what sets it at this pressure.
+/// - The sustaining drive an LSD wave runs on is ~10¹¹ W/m² (10⁷ W/cm², the
+///   spec's representative value).
+///
+/// So the beam that sustains the detonation cannot have started it. That is not
+/// a defect in either model — it is the known experimental situation, where LSD
+/// waves in clean air are initiated on a target, on an aerosol, or by a separate
+/// high-intensity spike, and are then *sustained* far below breakdown by the
+/// plasma that already exists. M6a's ungated absolute level (4.8–7.0× above the
+/// measured Thiyagarajan & Thompson curve) does not touch the conclusion: the
+/// gap is 10⁵ and the uncertainty is ~7×.
+///
+/// # What each half is worth
+///
+/// The **ignition** half is M6a's. The igniting pulse's peak intensity comes
+/// from its power and focal radius through
+/// [`IntensityScale`](crate::field::IntensityScale) — the T4 extraction's second
+/// consumer, and the reason it was extracted. Whether and when the gas lights
+/// therefore inherits M6a's explicitly ungated level, and the run reports the
+/// threshold and the margin so that is visible rather than buried.
+///
+/// The **propagation** half is M6c's, and does not inherit it: the front speed
+/// depends on the absorbed intensity at the front and on `ρ₀`, not on where or
+/// when the spark was lit. G3/G3b/G3c and the G4 physics gate all run seeded
+/// ignition for exactly this reason, so the velocity this case reports is
+/// backed by gates that never touch [`AirBreakdown`].
+///
+/// # Why the grey closure, when the production one exists
+///
+/// [`Absorption::GreyThreshold`] drives the run, because it is what G3–G5 gate
+/// and it introduces nothing that can drift. [`Absorption::InverseBremsstrahlung`]
+/// is implemented and unit-tested but not in the loop, and rather than assert a
+/// reason the run *evaluates* it at its own measured post-front state and
+/// reports the answer — which turns out to be more interesting than the
+/// deferral:
+///
+/// At 1064 nm the closure gives `α ≈ 6.8 1/m`, so the whole 2.5 cm column is
+/// **0.17 optical depths** — the plasma is very nearly transparent to the beam
+/// driving it, there would be no front, and `check_regime` would correctly
+/// refuse the run as volumetric (the LSC regime, out of scope). At 10.6 µm the
+/// same closure at the same gas state gives `α ≈ 1.1×10³ 1/m`: an absorption
+/// length of 0.92 mm, which is 92 cells on this grid and 3.7 % of the domain —
+/// comfortably inside `check_regime` on both counts, and an optical depth of 27.
+///
+/// Free-free absorption falls steeply toward short wavelengths, so **this is
+/// the model reproducing why LSD experiments are done with CO₂ lasers**, not a
+/// limitation of the implementation. What actually blocks running the closure
+/// coupled is cost, and it is a specific cost: `PlasmaTable::temperature`
+/// bisects ~45 times per cell per deposition call, and the driver calls
+/// deposition three times per step. That is a faster table inversion, not a
+/// finer grid — a separate change with its own gate.
+///
+/// If the beam does not break the gas down, this returns a run with
+/// `ignited: false` and empty trajectories — a clean report, not a hang and not
+/// an error, per the spec's failure-mode table.
+pub fn run_lsd(p: &LsdParams) -> Result<LsdRun> {
+    if !(p.length > 0.0 && p.cells >= 8) {
+        anyhow::bail!(
+            "lsd: need a positive length and at least 8 cells, got {} m / {}",
+            p.length,
+            p.cells
+        );
+    }
+    if p.frames < 2 {
+        anyhow::bail!("lsd: need at least 2 frames, got {}", p.frames);
+    }
+    if !(p.cross_fraction > 0.0 && p.cross_fraction < LSD_FOCUS_FRACTION) {
+        anyhow::bail!(
+            "lsd: --cross must be in (0, {LSD_FOCUS_FRACTION}) so the front stays \
+             inside the domain, got {}",
+            p.cross_fraction
+        );
+    }
+    if !(p.drive > 0.0 && p.drive.is_finite()) {
+        anyhow::bail!("lsd: drive intensity must be positive, got {}", p.drive);
+    }
+    if !(p.t0 > 0.0 && p.p0 > 0.0) {
+        anyhow::bail!(
+            "lsd: need positive ambient T and p, got {} K / {} Pa",
+            p.t0,
+            p.p0
+        );
+    }
+
+    // Peak intensity at the focus, through the T4 scale — the same path the
+    // blooming case pins its absolute intensity with.
+    let grid = Grid::new(128, p.w_focus / 16.0);
+    let focal_field = Field::gaussian(grid, p.wavelength, p.w_focus);
+    let scale = IntensityScale::from_beam_power(p.ignite_power, focal_field.power())?;
+    let i_peak = focal_field.peak_physical_intensity(scale);
+
+    // Ignition: M6a's kernel, in T&T's focal geometry at this wavelength.
+    let igniter = AirBreakdown::dry_air_tt2012_focus(p.wavelength)?;
+    let i_threshold = igniter.threshold_intensity(p.fwhm, p.p0, p.ignition_steps)?;
+    let ignited = igniter.breaks_down(i_peak, p.fwhm, p.p0, p.ignition_steps);
+
+    let rho_0 = p.p0 / (R_AIR * p.t0);
+    let gas = IdealGas::AIR;
+    // The wave runs on the SUSTAINING drive, not on the igniting spike.
+    let d_raizer = raizer_lsd_velocity(&gas, p.drive, rho_0);
+
+    if !ignited {
+        return Ok(LsdRun {
+            i_peak,
+            i_threshold,
+            drive: p.drive,
+            ignited: false,
+            rho_0,
+            d_raizer,
+            d_measured: f64::NAN,
+            x: Vec::new(),
+            frame_time: Vec::new(),
+            profiles: Array3::zeros((0, 5, 0)),
+            front_x: Vec::new(),
+            optical_depth: Vec::new(),
+            log10_transmission: Vec::new(),
+            deposited_energy: 0.0,
+            energy_residual: f64::NAN,
+            boundaries_undisturbed: true,
+            ib_alpha: f64::NAN,
+            ib_optical_depth: f64::NAN,
+            ib_alpha_co2: f64::NAN,
+            ib_optical_depth_co2: f64::NAN,
+        });
+    }
+
+    let ambient = Primitive {
+        rho: rho_0,
+        u: 0.0,
+        p: p.p0,
+    };
+    // The threshold is a multiple of ambient internal energy, as G4 established:
+    // far enough above ambient that undisturbed air is transparent, far enough
+    // below the shocked state that it enables the front rather than controls it.
+    let e_ignite = 5.0 * gas.specific_internal_energy(rho_0, p.p0);
+    let mut column = LsdColumn::seeded(
+        gas,
+        p.cells,
+        p.length,
+        ambient,
+        SeededIgnition {
+            centre: LSD_FOCUS_FRACTION * p.length,
+            width: 6e-4,
+            pressure: LSD_SEED_MULTIPLE * rho_0 * d_raizer * d_raizer / (gas.gamma + 1.0),
+        },
+        Absorption::GreyThreshold {
+            alpha: p.alpha,
+            e_ignite,
+        },
+        p.drive,
+    )?;
+
+    let dx = p.length / p.cells as f64;
+    let x: Vec<f64> = (0..p.cells).map(|i| (i as f64 + 0.5) * dx).collect();
+    let t_end = p.cross_fraction * p.length / d_raizer;
+
+    let mut profiles = Array3::<f64>::zeros((p.frames, 5, p.cells));
+    let mut frame_time = Vec::with_capacity(p.frames);
+    let mut front_x = Vec::with_capacity(p.frames);
+    let mut optical_depth = Vec::with_capacity(p.frames);
+    let mut log10_transmission = Vec::with_capacity(p.frames);
+
+    for frame in 0..p.frames {
+        let t = frame as f64 * t_end / (p.frames - 1) as f64;
+        column.advance_to(t)?;
+        if frame == 1 {
+            // Refuse rather than mis-model, in the M4 Péclet spirit: once the
+            // wave exists, the run must be in the LSD regime the model is
+            // written for. Checked at the first frame that has a front rather
+            // than at t = 0, where there is only a seed and nothing to judge.
+            column
+                .check_regime()
+                .context("the lsd run is outside the LSD regime")?;
+        }
+
+        let w = column.hydro().primitives();
+        let alpha = column.alpha_profile()?;
+        let intensity = column.intensity_profile()?;
+        for (i, c) in w.iter().enumerate() {
+            profiles[[frame, 0, i]] = c.p;
+            profiles[[frame, 1, i]] = c.rho;
+            profiles[[frame, 2, i]] = c.u;
+            profiles[[frame, 3, i]] = alpha[i];
+            profiles[[frame, 4, i]] = intensity[i];
+        }
+        let tau = column.optical_depth()?;
+        frame_time.push(column.hydro().time());
+        front_x.push(column.front_position().unwrap_or(f64::NAN));
+        optical_depth.push(tau);
+        // exp(−τ) underflows past τ ≈ 745; the log is the honest carrier.
+        log10_transmission.push(-tau / std::f64::consts::LN_10);
+    }
+
+    // Fit the speed over the settled half of the trajectory — the wave starts
+    // overdriven and relaxes onto its self-sustaining speed (G3c).
+    let half = p.frames / 2;
+    let settled: Vec<(f64, f64)> = frame_time[half..]
+        .iter()
+        .zip(&front_x[half..])
+        .filter(|(_, x)| x.is_finite())
+        .map(|(&t, &x)| (t, x))
+        .collect();
+    let d_measured = if settled.len() >= 2 {
+        // Least-squares slope of x(t), negated: D is positive toward the laser.
+        let n = settled.len() as f64;
+        let mt = settled.iter().map(|s| s.0).sum::<f64>() / n;
+        let mx = settled.iter().map(|s| s.1).sum::<f64>() / n;
+        let cov: f64 = settled.iter().map(|s| (s.0 - mt) * (s.1 - mx)).sum();
+        let var: f64 = settled.iter().map(|s| (s.0 - mt).powi(2)).sum();
+        -cov / var
+    } else {
+        f64::NAN
+    };
+
+    // What the production closure says about this run, measured at the run's own
+    // peak post-front state rather than assumed. `Flag` rather than `Refuse`:
+    // the CJ state behind a strong front legitimately crosses the table's
+    // singly-ionized ceiling, which is the case the flag exists for, and this is
+    // a diagnostic rather than a quantity anything downstream depends on.
+    let peak = column
+        .hydro()
+        .primitives()
+        .into_iter()
+        .fold(ambient, |best, c| if c.p > best.p { c } else { best });
+    let ib_at = |wavelength: f64| -> f64 {
+        PlasmaTable::load()
+            .ok()
+            .and_then(|table| {
+                Absorption::InverseBremsstrahlung {
+                    wavelength,
+                    gaunt: 1.0,
+                    table,
+                    ceiling: IonizationCeiling::Flag,
+                }
+                .coefficient(&gas, peak)
+                .ok()
+            })
+            .unwrap_or(f64::NAN)
+    };
+    let ib_alpha = ib_at(p.wavelength);
+    let ib_alpha_co2 = ib_at(CO2_WAVELENGTH);
+
+    Ok(LsdRun {
+        i_peak,
+        i_threshold,
+        drive: p.drive,
+        ignited: true,
+        rho_0,
+        d_raizer,
+        d_measured,
+        x,
+        frame_time,
+        profiles,
+        front_x,
+        optical_depth,
+        log10_transmission,
+        deposited_energy: column.deposited_energy(),
+        energy_residual: column.energy_residual(),
+        boundaries_undisturbed: column.boundaries_undisturbed(),
+        ib_alpha,
+        ib_optical_depth: ib_alpha * p.length,
+        ib_alpha_co2,
+        ib_optical_depth_co2: ib_alpha_co2 * p.length,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,5 +1007,152 @@ mod tests {
         assert!(r.centroid_x < 0.0);
         assert!(r.transmission < 1.0 && r.transmission > 0.9);
         assert!(r.n_phi > 0.0 && r.peclet > 100.0);
+    }
+}
+
+#[cfg(test)]
+mod lsd_tests {
+    use super::*;
+
+    /// The pinned demonstration configuration, so the tests and the CLI
+    /// defaults cannot drift apart silently.
+    fn demo() -> LsdParams {
+        LsdParams {
+            wavelength: 1064e-9,
+            fwhm: 6e-9,
+            ignite_power: 1.5e7,
+            w_focus: 20e-6,
+            drive: 1e11,
+            p0: 101_325.0,
+            t0: 288.0,
+            length: 2.5e-2,
+            cells: 2500,
+            alpha: 2e4,
+            cross_fraction: 0.5,
+            frames: 24,
+            ignition_steps: 400,
+        }
+    }
+
+    #[test]
+    fn lsd_demo_ignites_and_reproduces_the_closed_form() {
+        let r = run_lsd(&demo()).unwrap();
+        assert!(r.ignited, "the demo pulse must light the gas");
+        assert!(
+            r.i_peak > r.i_threshold,
+            "ignited without clearing the threshold: {:.3e} vs {:.3e}",
+            r.i_peak,
+            r.i_threshold
+        );
+        // The velocity is the case's headline number and it is the one G3
+        // gates; if the demo geometry ever drifts out of that agreement, the
+        // run is no longer demonstrating what it claims.
+        let err = r.d_measured / r.d_raizer - 1.0;
+        assert!(
+            err.abs() < 0.01,
+            "D = {:.1} m/s vs Raizer {:.1} ({:+.3} %)",
+            r.d_measured,
+            r.d_raizer,
+            100.0 * err
+        );
+        assert!(
+            r.boundaries_undisturbed,
+            "the wave reached a boundary, so the run is contaminated"
+        );
+        assert!(
+            r.energy_residual < 1e-10,
+            "energy budget off by {:.3e}",
+            r.energy_residual
+        );
+        // Shapes the render script indexes.
+        assert_eq!(r.profiles.dim(), (24, 5, 2500));
+        assert_eq!(r.x.len(), 2500);
+        assert_eq!(r.frame_time.len(), 24);
+        assert_eq!(r.front_x.len(), 24);
+        // The front runs toward the laser, monotonically, once it exists.
+        let track: Vec<f64> = r
+            .front_x
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .collect();
+        assert!(track.len() > 20, "the front vanished mid-run");
+        for w in track.windows(2) {
+            assert!(w[1] < w[0], "the front reversed: {:?}", track);
+        }
+        // The column becomes a shutter, not a partial filter.
+        assert!(
+            *r.log10_transmission.last().unwrap() < -100.0,
+            "final log10 transmission {:.1}",
+            r.log10_transmission.last().unwrap()
+        );
+    }
+
+    /// The case's headline finding, pinned: the beam that *sustains* the
+    /// detonation is orders of magnitude below the one that could *light* it.
+    /// If a future change to either model closes that gap, this fails and the
+    /// write-up gets revisited rather than quietly going stale.
+    #[test]
+    fn the_sustaining_drive_is_far_below_the_breakdown_threshold() {
+        let r = run_lsd(&demo()).unwrap();
+        let ratio = r.drive / r.i_threshold;
+        assert!(
+            ratio < 1e-4,
+            "the sustaining drive is only {ratio:.2e} of the breakdown threshold; \
+             the two-stage argument in run_lsd's docs no longer holds"
+        );
+        // And it is an intensity floor, not a fluence one: a pulse a hundred
+        // thousand times longer does not lower it appreciably.
+        let igniter = AirBreakdown::dry_air_tt2012_focus(1064e-9).unwrap();
+        let short = igniter.threshold_intensity(6e-9, 101_325.0, 400).unwrap();
+        let long = igniter.threshold_intensity(1e-3, 101_325.0, 400).unwrap();
+        assert!(
+            long > 0.9 * short,
+            "the threshold fell from {short:.3e} to {long:.3e} over 6 ns → 1 ms; \
+             it is not the intensity floor run_lsd's docs describe"
+        );
+    }
+
+    /// A beam below threshold must produce a clean report, not a hang and not
+    /// an error — the spec's failure-mode table.
+    #[test]
+    fn a_beam_that_cannot_ignite_reports_cleanly() {
+        let r = run_lsd(&LsdParams {
+            ignite_power: 1.0,
+            ..demo()
+        })
+        .unwrap();
+        assert!(!r.ignited);
+        assert!(r.i_peak < r.i_threshold);
+        assert!(r.profiles.is_empty() && r.front_x.is_empty());
+        assert!(r.d_measured.is_nan());
+    }
+
+    #[test]
+    fn degenerate_lsd_parameters_are_refused() {
+        for bad in [
+            LsdParams { cells: 4, ..demo() },
+            LsdParams {
+                frames: 1,
+                ..demo()
+            },
+            LsdParams {
+                length: -1.0,
+                ..demo()
+            },
+            LsdParams {
+                drive: 0.0,
+                ..demo()
+            },
+            LsdParams { t0: 0.0, ..demo() },
+            // Asking the front to cross more of the column than it has room
+            // for would run it off the boundary and quietly report nonsense.
+            LsdParams {
+                cross_fraction: 0.9,
+                ..demo()
+            },
+        ] {
+            assert!(run_lsd(&bad).is_err(), "accepted {bad:?}");
+        }
     }
 }

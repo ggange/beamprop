@@ -712,9 +712,77 @@ Gates (`tests/validation.rs`):
   statement of why agreement on the level would not be evidence about the
   physics.
 
+- **G8** (`plasma_column_absorbs_as_beer_lambert`) — the D7 coupling itself,
+  end to end. A real beam marched through a `PlasmaColumn` built from G3's
+  settled hydro state, against `exp(−τ)`, `τ = Σ α_k·dx`. The M2 twin
+  (`beer_lambert_matches_closed_form`) does this for a constant absorber; this
+  is its M6c counterpart with the absorber coming from gas dynamics. Added at
+  step 6: until then D7's claim was carried by `PlasmaColumn`'s unit tests,
+  which exercise its `Medium` methods in isolation, and no field had ever been
+  marched through one. `δn ≡ 0` is asserted at every slab rather than assumed —
+  a Drude index appearing there is the M6b failure D7 exists to avoid.
+
+  Measured at `τ = 339`: **1.7e-13 at 500 slabs, 8.4e-14 at 100**, across 500
+  successive amplitude multiplications against a single exponential. Two slab
+  resolutions because `PlasmaColumn::from_column_resampled` — mean `α` over each
+  bin, so `α_slab·dz = Σ α_k·dx` exactly — is what makes marching a 2500-cell
+  hydro state through an FFT propagator affordable.
+
 Not yet gated: **G7**, absolute velocity against measurement, which is expected
 to land high and is documented-but-ungated because a planar 1-D solver has no
 radial relief. See `docs/M6C_SPEC.md`.
+
+### The `lsd` demonstration run (CLI case)
+
+`beamprop lsd` (`src/cases.rs::run_lsd`, written by `src/main.rs`, rendered by
+`scripts/render_lsd.py`) is the case that puts M6a and M6c in the same run: a
+spark is lit at M6a's breakdown threshold and the absorption wave it launches is
+tracked back up the beam. The igniting pulse's peak intensity comes from its
+power and focal radius through `IntensityScale` — the T4 extraction's second
+consumer, and the reason it was extracted.
+
+**Its headline is a result, not a demonstration.** The case takes a short
+*igniting* pulse and a separate long *sustaining* drive, and the two models
+together say the second could never have produced the first:
+
+- M6a's threshold in air at 1 atm saturates at **≈1.14×10¹⁶ W/m² and does not
+  fall with pulse length** (6 ns → 1.18×10¹⁶, 1 ms → 1.14×10¹⁶). It is an
+  intensity floor, not a fluence one: below it the inelastic losses paid
+  climbing to the ionization potential exceed the inverse-bremsstrahlung
+  heating, the net cascade rate is negative, and no exposure time rescues it.
+  Widening the focus moves it by 4 % over a 500× range of spot radius.
+- The sustaining LSD drive is ~10¹¹ W/m² — five orders of magnitude below.
+
+So the detonation must be *initiated* by something far brighter than what
+*sustains* it, which is the known experimental situation: LSD waves in clean air
+are started on a target, on an aerosol, or by a separate spike. Pinned by
+`the_sustaining_drive_is_far_below_the_breakdown_threshold`, so a future change
+to either model that closes the gap fails rather than quietly invalidating the
+write-up.
+
+**What each half is worth.** *When and where* the spark lights inherits M6a's
+explicitly ungated absolute level (4.8–7.0× above the measured T&T curve). The
+front speed does not: it depends on the absorbed intensity at the front and on
+`ρ₀`, not on where the spark was lit — which is why G3/G3b/G3c and the G4
+physics gate all use seeded ignition and never touch `AirBreakdown`. The gap
+above is likewise untouched by that uncertainty: 10⁵ against ~7×. Default run:
+`D` = 5401 m/s against Raizer's 5391 (+0.19 %), energy budget closing to 1.3e-16,
+final column optical depth 374.
+
+**Why the grey closure drives it.** `GreyThreshold` is what G3–G5 gate and it
+introduces nothing that can drift. The run *evaluates* the production
+inverse-bremsstrahlung closure at its own measured post-front state rather than
+asserting a reason for not using it, and the answer is informative: `α ≈ 6.8 1/m`
+at 1064 nm, making the whole 2.5 cm column **0.17 optical depths** — nearly
+transparent to the beam driving it, with no front, and `check_regime` would
+correctly refuse it as volumetric — against `α ≈ 1.1×10³ 1/m` at 10.6 µm, an
+absorption length of 0.92 mm that is 92 cells on the demo grid and 3.7 % of the
+domain. Free-free absorption falls steeply toward short wavelengths, so this is
+the model reproducing **why LSD experiments are done with CO₂ lasers**. What
+blocks running that closure coupled is cost, and specifically the table
+inversion: `PlasmaTable::temperature` bisects ~45 times per cell per deposition
+call, three deposition calls per step. A faster inversion, not a finer grid, and
+a separate change with its own gate.
 
 References:
 - E. F. Toro, *Riemann Solvers and Numerical Methods for Fluid Dynamics*,

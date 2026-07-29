@@ -417,6 +417,28 @@ boundaries, to ~1e-10 relative. M4's closed power budget, one dimension down.
 Frozen table vs direct Mutation++ at sampled `(T, p)`, within a stated
 tolerance, with the ionization onset explicitly among the samples.
 
+### G8 — the plasma column shields the beam as Beer–Lambert (verification)
+
+**Added at step 6, not in the original gate list.** D7 says the propagator sees
+the plasma column as pure absorption with `δn ≡ 0`; until step 6 that was
+checked only on `PlasmaColumn`'s `Medium` methods in isolation, and no field had
+ever been marched through one. The demonstration run needed that path, so it is
+now gated on it: a real beam through a real column built from G3's settled hydro
+state, against `exp(−τ)` with `τ = Σ α_k·dx` — the M2 `beer_lambert_matches_closed_form`
+precedent, with the absorber coming from gas dynamics instead of a constant.
+
+The reference is exact and beam-independent because the column is transversely
+uniform. `δn ≡ 0` is asserted at every slab rather than assumed, since a Drude
+index appearing there is precisely the M6b failure D7 exists to avoid. The gate
+also runs two slab resolutions, because `PlasmaColumn::from_column_resampled` is
+what makes marching a 2500-cell hydro state through an FFT propagator affordable
+and a binning that lost optical depth would surface here.
+
+Measured on G3's own column (`τ = 339`): agreement to **1.7×10⁻¹³ at 500 slabs
+and 8.4×10⁻¹⁴ at 100**, across 500 successive amplitude multiplications against
+a single exponential. The transmission itself is 4.9×10⁻¹⁴⁸ — an established LSD
+plasma is not a partial shield, it is a shutter.
+
 ### G7 — absolute velocity vs measurement: DOCUMENTED, UNGATED
 
 The 1-D planar solver is **expected to land high** against measured LSD
@@ -488,17 +510,46 @@ is labelled as such.
    spec'd.* G3 runs the `GreyThreshold` absorption model too — a fixed `α` above
    an internal-energy threshold — so that the residual it measures is the
    solver's and carries nothing from the property table's interpolation.
-3. **Sub-cycling default** — set by the convergence check, not chosen. *Still
-   open (step 4): it cannot be answered yet.* `propagation_every` only means
-   something once the 3-D propagator is in the loop, and step 4 deliberately
-   does not put it there — G3 and G5 are 1-D statements, and the closed forms
-   are written for a planar wave with a prescribed `S`. The knob, its
-   convergence check, and its default land with the CLI case.
-4. **Where the front is initialized.** *Resolved (step 4): both, as
-   anticipated.* `SeededIgnition` is implemented and is what G3 uses, so the
-   velocity gates carry nothing from M6a's ungated absolute threshold. The
-   `AirBreakdown`-triggered path is the demonstration run's, and lands with the
-   CLI case along with the inherited-limitation note.
+3. **Sub-cycling default** — set by the convergence check, not chosen.
+   *Resolved (step 6): the knob is **not** landed, and the reason is structural
+   rather than a deferral of effort.* `propagation_every` exists to amortise
+   re-solving the 3-D propagation against a plasma state that has moved. In this
+   geometry the plasma state barely feeds back: everything upstream of the front
+   is cold transparent air, so the front sees the full incident `S` no matter
+   what the column behind it is doing, and the column's effect on the beam is
+   *entirely* downstream of the front, where nothing remains to be driven. The
+   coupling is one-way, and the convergence check the spec asked for would
+   therefore measure nothing — it would pass at any `propagation_every` for a
+   reason that has nothing to do with the sub-cycling being adequate.
+
+   What the propagator genuinely adds is **shielding**, and step 6 lands that as
+   a gate instead: G8 marches a real beam through `PlasmaColumn` and holds it to
+   `exp(−τ)` (see Gates). The one thing that *would* make the loop two-way is
+   diffraction — a front climbing out of a converging beam's focus sees a
+   falling drive and decelerates — and that is a quasi-1-D approximation this
+   document has never specified and nothing gates. It belongs to a later
+   milestone with its own gate, not smuggled in under a performance knob.
+4. **Where the front is initialized.** *Resolved (steps 4 and 6): both, as
+   anticipated.* `SeededIgnition` is implemented and is what G3 and G4 use, so
+   the velocity gates carry nothing from M6a's ungated absolute threshold. The
+   `AirBreakdown`-triggered path landed with the `lsd` CLI case in step 6,
+   along with the inherited-limitation note.
+
+   **What that produced was not anticipated, and is now the case's headline.**
+   Putting both models in one run forces the question "does the beam that drives
+   the detonation also light it?", and the answer the two give together is *no,
+   by five orders of magnitude*. M6a's threshold in air at 1 atm saturates at
+   ≈1.14×10¹⁶ W/m² and **does not fall with pulse length** — 6 ns and 1 ms give
+   1.18×10¹⁶ and 1.14×10¹⁶ — because below it the inelastic losses exceed the
+   inverse-bremsstrahlung heating and the net cascade rate is negative. It is an
+   intensity floor, not a fluence one, and widening the focus does not move it
+   either (4 % over a 500× range of spot radius). The sustaining LSD drive is
+   ~10¹¹ W/m². So the wave must be *initiated* by something far brighter than
+   what *sustains* it — which is the known experimental situation, where LSD
+   waves in clean air are started on a target, on an aerosol, or by a separate
+   spike. M6a's ungated absolute level does not touch the conclusion: the gap is
+   10⁵ against a ~7× uncertainty. Pinned by
+   `the_sustaining_drive_is_far_below_the_breakdown_threshold`.
 5. **How hot the run is allowed to get** — *new, and answered (step 4).* The
    `Z̄ ≡ 1` ceiling recorded under "Property closure" bounds where `α_IB` can be
    trusted, and the CJ state behind a strong LSD front (1.5–2.5×10⁴ K)
@@ -530,7 +581,31 @@ is labelled as such.
    ambient `e₀`).
 6. `lsd` CLI case + `scripts/render_lsd.py`; `MODELS.md` updated in the same
    change (equation, site, gate numbers, references), including the inherited
-   M6a level limitation and the G3-is-verification labelling.
+   M6a level limitation and the G3-is-verification labelling. **Landed**, with
+   three things this document owes the reader.
+
+   (a) **G8 is new, and was not in the pre-spec.** D7's central claim — the
+   propagator sees the plasma as pure absorption and nothing else — was carried
+   by `PlasmaColumn`'s unit tests, which exercise its `Medium` methods in
+   isolation; no field had ever been marched through one. Step 6 needed that
+   path for the demonstration, found it ungated, and gated it.
+
+   (b) **The sub-cycling knob is not landed, on purpose** — see open question 3,
+   which step 6 answers by showing the coupling is one-way in this geometry.
+
+   (c) **The demonstration runs the grey closure, and reports what the
+   production one would say.** Evaluated at the run's own post-front state, the
+   inverse-bremsstrahlung closure gives `α ≈ 6.8 1/m` at 1064 nm — the whole
+   2.5 cm column is 0.17 optical depths, so there would be no front at all and
+   `check_regime` would correctly refuse it as volumetric — against
+   `α ≈ 1.1×10³ 1/m` at 10.6 µm, an absorption length of 0.92 mm that is 92
+   cells on the demo grid and 3.7 % of the domain. Free-free absorption falls
+   steeply toward short wavelengths, so **this is the model reproducing why LSD
+   experiments are done with CO₂ lasers.** What blocks running that closure
+   coupled is cost and it is specific: `PlasmaTable::temperature` bisects ~45
+   times per cell per deposition call, and the driver deposits three times per
+   step. That is a faster table inversion, not a finer grid, and it is a
+   separate change with its own gate.
 
 ## References
 

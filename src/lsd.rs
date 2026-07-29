@@ -208,6 +208,16 @@ struct AbsorptionSample {
 
 impl Absorption {
     /// Absorption coefficient (1/m) for the state `w` under the EOS `gas`.
+    ///
+    /// Public so a caller can ask what a closure it is *not* running would say —
+    /// the demonstration run evaluates the inverse-bremsstrahlung closure at its
+    /// own measured post-front state to report the grid that closure would
+    /// demand, rather than asserting a number for it.
+    pub fn coefficient(&self, gas: &IdealGas, w: Primitive) -> Result<f64> {
+        Ok(self.sample(gas, w)?.alpha)
+    }
+
+    /// Absorption coefficient (1/m) for the state `w` under the EOS `gas`.
     fn sample(&self, gas: &IdealGas, w: Primitive) -> Result<AbsorptionSample> {
         match self {
             Self::GreyThreshold { alpha, e_ignite } => {
@@ -516,6 +526,25 @@ impl LsdColumn {
         Ok((x0 - x1) / (self.hydro.time() - t0))
     }
 
+    /// Total optical depth of the column, `τ = Σ α_k·dx` (dimensionless).
+    pub fn optical_depth(&mut self) -> Result<f64> {
+        let dx = self.hydro.dx();
+        Ok(self.alpha_profile()?.iter().sum::<f64>() * dx)
+    }
+
+    /// Fraction of the beam that survives the whole column, `exp(−τ)`.
+    ///
+    /// This is the **shielding** the plasma imposes on everything downstream of
+    /// it, and it is the one number the D7 coupling ultimately delivers to a
+    /// propagator: the column is transversely uniform, so the transmitted
+    /// fraction is `exp(−τ)` exactly, with no dependence on the beam profile or
+    /// the transverse grid. Marching a field through [`PlasmaColumn`] reproduces
+    /// it rather than discovering it — which is why the gate on that path is a
+    /// Beer–Lambert closed-form check (the M2 precedent) and not a new claim.
+    pub fn transmitted_fraction(&mut self) -> Result<f64> {
+        Ok((-self.optical_depth()?).exp())
+    }
+
     /// Cumulative laser energy absorbed by the column (J/m²).
     pub fn deposited_energy(&self) -> f64 {
         self.deposited
@@ -696,6 +725,45 @@ impl PlasmaColumn {
     /// Snapshot the current absorption profile of `column`.
     pub fn from_column(column: &mut LsdColumn, n: usize) -> Result<Self> {
         Self::new(n, column.alpha_profile()?)
+    }
+
+    /// Snapshot `column` onto `n_slabs` coarser slabs, returning the column and
+    /// the slab thickness `dz` (m) the propagator **must** be given for it.
+    ///
+    /// The hydro resolves the absorption layer with thousands of 10 µm cells;
+    /// handing the propagator one FFT slab per hydro cell would cost thousands
+    /// of transforms to reproduce a number the column already knows. Binning is
+    /// exact rather than approximate here: a slab's `α` is the arithmetic mean
+    /// over its cells, so `α_slab·dz = Σ α_k·dx` and the optical depth — the
+    /// only thing a transversely uniform absorber can affect — is preserved to
+    /// round-off. (Gated by `plasma_column_resampling_preserves_optical_depth`.)
+    ///
+    /// `n_cells` must be an exact multiple of `n_slabs`; a ragged binning would
+    /// give slabs of differing thickness, which the propagator's single `dz`
+    /// cannot express, and silently mis-weighting them is precisely the kind of
+    /// quiet error this returns an `Err` for instead.
+    pub fn from_column_resampled(
+        column: &mut LsdColumn,
+        n: usize,
+        n_slabs: usize,
+    ) -> Result<(Self, f64)> {
+        let alpha = column.alpha_profile()?;
+        let dx = column.hydro().dx();
+        if n_slabs == 0 || n_slabs > alpha.len() || !alpha.len().is_multiple_of(n_slabs) {
+            bail!(
+                "lsd: cannot bin {} hydro cells onto {n_slabs} slabs — need a divisor \
+                 of {} in 1..={}",
+                alpha.len(),
+                alpha.len(),
+                alpha.len()
+            );
+        }
+        let per = alpha.len() / n_slabs;
+        let binned: Vec<f64> = alpha
+            .chunks_exact(per)
+            .map(|c| c.iter().sum::<f64>() / per as f64)
+            .collect();
+        Ok((Self::new(n, binned)?, per as f64 * dx))
     }
 }
 
@@ -1004,6 +1072,47 @@ mod tests {
         assert!(hot > 0, "no absorbing slab");
         // Off the end of the column is None, not a panic.
         assert!(col.extinction(64).is_none());
+    }
+
+    #[test]
+    fn plasma_column_resampling_preserves_optical_depth() {
+        // The invariant that licenses coarsening at all: a transversely uniform
+        // absorber acts on the beam only through Σα·dx, so binning must carry
+        // it exactly, not approximately.
+        let mut c = column(512);
+        c.advance_to(1e-7).unwrap();
+        let tau = c.optical_depth().unwrap();
+        for n_slabs in [512usize, 256, 128, 64, 8] {
+            let (col, dz) = PlasmaColumn::from_column_resampled(&mut c, 4, n_slabs).unwrap();
+            let binned: f64 = (0..n_slabs)
+                .filter_map(|j| col.extinction(j).map(|a| a[[0, 0]] * dz))
+                .sum();
+            assert!(
+                (binned - tau).abs() <= 1e-12 * tau,
+                "{n_slabs} slabs: τ = {binned:.12e} vs {tau:.12e}"
+            );
+        }
+        // A ragged binning is refused rather than silently mis-weighted.
+        assert!(PlasmaColumn::from_column_resampled(&mut c, 4, 7).is_err());
+        assert!(PlasmaColumn::from_column_resampled(&mut c, 4, 0).is_err());
+        assert!(PlasmaColumn::from_column_resampled(&mut c, 4, 1024).is_err());
+    }
+
+    #[test]
+    fn transmitted_fraction_is_exp_minus_tau() {
+        let mut c = column(256);
+        let tau = c.optical_depth().unwrap();
+        let t = c.transmitted_fraction().unwrap();
+        assert!(tau > 0.0, "the seed should be optically thick");
+        assert!((t - (-tau).exp()).abs() < 1e-15);
+        // And it matches the column's own Beer–Lambert march, which is the
+        // consistency that lets the demo quote one from the other.
+        let profile = c.intensity_profile().unwrap();
+        let marched = profile[profile.len() - 1] / profile[0];
+        assert!(
+            (t / marched - 1.0).abs() < 1e-12,
+            "exp(−τ) = {t:.9e} vs the marched {marched:.9e}"
+        );
     }
 
     #[test]

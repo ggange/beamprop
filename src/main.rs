@@ -12,8 +12,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use beamprop::cases::{
-    BloomingParams, BreakdownParams, PropagateParams, TurbulenceParams, run_blooming,
-    run_breakdown, run_propagate, run_turbulence,
+    BloomingParams, BreakdownParams, LsdParams, PropagateParams, TurbulenceParams, run_blooming,
+    run_breakdown, run_lsd, run_propagate, run_turbulence,
 };
 use beamprop::field::Field;
 use beamprop::grid::Grid;
@@ -197,6 +197,70 @@ enum Cmd {
         #[arg(long, default_value = "out")]
         out_dir: PathBuf,
     },
+    /// Ignite a spark at the M6a breakdown threshold and run the
+    /// laser-supported detonation wave the sustaining beam drives back up
+    /// itself (M6c). Writes <out>_profiles.npy (p, rho, u, alpha, I per frame),
+    /// <out>_trajectory.csv (the front track and the column's optical depth),
+    /// and _meta.json/_notes.md. Render with `python3 scripts/render_lsd.py`.
+    /// 1-D gas dynamics: the beam arguments do not apply.
+    Lsd {
+        /// Vacuum wavelength in metres.
+        #[arg(long, default_value_t = 1064e-9)]
+        wavelength: f64,
+        /// Igniting-pulse FWHM in seconds.
+        #[arg(long, default_value_t = 6e-9)]
+        fwhm: f64,
+        /// Peak power of the igniting pulse in watts. The default 15 MW in a
+        /// 6 ns pulse (~90 mJ, an ordinary Q-switched Nd:YAG) clears the M6a
+        /// threshold by 2.0x at the default focus.
+        #[arg(long, default_value_t = 1.5e7)]
+        ignite_power: f64,
+        /// Igniting focal spot 1/e^2 intensity radius in metres. The default
+        /// 20 um is T&T's focal geometry, which is what the M6a kernel this
+        /// case triggers from is built on.
+        #[arg(long, default_value_t = 20e-6)]
+        w_focus: f64,
+        /// Sustaining drive intensity in W/m^2 — the long-pulse beam the
+        /// detonation runs on, NOT the igniting spike. The default 1e11
+        /// (1e7 W/cm^2) is the spec's representative LSD drive, and sits five
+        /// orders of magnitude below the breakdown threshold; that gap is the
+        /// point of the case, not an oversight.
+        #[arg(long, default_value_t = 1e11)]
+        drive: f64,
+        /// Ambient pressure in pascals.
+        #[arg(long, default_value_t = 101_325.0)]
+        p0: f64,
+        /// Ambient temperature in kelvin.
+        #[arg(long, default_value_t = 288.0)]
+        t0: f64,
+        /// Column length in metres.
+        #[arg(long, default_value_t = 2.5e-2)]
+        length: f64,
+        /// Hydro cells across the column. The default 2500 puts the 50 um
+        /// absorption length across 5 cells, which is what check_regime needs.
+        #[arg(long, default_value_t = 2500)]
+        cells: usize,
+        /// Grey-plasma absorption coefficient in 1/m.
+        #[arg(long, default_value_t = 2e4)]
+        alpha: f64,
+        /// Fraction of the column the front is asked to cross. Sets the run
+        /// duration from the expected speed; must stay under 0.75 so the wave
+        /// never reaches the boundary.
+        #[arg(long, default_value_t = 0.5)]
+        cross: f64,
+        /// Number of recorded profile snapshots (= animation frames).
+        #[arg(long, default_value_t = 48)]
+        frames: usize,
+        /// Time slices per pulse for the M6a ignition test.
+        #[arg(long, default_value_t = 400)]
+        ignition_steps: usize,
+        /// Output basename (within --out-dir).
+        #[arg(long, default_value = "lsd")]
+        out: String,
+        /// Directory for all generated files; created if missing.
+        #[arg(long, default_value = "out")]
+        out_dir: PathBuf,
+    },
     /// Remove generated results (.npy, .png, .gif files and *_notes.md /
     /// *_meta.json sidecars) from the output directory. Only those are
     /// touched; other files and the directory itself are left alone.
@@ -250,6 +314,41 @@ fn main() -> Result<()> {
             out_dir,
         } => breakdown(
             wavelength, fwhm, p_min, p_max, points, steps, drive, &out, &out_dir,
+        ),
+        Cmd::Lsd {
+            wavelength,
+            fwhm,
+            ignite_power,
+            w_focus,
+            drive,
+            p0,
+            t0,
+            length,
+            cells,
+            alpha,
+            cross,
+            frames,
+            ignition_steps,
+            out,
+            out_dir,
+        } => lsd(
+            &LsdParams {
+                wavelength,
+                fwhm,
+                ignite_power,
+                w_focus,
+                drive,
+                p0,
+                t0,
+                length,
+                cells,
+                alpha,
+                cross_fraction: cross,
+                frames,
+                ignition_steps,
+            },
+            &out,
+            &out_dir,
         ),
         Cmd::Clean { out_dir } => clean(&out_dir),
     }
@@ -597,8 +696,6 @@ fn blooming(
     Ok(())
 }
 
-/// Delete `.npy`/`.png`/`.gif` files and `*_notes.md`/`*_meta.json` sidecars
-/// directly inside `dir` (non-recursive).
 /// M6a: 0-D breakdown threshold sweep + avalanche traces. No grid, no
 /// propagator — the compute is a pure rate integration in `beamprop::cases`.
 #[allow(clippy::too_many_arguments)]
@@ -756,6 +853,266 @@ fn breakdown(
     Ok(())
 }
 
+/// M6c: ignite at the M6a threshold, then run the laser-supported detonation
+/// wave the sustaining beam drives back up itself. 1-D gas dynamics; the
+/// compute is in `beamprop::cases`.
+fn lsd(p: &LsdParams, out: &str, out_dir: &Path) -> Result<()> {
+    let run = run_lsd(p)?;
+
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    let path = |name: &str| out_dir.join(name);
+
+    println!(
+        "lsd: {:.0} nm, igniting {:.2e} W into a {:.0} µm focus → I_peak = {:.3e} W/m²",
+        p.wavelength * 1e9,
+        p.ignite_power,
+        p.w_focus * 1e6,
+        run.i_peak
+    );
+    println!(
+        "  M6a threshold {:.3e} W/m² → {} ({:.2}× {})",
+        run.i_threshold,
+        if run.ignited {
+            "IGNITED"
+        } else {
+            "no breakdown"
+        },
+        run.i_peak / run.i_threshold,
+        if run.ignited { "over" } else { "under" }
+    );
+
+    if !run.ignited {
+        // The spec's failure-mode table: a clean report, not a hang and not an
+        // error. Nothing to write — there is no wave.
+        println!(
+            "  the igniting pulse is below threshold, so no wave was launched. \
+             Raise --ignite-power above {:.3e} W (or tighten --w-focus).",
+            p.ignite_power * run.i_threshold / run.i_peak
+        );
+        return Ok(());
+    }
+
+    println!(
+        "  sustaining drive {:.3e} W/m² = {:.2e}× the threshold — the beam that \
+         runs the wave could never have lit it",
+        run.drive,
+        run.drive / run.i_threshold
+    );
+    println!(
+        "  D = {:.1} m/s vs Raizer {:.1} m/s ({:+.3} %); ρ₀ = {:.4} kg/m³",
+        run.d_measured,
+        run.d_raizer,
+        100.0 * (run.d_measured / run.d_raizer - 1.0),
+        run.rho_0
+    );
+    println!(
+        "  absorbed {:.4e} J/m² (budget closes to {:.2e}); final τ = {:.1}, \
+         log₁₀ T = {:.1}",
+        run.deposited_energy,
+        run.energy_residual,
+        run.optical_depth[run.optical_depth.len() - 1],
+        run.log10_transmission[run.log10_transmission.len() - 1]
+    );
+    println!(
+        "  inverse-bremsstrahlung at the post-front state: α = {:.3e} 1/m at \
+         {:.2} µm (τ_column = {:.3}), {:.3e} 1/m at 10.6 µm (τ_column = {:.1})",
+        run.ib_alpha,
+        p.wavelength * 1e6,
+        run.ib_optical_depth,
+        run.ib_alpha_co2,
+        run.ib_optical_depth_co2
+    );
+    if !run.boundaries_undisturbed {
+        println!("  WARNING: the wave reached a domain boundary; results are contaminated.");
+    }
+
+    // Profiles [frame, quantity, cell] — the animation frames.
+    let npy_path = path(&format!("{out}_profiles.npy"));
+    ndarray_npy::write_npy(&npy_path, &run.profiles)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", npy_path.display()))?;
+
+    let mut csv = String::from(
+        "# beamprop M6c laser-supported detonation: front track and column opacity\n\
+         # columns: time_s, front_x_m, optical_depth, log10_transmission\n\
+         # front_x is the laser-side half-maximum of the pressure rise; it\n\
+         # DECREASES because the wave runs back up the beam toward the laser.\n\
+         # log10_transmission is logged because an established LSD column\n\
+         # reaches hundreds of optical depths, where exp(-tau) underflows.\n\
+         time_s,front_x_m,optical_depth,log10_transmission\n",
+    );
+    for i in 0..run.frame_time.len() {
+        csv.push_str(&format!(
+            "{:.9e},{:.9e},{:.6e},{:.6e}\n",
+            run.frame_time[i], run.front_x[i], run.optical_depth[i], run.log10_transmission[i]
+        ));
+    }
+    let csv_path = path(&format!("{out}_trajectory.csv"));
+    fs::write(&csv_path, csv).with_context(|| format!("writing {}", csv_path.display()))?;
+
+    let meta = format!(
+        "{{\n  \"case\": \"lsd\",\n  \"wavelength\": {wl},\n  \"fwhm\": {fwhm},\n  \
+         \"ignite_power\": {ip},\n  \"w_focus\": {wf},\n  \"drive\": {drive},\n  \
+         \"p0\": {p0},\n  \"t0\": {t0},\n  \"rho_0\": {rho},\n  \"length\": {len},\n  \
+         \"cells\": {cells},\n  \"alpha\": {alpha},\n  \"frames\": {frames},\n  \
+         \"i_peak\": {ipk},\n  \"i_threshold\": {ithr},\n  \
+         \"d_measured\": {dm},\n  \"d_raizer\": {dr},\n  \
+         \"deposited_energy\": {dep},\n  \"energy_residual\": {res},\n  \
+         \"ib_alpha\": {iba},\n  \"ib_optical_depth\": {ibt},\n  \
+         \"ib_alpha_co2\": {ibac},\n  \"ib_optical_depth_co2\": {ibtc},\n  \
+         \"x_min\": {xmin},\n  \"x_max\": {xmax},\n  \
+         \"quantities\": [\"p_Pa\", \"rho_kg_m3\", \"u_m_s\", \"alpha_1_m\", \"I_W_m2\"]\n}}\n",
+        wl = p.wavelength,
+        fwhm = p.fwhm,
+        ip = p.ignite_power,
+        wf = p.w_focus,
+        drive = p.drive,
+        p0 = p.p0,
+        t0 = p.t0,
+        rho = run.rho_0,
+        len = p.length,
+        cells = p.cells,
+        alpha = p.alpha,
+        frames = p.frames,
+        ipk = run.i_peak,
+        ithr = run.i_threshold,
+        dm = run.d_measured,
+        dr = run.d_raizer,
+        dep = run.deposited_energy,
+        res = run.energy_residual,
+        iba = run.ib_alpha,
+        ibt = run.ib_optical_depth,
+        ibac = run.ib_alpha_co2,
+        ibtc = run.ib_optical_depth_co2,
+        xmin = run.x[0],
+        xmax = run.x[run.x.len() - 1],
+    );
+    let meta_path = path(&format!("{out}_meta.json"));
+    fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
+
+    let notes = format!(
+        "# Test case: laser-supported detonation wave (M6c)\n\
+         \n\
+         A spark is lit at the M6a breakdown threshold, and the absorption wave\n\
+         it launches runs **back up the beam toward the laser** as a detonation.\n\
+         The x axis is the beam axis: the laser sits beyond x = 0, the beam\n\
+         travels in +x, and the front travels in -x. Everything upstream of the\n\
+         front is cold transparent air, which is why the front sees the full\n\
+         drive intensity.\n\
+         \n\
+         ## The headline: the beam that sustains the wave could not have lit it\n\
+         \n\
+         Igniting pulse: {ipk:.3e} W/m^2 peak ({ratio_ig:.2}x the M6a threshold\n\
+         of {ithr:.3e} W/m^2). Sustaining drive: {drive:.3e} W/m^2, which is\n\
+         {ratio_dr:.2e} of that threshold -- five orders of magnitude below.\n\
+         \n\
+         That gap is a result, not a modelling convenience. M6a's threshold is an\n\
+         intensity floor rather than a fluence one: below it the inelastic losses\n\
+         paid climbing to the ionization potential exceed the inverse-\n\
+         bremsstrahlung heating, so the net cascade rate is negative and no\n\
+         exposure time rescues it (6 ns and 1 ms give thresholds within 4%).\n\
+         Widening the focus does not help either. So the detonation has to be\n\
+         *initiated* by something far brighter than what *sustains* it -- which\n\
+         is the known experimental situation, where LSD waves in clean air are\n\
+         started on a target, on an aerosol, or by a separate spike.\n\
+         \n\
+         M6a's absolute level is explicitly ungated (4.8-7.0x above the measured\n\
+         Thiyagarajan & Thompson curve, inside the 3-10x inter-lab scatter), so\n\
+         *when and where* the spark lights carries that uncertainty. The gap\n\
+         above does not: it is 10^5 against a ~7x uncertainty.\n\
+         \n\
+         ## What the velocity is worth\n\
+         \n\
+         D = {dm:.1} m/s against Raizer's closed form {dr:.1} m/s ({derr:+.3}%).\n\
+         This half of the run does **not** inherit M6a's uncertainty: the front\n\
+         speed depends on the absorbed intensity at the front and on rho_0, not\n\
+         on where or when the spark was lit -- which is why the M6c gates\n\
+         (G3/G3b/G3c and the G4 physics gate) all use seeded ignition and never\n\
+         touch AirBreakdown.\n\
+         \n\
+         Note also what the agreement above is and is not. Raizer's expression is\n\
+         the Chapman-Jouguet construction this model is *built from*, so\n\
+         reproducing it is **solver verification**, not validation. The gate that\n\
+         speaks about the world is G4, the parameter-free D ~ S^(1/3),\n\
+         rho_0^(-1/3) scaling. See docs/MODELS.md.\n\
+         \n\
+         ## The plasma as a shutter\n\
+         \n\
+         The column ends the run at tau = {tau:.1}, i.e. log10 of the transmitted\n\
+         fraction is {logt:.1}. An established LSD plasma is not a partial\n\
+         filter -- it closes the channel completely. That is the D7 coupling in\n\
+         one number: the propagator sees this column as pure Beer-Lambert\n\
+         absorption and nothing else (no Drude index), gated by\n\
+         `plasma_column_absorbs_as_beer_lambert`.\n\
+         \n\
+         ## Why the grey absorber, and what the real one says\n\
+         \n\
+         The run uses the grey verification closure (fixed alpha = {alpha:.1e} 1/m\n\
+         above an internal-energy threshold), which is what G3-G5 gate. The\n\
+         production inverse-bremsstrahlung closure is implemented and unit-tested,\n\
+         and evaluating it at this run's own post-front state is informative:\n\
+         \n\
+         - at {lam_um:.2} um:  alpha = {iba:.3e} 1/m, so the whole column is only\n\
+           {ibt:.3} optical deep -- the plasma is nearly transparent to the beam\n\
+           driving it, and check_regime would refuse the run as volumetric.\n\
+         - at 10.6 um:  alpha = {ibac:.3e} 1/m, an absorption length of {ibl_mm:.2} mm\n\
+           and a column {ibtc:.1} optical deep -- a real, well-resolved front.\n\
+         \n\
+         Free-free absorption falls steeply toward short wavelengths, so this is\n\
+         the model reproducing why LSD experiments are done with CO2 lasers. What\n\
+         blocks running that closure coupled is cost, not physics: the table\n\
+         inversion bisects ~45 times per cell per deposition call. That is a\n\
+         separate change with its own gate.\n\
+         \n\
+         ## Files\n\
+         \n\
+         - `{out}_profiles.npy` -- [frame, quantity, cell], {frames} x 5 x {cells},\n\
+           quantities ordered p (Pa), rho (kg/m^3), u (m/s), alpha (1/m), I (W/m^2).\n\
+         - `{out}_trajectory.csv` -- time, front position, optical depth,\n\
+           log10 transmission.\n\
+         - `{out}_meta.json` -- run parameters and the derived numbers above.\n\
+         \n\
+         Energy budget closes to {res:.2e} relative (G5). Render with\n\
+         `python3 scripts/render_lsd.py {out_dir}/{out}`.\n",
+        ipk = run.i_peak,
+        ithr = run.i_threshold,
+        ratio_ig = run.i_peak / run.i_threshold,
+        drive = run.drive,
+        ratio_dr = run.drive / run.i_threshold,
+        dm = run.d_measured,
+        dr = run.d_raizer,
+        derr = 100.0 * (run.d_measured / run.d_raizer - 1.0),
+        tau = run.optical_depth[run.optical_depth.len() - 1],
+        logt = run.log10_transmission[run.log10_transmission.len() - 1],
+        alpha = p.alpha,
+        lam_um = p.wavelength * 1e6,
+        iba = run.ib_alpha,
+        ibt = run.ib_optical_depth,
+        ibac = run.ib_alpha_co2,
+        ibl_mm = 1e3 / run.ib_alpha_co2,
+        ibtc = run.ib_optical_depth_co2,
+        frames = p.frames,
+        cells = p.cells,
+        res = run.energy_residual,
+        out_dir = out_dir.display(),
+    );
+    let notes_path = path(&format!("{out}_notes.md"));
+    fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
+
+    println!(
+        "  wrote {} ({} x 5 x {}), {}, {} and {}",
+        npy_path.display(),
+        p.frames,
+        p.cells,
+        csv_path.display(),
+        meta_path.display(),
+        notes_path.display()
+    );
+    Ok(())
+}
+
+/// Delete `.npy`/`.png`/`.gif` files and `*_notes.md`/`*_meta.json` sidecars
+/// directly inside `dir` (non-recursive).
 fn clean(dir: &Path) -> Result<()> {
     if !dir.exists() {
         println!("nothing to clean: {} does not exist", dir.display());

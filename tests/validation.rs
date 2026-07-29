@@ -18,7 +18,7 @@ use ndarray::Array2;
 use beamprop::euler1d::{Boundary, Euler1d, IdealGas, Primitive};
 use beamprop::field::Field;
 use beamprop::grid::Grid;
-use beamprop::lsd::{Absorption, LsdColumn, SeededIgnition, raizer_lsd_velocity};
+use beamprop::lsd::{Absorption, LsdColumn, PlasmaColumn, SeededIgnition, raizer_lsd_velocity};
 use beamprop::medium::{ConstantDeltaN, Medium, UniformExtinction, Vacuum};
 use beamprop::montecarlo::seeded_ensemble;
 use beamprop::plasmaprops::{NE_ACCURACY_FLOOR, PlasmaTable, SECOND_IONIZATION_K};
@@ -2003,6 +2003,84 @@ fn lsd_energy_budget_closes() {
             "n = {n_cells}, α = {alpha:.1e}: energy budget off by {residual:.3e} \
              (absorbed {:.6e} J/m²)",
             column.deposited_energy()
+        );
+    }
+}
+
+/// **G8 — the plasma column shields the beam as Beer–Lambert (verification).**
+///
+/// D7's whole coupling is "the propagator sees the plasma as pure absorption,
+/// nothing else". Until step 6 that claim was carried by `PlasmaColumn`'s unit
+/// tests, which check its `Medium` methods in isolation — no field was ever
+/// marched through one. This closes that: a real beam through a real column,
+/// against the closed form.
+///
+/// The reference is exact and independent of the beam, because the column is
+/// transversely uniform: transmission is `exp(−τ)` with `τ = Σ α_k·dx` taken
+/// straight off the hydro state. The gate also runs the column at two slab
+/// resolutions, since `from_column_resampled` is what makes marching a
+/// 2500-cell hydro state through an FFT propagator affordable, and a binning
+/// that lost optical depth would show up here as a transmission error.
+///
+/// Measured on G3's own settled column (τ = 339): the marched transmission
+/// agrees with `exp(−τ)` to 1.7e-13 at 500 slabs and 8.4e-14 at 100 — across
+/// 500 successive amplitude multiplications against a single exponential, so
+/// the agreement is a real check and not an identity. The transmission itself
+/// is 4.9e-148: an established LSD plasma is not a partial shield, it is a
+/// shutter, and that is the number the demonstration run reports.
+///
+/// The M2 twin (`beer_lambert_matches_closed_form`) does the same for a uniform
+/// absorber; this is its M6c counterpart with the absorber coming from gas
+/// dynamics. Both must also leave `δn ≡ 0`, which is asserted here rather than
+/// assumed, because a Drude index sneaking in is exactly the M6b failure D7
+/// exists to avoid.
+#[test]
+fn plasma_column_absorbs_as_beer_lambert() {
+    let (_, mut column) = lsd_front_speed(2_500, 2e4);
+    let tau = column.optical_depth().expect("optical depth");
+    let t_ref = column.transmitted_fraction().expect("transmission");
+    assert!(
+        tau > 1.0,
+        "the column is barely absorbing (τ = {tau:.3e}); this gate would be vacuous"
+    );
+
+    let grid = Grid::new(128, 2e-4);
+    let wavelength = 1.06e-6;
+    for n_slabs in [500usize, 100] {
+        let (medium, dz) =
+            PlasmaColumn::from_column_resampled(&mut column, grid.n, n_slabs).expect("resample");
+        // D7: absorption only, no index perturbation, at every slab.
+        for j in 0..n_slabs {
+            assert!(
+                medium.index_perturbation(j).iter().all(|&v| v == 0.0),
+                "slab {j} returned a non-zero δn — D7 is absorption only"
+            );
+        }
+
+        let mut field = Field::gaussian(grid, wavelength, 1e-3);
+        let p0 = field.power();
+        let mut prop = Propagator::new(grid, wavelength).unwrap();
+        prop.propagate(&mut field, &medium, dz, 0, n_slabs, |_, _| {})
+            .expect("marching the plasma column");
+        // The beam is far wider than the guard band cares about at this
+        // throw, so any power deficit beyond absorption would be the guard.
+        assert!(
+            prop.guard_absorbed() / p0 < 1e-9,
+            "{n_slabs} slabs: the guard band absorbed {:.2e} of the beam; the \
+             transmission below would be measuring the grid, not the plasma",
+            prop.guard_absorbed() / p0
+        );
+
+        let t_num = field.power() / p0;
+        let rel = (t_num - t_ref).abs() / t_ref;
+        println!(
+            "G8 {n_slabs} slabs (dz = {dz:.3e} m): T = {t_num:.6e} vs exp(−τ) = \
+             {t_ref:.6e}, rel {rel:.2e} (τ = {tau:.4})"
+        );
+        assert!(
+            rel < 1e-10,
+            "{n_slabs} slabs: transmission {t_num:.12e} vs exp(−τ) = {t_ref:.12e} \
+             ({rel:.2e}); τ = {tau:.6} over dz = {dz:.3e} m"
         );
     }
 }
