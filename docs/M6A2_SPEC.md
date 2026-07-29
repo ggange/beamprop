@@ -202,8 +202,29 @@ that last one is the sharpest unit test of the two-quantity split.
 
 ### E1 — ensemble convergence (verification)
 
-`P_ig` moves by less than **0.02** when the realization count doubles, at a
-`Cn²` chosen near `P_ig ≈ 0.5` where the estimator's variance is worst.
+**Amended: the ±0.02 this spec asked for is not achievable, and the gate says so
+rather than pretending.** `P_ig` is a Bernoulli mean; its binomial standard
+error is `√(p(1−p)/n)`, which at `p ≈ 0.6` is 0.030 at n = 256 and still 0.022
+at n = 512. Reaching ±0.02 reliably takes thousands of realizations, and a
+±0.02 gate at any affordable `n` would be gating which realizations were drawn.
+The number came from a task description written before anyone measured the
+variance of a binary outcome.
+
+What is gated instead is the honest pair:
+
+- the **continuous** reductions converge properly — `wander_rms` moves under 5 %
+  on doubling (measured 1.15, 1.11, 1.11, 1.08, 1.11 ×10⁻⁴ m at n = 32 → 512);
+- `P_ig` moves within **two binomial standard errors**, the correct statistical
+  statement that it is behaving as a Monte-Carlo mean. Measured changes 0.109,
+  0.000, 0.024, 0.020 against SEs 0.061, 0.043, 0.030, 0.022 — 1.8σ, 0.0σ, 0.6σ,
+  0.7σ.
+
+Plus a non-vacuity assertion that `P_ig` is not saturated at 0 or 1, where a
+convergence gate would pass trivially.
+
+### W1/W2 — focal-spot wander (PHYSICS)
+
+Landed with the driver; see open question 2 below, which they resolve.
 
 ### E2 — thread-count reproducibility (verification)
 
@@ -248,11 +269,26 @@ lands, next to M6a's own level limitation, and stated on any figure.
    is, that is a second physics gate and it should be found before this rung is
    called closed. Resolve during implementation with a measurement, not an
    argument.
-2. **Whether the wander RMS has a usable closed form here.** The angle-of-arrival
-   variance for a circular aperture is standard, but the conversion to a focal
-   displacement depends on the tilt convention (Zernike vs gradient). Either pin
-   it against the literature coefficient or gate the exponent only, and say
-   which.
+2. **Whether the wander RMS has a usable closed form here.** *Resolved by
+   measurement.* Two answers, because the question has two halves.
+
+   **The `Cn²` dependence: yes, and tightly.** RMS wander goes as `Cn²^(1/2)` —
+   measured **0.4953, 0.4977, 0.4987** over two decades and three independent
+   seeds, gated at ±0.02 (**W1**). The exponent is parameter-free in the D5
+   sense: path length, aperture, outer scale and beam all enter as coefficients
+   and none can produce a 1/2.
+
+   **The aperture dependence: only in the regime the closed form was written
+   for.** The textbook `σ_α² ∝ D^(−1/3)` gives `D^(−1/6)` = −0.167 for the RMS,
+   and the driver's default geometry does **not** show it — measured −0.003.
+   That is correct physics, not a defect: the tilt estimator is
+   intensity-weighted, so a 5 cm beam inside a 15–40 cm pupil is weighted by its
+   own footprint and enlarging the pupil adds only unilluminated area. Refill
+   the pupil (25 cm beam, so it truncates) and the exponent appears: **−0.145**,
+   the residual gap being the finite outer scale — the same flattening N2
+   measures directly — plus the Gaussian taper, which is not the uniform
+   illumination the closed form assumes. Gated as the **contrast** (**W2**),
+   since either leg alone could be an accident of geometry.
 
 ## References
 

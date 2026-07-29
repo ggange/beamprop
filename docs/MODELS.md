@@ -522,6 +522,48 @@ so N1 is the better-conditioned form of the same claim.
 Reference: R. J. Noll, *Zernike polynomials and atmospheric turbulence*,
 J. Opt. Soc. Am. **66**, 207 (1976).
 
+### Turbulence-degraded ignition statistics (the driver)
+
+`cases::run_ignition`. Per realization: propagate a launch beam through a
+`TurbulentPath`, take the pupil integral at the receiver, turn it into W/m²
+through `IntensityScale` (the T4 helper's third consumer), and hand that one
+number to `AirBreakdown`. Reductions over the ensemble give the ignition
+probability, the focal-intensity ratio distribution, and the focal-spot wander.
+`seeded_ensemble` supplies the parallelism; realizations derive all randomness
+from their index and come back in index order, so every reduction is bitwise
+thread-count independent (**E2**).
+
+**The position of `P_ig` on the `Cn²` axis is not a claim about the world.** It
+carries `AirBreakdown`'s absolute threshold, which is M6a's explicitly ungated
+quantity, and must be labelled so wherever it is plotted. Everything upstream of
+that one boolean is independent of it and is gated.
+
+- **E1** (`ignition_ensemble_converges`) — the spec asked for `P_ig` within
+  ±0.02 on a realization doubling; that is **not achievable** and the gate says
+  so. `P_ig` is a Bernoulli mean whose binomial standard error is 0.030 at
+  n = 256 and 0.022 at n = 512, so ±0.02 at any affordable `n` would gate the
+  draw. Gated instead: the continuous reductions converge (`wander_rms` under
+  5 % on doubling, measured 1.15 → 1.11 ×10⁻⁴ m over n = 32 → 512) and `P_ig`
+  moves within two binomial standard errors (measured 1.8σ, 0.0σ, 0.6σ, 0.7σ),
+  plus a non-vacuity check that `P_ig` is not saturated.
+- **W1** (`wander_follows_the_square_root_of_cn2`) — **PHYSICS.** RMS wander
+  `∝ Cn²^(1/2)`; measured **0.4953 / 0.4977 / 0.4987** over two decades and
+  three seeds, gated at ±0.02. Parameter-free: path length, aperture, outer
+  scale and beam all enter as coefficients, and none can produce a 1/2.
+- **W2** (`wander_depends_on_the_aperture_only_when_the_pupil_truncates`) —
+  **PHYSICS.** The textbook `σ_α² ∝ D^(−1/3)` implies `D^(−1/6)` = −0.167 for
+  the RMS, and the default geometry does not show it (measured **−0.003**). That
+  is correct physics: the tilt estimator is intensity-weighted, so a 5 cm beam
+  in a 15–40 cm pupil is weighted by its own footprint and a larger pupil adds
+  only unilluminated area — the closed form assumes *uniform* illumination.
+  Overfill the pupil and the exponent appears (**−0.145**), the gap being the
+  finite outer scale (the flattening N2 measures directly) plus the Gaussian
+  taper. Gated as the contrast, since either leg alone could be geometry rather
+  than physics.
+
+Reference: L. C. Andrews, R. L. Phillips, *Laser Beam Propagation through Random
+Media*, 2nd ed., SPIE Press (2005) — angle of arrival and beam wander.
+
 ## M6c — 1-D gas dynamics (the LSD substrate)
 
 ### Compressible Euler equations, HLLC + MUSCL-Hancock

@@ -321,6 +321,82 @@ impl Aperture {
         Ok((focal_length * tx, focal_length * ty))
     }
 
+    /// Intensity-weighted mean wavefront tilt of a **propagated field**, as the
+    /// angle pair `(θx, θy)` in radians — and so, times `f`, where its focal
+    /// spot lands.
+    ///
+    /// # Why this is not `mean_tilt` on `arg(u)`
+    ///
+    /// A propagated field's phase is only recoverable modulo 2π and wraps many
+    /// times across the pupil at any interesting `D/r₀`, so fitting a plane to
+    /// `arg(u)` would fit the wrapping. The *local* gradient does not need the
+    /// phase at all:
+    ///
+    /// ```text
+    /// ∇φ = Im(U* ∇U) / |U|²
+    /// ```
+    ///
+    /// and the intensity-weighted mean of it is exactly the first moment of the
+    /// focal-plane intensity (the Fourier shift theorem, in moment form):
+    ///
+    /// ```text
+    /// ⟨∇φ⟩ = ∫ Im(U* ∇U) dA / ∫ |U|² dA
+    /// ```
+    ///
+    /// so the `|U|²` denominators cancel and no division by a small amplitude
+    /// ever happens. This is the focal-spot centroid, computed on the pupil.
+    ///
+    /// Samples whose neighbours fall off the grid are skipped; the pupil sits
+    /// well inside the guard band in any run the propagator accepts.
+    pub fn mean_tilt_of_field(&self, field: &Field, wavelength: f64) -> Result<(f64, f64)> {
+        if !(wavelength > 0.0 && wavelength.is_finite()) {
+            bail!("aperture: wavelength must be positive and finite, got {wavelength}");
+        }
+        if field.grid.n != self.grid.n {
+            bail!(
+                "aperture: field is {}² but the pupil is on {}²",
+                field.grid.n,
+                self.grid.n
+            );
+        }
+        let n = self.grid.n;
+        let inv_2dx = 0.5 / self.grid.dx;
+        let (mut gx, mut gy, mut weight) = (0.0f64, 0.0f64, 0.0f64);
+        self.for_each(|_, _, (iy, ix)| {
+            if ix == 0 || iy == 0 || ix + 1 >= n || iy + 1 >= n {
+                return;
+            }
+            let u = field.u[[iy, ix]];
+            let dx = (field.u[[iy, ix + 1]] - field.u[[iy, ix - 1]]) * inv_2dx;
+            let dy = (field.u[[iy + 1, ix]] - field.u[[iy - 1, ix]]) * inv_2dx;
+            // Im(U* ∂U) — the |U|² that would divide it cancels against the
+            // weight, so it is never formed.
+            gx += (u.conj() * dx).im;
+            gy += (u.conj() * dy).im;
+            weight += u.norm_sqr();
+        });
+        if !(weight > 0.0 && weight.is_finite()) {
+            bail!("aperture: no power inside the pupil to weight a tilt with ({weight})");
+        }
+        let k = 2.0 * std::f64::consts::PI / wavelength;
+        Ok((gx / weight / k, gy / weight / k))
+    }
+
+    /// Focal-spot displacement (m) of a propagated field, for a lens of focal
+    /// length `focal_length`. See [`mean_tilt_of_field`](Self::mean_tilt_of_field).
+    pub fn focal_wander_of_field(
+        &self,
+        field: &Field,
+        wavelength: f64,
+        focal_length: f64,
+    ) -> Result<(f64, f64)> {
+        if !(focal_length > 0.0 && focal_length.is_finite()) {
+            bail!("aperture: focal length must be positive and finite, got {focal_length}");
+        }
+        let (tx, ty) = self.mean_tilt_of_field(field, wavelength)?;
+        Ok((focal_length * tx, focal_length * ty))
+    }
+
     /// Least-squares phase gradient `(∂φ/∂x, ∂φ/∂y)` over the pupil (rad/m).
     fn fit_gradient(&self, phase: &Array2<f64>) -> Result<(f64, f64)> {
         if phase.dim() != (self.grid.n, self.grid.n) {
@@ -542,6 +618,83 @@ mod tests {
         );
     }
 
+    /// The wrapped-phase trap, closed — with the contrast that makes it a real
+    /// test rather than an assertion.
+    ///
+    /// At a tilt steep enough to wrap `arg(u)` several times across the pupil,
+    /// the local-gradient route stays right while fitting a plane to the
+    /// wrapped phase does not. Both are measured here; without the second the
+    /// first would only be showing that a correct method is correct.
+    #[test]
+    fn field_tilt_survives_phase_wrapping_where_a_plane_fit_does_not() {
+        let g = Grid::new(256, 5e-4);
+        let a = Aperture::new(g, 128.0 * g.dx).unwrap();
+        let lambda = 1e-6;
+        let k = 2.0 * PI / lambda;
+
+        // Accuracy first, at tilts of the size turbulence actually produces
+        // (θ ~ λ/r₀ ~ 10⁻⁵ rad). The estimator is a central difference, so its
+        // error is O((∂φ/∂x·dx)²/6) in the per-sample phase step — negligible
+        // here, and the next block is where it starts to matter.
+        for theta in [1e-7_f64, 1e-6, 1e-5] {
+            let f = flat_with_phase(g, |x, _| k * theta * x);
+            let (tx, ty) = a.mean_tilt_of_field(&f, lambda).unwrap();
+            assert!(
+                (tx / theta - 1.0).abs() < 5e-4,
+                "θ = {theta:e}: got {tx:e}, off by {:.2e}",
+                (tx / theta - 1.0).abs()
+            );
+            assert!(ty.abs() < 1e-9 * theta, "θy = {ty:e}");
+        }
+
+        // The residual above is not slop, it is the central difference's own
+        // truncation: `(∂φ/∂x·dx)²/6`. Predicted 1.64e-4 at θ = 1e-5 on this
+        // grid, and it must fall as dx² — halving dx at a fixed pupil takes a
+        // factor 4 off it. Gating that is what distinguishes "second-order and
+        // correct" from "close enough today".
+        let theta = 1e-5_f64;
+        let err_at = |n: usize, dx: f64| {
+            let gg = Grid::new(n, dx);
+            let aa = Aperture::new(gg, 0.064).unwrap();
+            let ff = flat_with_phase(gg, |x, _| k * theta * x);
+            let (t, _) = aa.mean_tilt_of_field(&ff, lambda).unwrap();
+            (t / theta - 1.0).abs()
+        };
+        let coarse = err_at(256, 5e-4);
+        let fine = err_at(512, 2.5e-4);
+        let predicted = (k * theta * 5e-4_f64).powi(2) / 6.0;
+        assert!(
+            (coarse / predicted - 1.0).abs() < 0.05,
+            "truncation {coarse:.3e} does not match the predicted {predicted:.3e}"
+        );
+        assert!(
+            (coarse / fine / 4.0 - 1.0).abs() < 0.05,
+            "error fell {:.2}x on halving dx, expected 4x (dx²)",
+            coarse / fine
+        );
+
+        // Now wrap it. λ/D is one wrap across the pupil, so this is five.
+        let theta = 5.0 * lambda / a.diameter();
+        let f = flat_with_phase(g, |x, _| k * theta * x);
+        let (tx, _) = a.mean_tilt_of_field(&f, lambda).unwrap();
+        assert!(
+            (tx / theta - 1.0).abs() < 0.02,
+            "five wraps across the pupil broke the local gradient: {tx:e} vs {theta:e}"
+        );
+
+        // The contrast: the same tilt through a plane fit on the wrapped phase.
+        // `arg` folds into (−π, π], so the fit sees a sawtooth, not a ramp.
+        let wrapped = Array2::from_shape_fn((g.n, g.n), |idx| f.u[idx].arg());
+        let (wx, _) = a.mean_tilt(&wrapped, lambda).unwrap();
+        assert!(
+            (wx / theta - 1.0).abs() > 0.5,
+            "the plane fit on wrapped phase gave {wx:e} against {theta:e} — if it              is now accurate this contrast is not demonstrating anything and the              gate above proves nothing"
+        );
+
+        let (wx, _) = a.focal_wander_of_field(&f, lambda, 10.0).unwrap();
+        assert!((wx / (10.0 * theta) - 1.0).abs() < 0.02, "wander {wx:e}");
+    }
+
     #[test]
     fn degenerate_inputs_are_refused() {
         let g = grid();
@@ -564,5 +717,11 @@ mod tests {
             "shape mismatch"
         );
         assert!(a.mean_tilt(&Array2::zeros((g.n, g.n)), -1.0).is_err());
+        assert!(a.mean_tilt_of_field(&dark, 1e-6).is_err(), "dark pupil");
+        assert!(a.mean_tilt_of_field(&flat, -1.0).is_err(), "bad wavelength");
+        assert!(
+            a.focal_wander_of_field(&flat, 1e-6, 0.0).is_err(),
+            "zero focal length"
+        );
     }
 }

@@ -16,6 +16,7 @@
 use ndarray::Array2;
 
 use beamprop::aperture::{Aperture, TiltRemoval};
+use beamprop::cases::{IgnitionParams, run_ignition};
 use beamprop::euler1d::{Boundary, Euler1d, IdealGas, Primitive};
 use beamprop::field::Field;
 use beamprop::grid::Grid;
@@ -2233,6 +2234,213 @@ fn noll_piston_removed_variance_converges_to_kolmogorov() {
 // state the same content as N1's coefficient check less directly — a
 // coefficient constant across apertures IS a 5/3 exponent. N1 is the
 // better-conditioned form of the claim, so it is the one that ships.
+
+// ---------------------------------------------------------------------------
+// M6a.2 gates E1/E2/W1/W2 — the ignition-statistics driver
+// (docs/M6A2_SPEC.md). VERIFICATION, except W1/W2 which are physics.
+//
+// The one thing this driver reports that is NOT gateable is the position of
+// P_ig on the cn2 axis: it carries M6a's ungated absolute threshold. Everything
+// below is upstream of that boolean and independent of it.
+// ---------------------------------------------------------------------------
+
+/// The pinned ensemble geometry. `cn2` is set per gate; at 1e-14 the ignition
+/// probability sits near 0.6, which is where a Bernoulli mean is noisiest and
+/// so where a convergence gate bites hardest.
+fn ignition_case(cn2: f64, realizations: usize) -> IgnitionParams {
+    IgnitionParams {
+        n: 256,
+        dx: 2e-3,
+        wavelength: 1064e-9,
+        w0: 0.05,
+        z: 1000.0,
+        screens: 10,
+        cn2,
+        l0: 100.0,
+        aperture: 0.3,
+        focal_length: 10.0,
+        power: 3e9,
+        fwhm: 6e-9,
+        p0: 101_325.0,
+        ignition_steps: 200,
+        realizations,
+        seed: 7,
+    }
+}
+
+/// **E1 — the ensemble reductions converge (verification).**
+///
+/// The spec asked for `P_ig` within ±0.02 on a realization doubling. **That is
+/// not achievable and the gate says so instead of pretending.** `P_ig` is a
+/// Bernoulli mean: its binomial standard error is `√(p(1−p)/n)`, which at
+/// `p ≈ 0.6` is still 0.030 at n = 256 and 0.022 at n = 512. Reaching ±0.02
+/// reliably needs thousands of realizations, and a ±0.02 gate at any affordable
+/// n would be gating which realizations were drawn.
+///
+/// What is gated instead is the honest pair:
+///
+/// - the **continuous** reductions converge properly — `wander_rms` moves by
+///   under 5 % on doubling (measured 1.15, 1.11, 1.11, 1.08, 1.11 ×10⁻⁴ m at
+///   n = 32 → 512);
+/// - `P_ig` moves within **two binomial standard errors**, which is the correct
+///   statistical statement that it behaves as a Monte-Carlo mean at all.
+///   Measured changes 0.109, 0.000, 0.024, 0.020 against SEs 0.061, 0.043,
+///   0.030, 0.022 — i.e. 1.8σ, 0.0σ, 0.6σ, 0.7σ.
+#[test]
+fn ignition_ensemble_converges() {
+    let (coarse, fine) = (64usize, 128usize);
+    let a = run_ignition(&ignition_case(1e-14, coarse)).expect("coarse ensemble");
+    let b = run_ignition(&ignition_case(1e-14, fine)).expect("fine ensemble");
+
+    let dw = (b.wander_rms / a.wander_rms - 1.0).abs();
+    assert!(
+        dw < 0.05,
+        "wander RMS moved {:.1} % on doubling: {:.4e} → {:.4e}",
+        100.0 * dw,
+        a.wander_rms,
+        b.wander_rms
+    );
+
+    let se = (b.p_ignite * (1.0 - b.p_ignite) / fine as f64).sqrt();
+    let dp = (b.p_ignite - a.p_ignite).abs();
+    assert!(
+        dp < 2.0 * se,
+        "P_ig moved {dp:.4} on doubling ({:.4} → {:.4}), against a binomial \
+         standard error of {se:.4} — that is {:.1}σ, so the estimator is not \
+         behaving as a Monte-Carlo mean",
+        a.p_ignite,
+        b.p_ignite,
+        dp / se
+    );
+    // Non-vacuity: a gate at a p pinned to 0 or 1 would pass trivially.
+    assert!(
+        (0.1..=0.9).contains(&b.p_ignite),
+        "P_ig = {:.3} is saturated; this configuration does not test convergence",
+        b.p_ignite
+    );
+}
+
+/// **E2 — thread-count reproducibility (verification).**
+///
+/// Extends M3's `monte_carlo_reproducible_across_thread_counts` contract to
+/// this driver: realizations derive all randomness from their index and results
+/// come back in index order, so every reduction is bitwise independent of how
+/// rayon scheduled the work.
+#[test]
+fn ignition_ensemble_is_reproducible_across_thread_counts() {
+    let run = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| run_ignition(&ignition_case(1e-14, 32)).expect("ensemble"))
+    };
+    let one = run(1);
+    let many = run(4);
+    assert_eq!(
+        one.p_ignite, many.p_ignite,
+        "P_ig differs across pool sizes"
+    );
+    assert_eq!(one.wander_rms, many.wander_rms, "wander RMS differs");
+    assert_eq!(
+        one.focal_ratio, many.focal_ratio,
+        "per-realization ratios differ"
+    );
+    assert_eq!(one.ignited, many.ignited, "per-realization verdicts differ");
+}
+
+/// **W1 — focal-spot wander follows `Cn²^(1/2)` (PHYSICS, parameter-free).**
+///
+/// The angle-of-arrival variance is linear in the integrated `Cn²`, so the RMS
+/// wander goes as its square root. The exponent is parameter-free: the path
+/// length, the aperture, the outer scale and the beam all enter as coefficients
+/// and none of them can produce a 1/2. The M6c G4 move, applied to this rung.
+///
+/// Measured over two decades of `cn2` and three independent seeds:
+/// **0.4953, 0.4977, 0.4987**. Gated at ±0.02.
+///
+/// This resolves the spec's open question 2 for the `Cn²` dependence. The
+/// *level* is a different matter — see W2.
+#[test]
+fn wander_follows_the_square_root_of_cn2() {
+    let cn2s = [1e-16_f64, 3e-16, 1e-15, 3e-15, 1e-14];
+    let w: Vec<f64> = cn2s
+        .iter()
+        .map(|&cn2| {
+            run_ignition(&ignition_case(cn2, 48))
+                .expect("wander ensemble")
+                .wander_rms
+        })
+        .collect();
+    let n = log_log_slope(&cn2s, &w);
+    assert!(
+        (n - 0.5).abs() < 0.02,
+        "wander ∝ cn2^{n:.4}, expected 1/2. Values {w:?}"
+    );
+}
+
+/// **W2 — the aperture only matters once it truncates the beam (PHYSICS).**
+///
+/// The textbook angle-of-arrival variance carries `D^(−1/3)`, so RMS wander
+/// should go as `D^(−1/6)`. It does **not**, for a beam that underfills the
+/// pupil — and that is correct physics rather than a defect, which is why it is
+/// gated as a contrast rather than as a single exponent.
+///
+/// `mean_tilt_of_field` is intensity-weighted, so when a 5 cm beam sits inside a
+/// 15–40 cm pupil the weighting is set by the beam footprint and enlarging the
+/// pupil adds only unilluminated area. The `D^(−1/6)` law assumes a *uniformly
+/// illuminated* pupil. Measured:
+///
+/// | illumination | fitted `D` exponent |
+/// |---|---|
+/// | underfilled (`w0` = 5 cm, `D` = 15–40 cm) | −0.003 |
+/// | overfilled (`w0` = 25 cm, pupil truncates) | −0.145 |
+///
+/// against the ideal −0.167. The residual gap on the overfilled leg is the
+/// finite outer scale (`L0/D` ≈ 250–670 flattens the `D` dependence, the same
+/// effect N2 measures directly) plus the Gaussian taper, which is not the
+/// uniform illumination the closed form assumes.
+///
+/// This is the honest answer to the spec's open question 2 for the level: the
+/// closed form applies, but only in the regime it was written for, and the
+/// driver's default geometry is not in it.
+#[test]
+fn wander_depends_on_the_aperture_only_when_the_pupil_truncates() {
+    let ds = [0.15_f64, 0.2, 0.3, 0.4];
+    let fit = |w0: f64, n: usize, dx: f64| -> f64 {
+        let w: Vec<f64> = ds
+            .iter()
+            .map(|&d| {
+                let mut c = ignition_case(1e-15, 32);
+                c.aperture = d;
+                c.w0 = w0;
+                c.n = n;
+                c.dx = dx;
+                run_ignition(&c).expect("aperture ensemble").wander_rms
+            })
+            .collect();
+        log_log_slope(&ds, &w)
+    };
+
+    let underfilled = fit(0.05, 256, 2e-3);
+    assert!(
+        underfilled.abs() < 0.03,
+        "an underfilled pupil should show no aperture dependence, got {underfilled:.4}"
+    );
+
+    let overfilled = fit(0.25, 512, 4e-3);
+    assert!(
+        (-0.20..=-0.10).contains(&overfilled),
+        "a truncating pupil should approach D^(-1/6) = -0.167, got {overfilled:.4}"
+    );
+    // The contrast is the gate: without it, either leg alone could be an
+    // accident of the geometry rather than the physics.
+    assert!(
+        overfilled < underfilled - 0.08,
+        "the two illumination regimes are not distinguishable ({underfilled:.4} vs \
+         {overfilled:.4}), so this gate is not demonstrating the effect it names"
+    );
+}
 
 // ---------------------------------------------------------------------------
 // M6c gate G4 — the parameter-free scaling exponent (docs/M6C_SPEC.md, step 5).

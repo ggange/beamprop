@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use ndarray::{Array2, Array3, s};
 
 use crate::airprops::AirTable;
+use crate::aperture::Aperture;
 use crate::blooming::ThermalBlooming;
 use crate::breakdown0d::AirBreakdown;
 use crate::euler1d::{IdealGas, Primitive};
@@ -1155,4 +1156,170 @@ mod lsd_tests {
             assert!(run_lsd(&bad).is_err(), "accepted {bad:?}");
         }
     }
+}
+
+/// Parameters of the `ignition` case (M6a.2 — turbulence-degraded ignition
+/// statistics).
+#[derive(Debug, Clone)]
+pub struct IgnitionParams {
+    pub n: usize,
+    pub dx: f64,
+    pub wavelength: f64,
+    /// Launch `1/e²` waist (m).
+    pub w0: f64,
+    /// Path length (m).
+    pub z: f64,
+    /// Phase screens along the path.
+    pub screens: usize,
+    /// Refractive-index structure constant (m^(−2/3)).
+    pub cn2: f64,
+    /// Turbulence outer scale (m).
+    pub l0: f64,
+    /// Receiver aperture diameter (m).
+    pub aperture: f64,
+    /// Focal length of the focusing optic (m) — sets the wander scale only.
+    pub focal_length: f64,
+    /// Total beam power (W).
+    pub power: f64,
+    /// Igniting-pulse FWHM (s) for the M6a test.
+    pub fwhm: f64,
+    /// Ambient pressure (Pa).
+    pub p0: f64,
+    /// Time slices per pulse for the M6a rate integration.
+    pub ignition_steps: usize,
+    pub realizations: usize,
+    /// Master seed for the reproducible ensemble.
+    pub seed: u64,
+}
+
+/// Results of the `ignition` case.
+pub struct IgnitionRun {
+    /// Fraction of realizations that ignited.
+    pub p_ignite: f64,
+    /// Peak focal intensity with no turbulence (W/m²).
+    pub i_focus_vacuum: f64,
+    /// M6a breakdown threshold at the ambient pressure (W/m²).
+    pub i_threshold: f64,
+    /// Per realization: focal intensity relative to vacuum.
+    pub focal_ratio: Vec<f64>,
+    /// Per realization: the phase-only Strehl, as the diagnostic that separates
+    /// wavefront error from scintillation.
+    pub strehl: Vec<f64>,
+    /// Per realization: focal-spot displacement (m).
+    pub wander: Vec<(f64, f64)>,
+    /// RMS radial wander (m).
+    pub wander_rms: f64,
+    /// Per realization: did it light.
+    pub ignited: Vec<bool>,
+    /// Mean guard-band absorbed fraction — non-negligible means the grid, not
+    /// the turbulence, shaped the answer.
+    pub guard_frac_mean: f64,
+}
+
+/// Run an ensemble of turbulence realizations and report how often the focal
+/// spot still ignites the air, and where it lands (the M6a.2 driver).
+///
+/// # What is and is not a claim about the world
+///
+/// **The position of `p_ignite` on the `cn2` axis is not.** Whether a given
+/// realization lights depends on [`AirBreakdown`]'s absolute threshold, which is
+/// M6a's explicitly ungated quantity (4.8–7.0× above the measured Thiyagarajan
+/// & Thompson curve, inside the 3–10× inter-lab scatter). Every ignition
+/// probability here carries that offset, and it must be labelled so wherever it
+/// is plotted (`docs/M6A2_SPEC.md` § "What this rung can and cannot claim").
+///
+/// Everything upstream of that one boolean *is* independent of M6a and is
+/// gated: the pupil phase statistics against Noll, the focal-intensity
+/// estimator against its closed forms, and this driver's own convergence and
+/// thread-count reproducibility.
+///
+/// # No focal grid
+///
+/// The peak focal intensity comes from the pupil integral
+/// ([`Aperture`](crate::aperture::Aperture)), not from a focal-plane field —
+/// turbulence needs centimetre samples over a kilometre and the focal spot is
+/// micrometres across, so one grid cannot carry both.
+pub fn run_ignition(p: &IgnitionParams) -> Result<IgnitionRun> {
+    if p.realizations == 0 {
+        anyhow::bail!("ignition: need at least one realization");
+    }
+    let grid = Grid::new(p.n, p.dx);
+    let pupil = Aperture::new(grid, p.aperture)?;
+
+    // Physical intensity scale, pinned once from the launch field (T4).
+    let launch = Field::gaussian(grid, p.wavelength, p.w0);
+    let p_field = launch.power();
+    let scale = IntensityScale::from_beam_power(p.power, p_field)?;
+    // |∫U dA|² / (λf)² is an intensity in the field's own units; the T4 scale
+    // takes it to W/m².
+    let lf2 = (p.wavelength * p.focal_length).powi(2);
+    let to_physical = |focal_power: f64| scale.to_physical(focal_power / lf2);
+
+    // Vacuum reference: the same launch, the same path, no turbulence.
+    let i_focus_vacuum = {
+        let mut field = Field::gaussian(grid, p.wavelength, p.w0);
+        let mut prop = Propagator::new(grid, p.wavelength)?;
+        let medium = crate::medium::Vacuum::new(grid.n);
+        prop.propagate(
+            &mut field,
+            &medium,
+            p.z / p.screens as f64,
+            0,
+            p.screens,
+            |_, _| {},
+        )?;
+        to_physical(pupil.focal_power(&field))
+    };
+    if !(i_focus_vacuum > 0.0 && i_focus_vacuum.is_finite()) {
+        anyhow::bail!("ignition: vacuum reference has no focal intensity ({i_focus_vacuum})");
+    }
+
+    let igniter = AirBreakdown::dry_air_tt2012_focus(p.wavelength)?;
+    let i_threshold = igniter.threshold_intensity(p.fwhm, p.p0, p.ignition_steps)?;
+
+    // Each realization derives all randomness from its index (the M3 contract),
+    // and results come back in index order, so every reduction below is
+    // thread-count independent.
+    let results = seeded_ensemble(p.realizations, |i| -> Result<_> {
+        let path = TurbulentPath::new(grid, p.wavelength, p.cn2, p.l0, p.z, p.screens, p.seed, i);
+        let mut field = Field::gaussian(grid, p.wavelength, p.w0);
+        let p_in = field.power();
+        let mut prop = Propagator::new(grid, p.wavelength)?;
+        prop.propagate(&mut field, &path, path.dz(), 0, path.n_slabs(), |_, _| {})?;
+
+        let i_focus = to_physical(pupil.focal_power(&field));
+        let ratio = i_focus / i_focus_vacuum;
+        let strehl = pupil.phase_only_strehl(&field)?;
+        let wander = pupil.focal_wander_of_field(&field, p.wavelength, p.focal_length)?;
+        let ignited = igniter.breaks_down(i_focus, p.fwhm, p.p0, p.ignition_steps);
+        Ok((ratio, strehl, wander, ignited, prop.guard_absorbed() / p_in))
+    });
+
+    let mut focal_ratio = Vec::with_capacity(p.realizations);
+    let mut strehl = Vec::with_capacity(p.realizations);
+    let mut wander = Vec::with_capacity(p.realizations);
+    let mut ignited = Vec::with_capacity(p.realizations);
+    let mut guard = 0.0;
+    for r in results {
+        let (a, b, c, d, g) = r?;
+        focal_ratio.push(a);
+        strehl.push(b);
+        wander.push(c);
+        ignited.push(d);
+        guard += g;
+    }
+    let n = p.realizations as f64;
+    let wander_rms = (wander.iter().map(|(x, y)| x * x + y * y).sum::<f64>() / n).sqrt();
+
+    Ok(IgnitionRun {
+        p_ignite: ignited.iter().filter(|&&b| b).count() as f64 / n,
+        i_focus_vacuum,
+        i_threshold,
+        focal_ratio,
+        strehl,
+        wander,
+        wander_rms,
+        ignited,
+        guard_frac_mean: guard / n,
+    })
 }
