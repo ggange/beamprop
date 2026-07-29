@@ -126,8 +126,15 @@ gates through the structure function: M3 checks `D_φ(r)` in the plane, N1 check
 an integral over a circular pupil in the Zernike basis. Passing one does not
 imply the other.
 
-**Why tip/tilt-removed is the tight gate and not the piston-removed one:** see
-N2. Gate at ±5 %.
+**Amended during implementation: the band is ±12 %, not ±5 %, and the sweep is
+gone.** The 0.1352 above was measured at 24 screens on one seed set. Repeating
+it across three independent seed sets at 64 and 128 screens gives 0.129–0.143
+(−4 % to +7 %), and the spread does *not* shrink with screen count, because it
+is dominated by how much low-order power a given ensemble happened to draw
+rather than by counting error. The gate therefore quotes 0.1407 at the pinned
+seed and bands it at ±12 %. A tighter band would be gating which realizations
+were drawn; ±12 % still catches a pupil integral or a normalisation wrong by
+tens of percent or by a factor, which is what it is for.
 
 ### N2 — the piston-removed variance approaches Noll as `L₀/D → ∞` (PHYSICS)
 
@@ -148,16 +155,38 @@ scales, so it is **strongly `L₀`-dependent**, and measured it is:
 | 20 000 | 1.0128 | 0.1352 |
 
 The gate is the **convergence**, not a single number: the coefficient must climb
-monotonically toward 1.0299 and reach ≥ 0.99 by `L₀/D = 2000`. The same table is
-what justifies N1's tightness — tip/tilt removal strips exactly the large-scale
-terms that carry the `L₀` sensitivity, so that coefficient is flat from
-`L₀/D ≥ 40` and can be gated hard where this one cannot.
+monotonically toward 1.0299, start well below it at `L₀/D = 10`, and reach ≥ 0.9
+by `L₀/D = 2000`. The same table is what licenses N1 gating a level where this
+gates only a trend — tip/tilt removal strips exactly the large-scale terms that
+carry the `L₀` sensitivity.
 
-### N3 — the `(D/r₀)^(5/3)` exponent (PHYSICS, parameter-free)
+**A trend gate is the stronger choice here, not a concession.** The absolute
+piston-removed coefficient swings 1.02–1.23 between seed sets, far worse than
+tip/tilt's, because the largest scales carry the fewest independent samples per
+screen. That noise is *common-mode* across an `L₀` sweep run on the same seeds,
+so it cancels in the trend while dominating any single level. Gating the level
+here would be gating the draw.
 
-Fitted over ≥ one decade of `D/r₀`, both residual variances must follow the
-5/3 power to within ±0.02 in the exponent. The M6c G4 move: a coefficient can
-absorb a calibration error, an exponent cannot.
+### N3 — the `(D/r₀)^(5/3)` exponent — SPECIFIED, THEN WITHDRAWN
+
+**Not implemented, and the reason is a trap worth recording.**
+
+Sweeping `r₀` at fixed screens is a **tautology**. `phase_psd` takes `r₀` only
+through the multiplicative `0.4896·r₀^(−5/3)`, so for identical random draws the
+screen scales as `r₀^(−5/6)` and the variance as `r₀^(−5/3)` *exactly, by
+construction*. Measured that way the exponent came back **1.66667 for both
+modes** — five decimals of agreement that establish nothing about Kolmogorov
+statistics, only that the generator multiplies correctly. This is the M6a "D5"
+trap in a new costume: a gate that passes for a reason unrelated to its claim,
+and it passed for two runs before the perfection of the number gave it away.
+
+Sweeping the **aperture** is a real geometric change and does test the spatial
+statistics, but it is Monte-Carlo limited. Over four seed sets the fitted
+exponent deviates from 5/3 by up to 0.09 at 24 screens, 0.05 at 96, and 0.007 at
+256 (tip/tilt-removed; piston-removed is still at 0.03 at 256). A band worth
+gating costs ~1000 screen generations and states the same content as N1 less
+directly — a coefficient constant across apertures *is* a 5/3 exponent. N1 is
+the better-conditioned form of the claim, so N1 is what ships.
 
 ### S1 — the estimator reduces to Maréchal in the weak limit (verification)
 

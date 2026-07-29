@@ -430,6 +430,98 @@ References:
   `tests/data/tt2012_*.csv`, focal geometry from their Eq. 5, and the cascade
   closed form from their Eq. 4.
 
+## M6a.2 — Aperture optics and pupil phase statistics
+
+### On-axis focal intensity from the pupil field
+
+In the Fraunhofer regime the focal field is the Fourier transform of the
+aperture field, so the on-axis focal amplitude is its DC component:
+
+```text
+U_focus(0) = (1/(λf))·∫∫ U(x, y) dA
+I_focus    = |∫ U dA|² / (λf)²
+```
+
+Site: `src/aperture.rs` (`Aperture`). **Exact** given Fraunhofer and a thin
+lens — not a small-aberration approximation; the Maréchal form `S ≈ exp(−σ_φ²)`
+is a weak-aberration limit of it, and is gated as a limit rather than used as
+the definition.
+
+This is what lets M6a.2 exist at all. Turbulence is resolved on a centimetre
+grid over a kilometre path while the focal spot that ignites a spark is
+micrometres across; resolving `λf/D` while spanning `D` needs `N ≳ 10⁴` per
+side. **There is no focal grid anywhere** — every quantity is a pupil integral
+on the grid the propagator already produced.
+
+Two degradations are reported and deliberately never conflated:
+
+- `focal_intensity_ratio` — against the same beam through vacuum. Total
+  degradation, wavefront **and** amplitude scintillation, because the pupil
+  field carries both. This is the quantity that feeds an ignition test.
+- `phase_only_strehl` = `|∫U dA|²/(∫|U| dA)²` — normalised against the beam's
+  own amplitude, so scintillation divides out and the wavefront contribution is
+  isolated. Diagnostic only. Calling the first one "the Strehl ratio" would be
+  wrong, which is why both exist.
+
+Gates (`src/aperture.rs` unit tests): a flat wavefront gives exactly `S = 1` and
+nothing exceeds it (the triangle inequality on the coherent sum); a pure tilt
+steers the spot without dimming it — `S` unchanged, wander `= f·θ` — which is
+the sharpest statement of why the two quantities differ; an amplitude-only
+perturbation leaves `phase_only_strehl` at 1 while costing focal intensity; and
+`S → exp(−σ_φ²)` as the aberration shrinks, with the residual gated to fall.
+
+Reference: J. W. Goodman, *Introduction to Fourier Optics*, 3rd ed., Roberts &
+Co. (2005), § 5.2. V. N. Mahajan, J. Opt. Soc. Am. **73**, 860 (1983) — the
+Maréchal limit.
+
+### Residual pupil phase variance (Noll coefficients)
+
+Kolmogorov phase over a circular pupil, with the low-order Zernike terms
+projected out:
+
+```text
+piston removed        σ_φ² = 1.0299·(D/r₀)^(5/3)     (Noll 1976, Δ₁)
+piston + tilts removed σ_φ² = 0.134 ·(D/r₀)^(5/3)     (Noll 1976, Δ₃)
+```
+
+Site: `src/aperture.rs` (`Aperture::residual_phase_variance`, `TiltRemoval`).
+Both coefficients are parameter-free. Taken on **phase screens, not propagated
+fields**: `arg(u)` is only recoverable modulo 2π and wraps many times at these
+`D/r₀`, so a variance from a propagated field would be measuring the wrapping.
+
+These are an independent projection of the statistics M3 already gates through
+the structure function — a pupil integral in the Zernike basis versus `D_φ(r)`
+in the plane. Passing one does not imply the other.
+
+- **N1** (`noll_tip_tilt_removed_variance_matches_the_closed_form`) — measured
+  **0.1407** at the pinned seed, +5.0 % on Noll, banded at ±12 %. The band is
+  set by the ensemble spread, not the central value: across three seed sets at
+  64 and 128 screens the coefficient runs 0.129–0.143, and that spread does
+  **not** shrink with screen count because it is dominated by how much low-order
+  power an ensemble happened to draw. A tighter band would gate the draw.
+- **N2** (`noll_piston_removed_variance_converges_to_kolmogorov`) — Noll assumes
+  an infinite outer scale; the screens are von Kármán. Piston-removed variance
+  is dominated by the largest scales, so it is strongly `L₀`-dependent:
+  `L₀/D` = 10 → 0.34, 40 → 0.54, 200 → 0.83, 2000 → 0.99, against Noll's 1.0299.
+  Gated as the convergence. A trend gate is the *stronger* choice here — the
+  absolute coefficient swings 1.02–1.23 between seed sets, and that noise is
+  common-mode across an `L₀` sweep on the same seeds, so it cancels in the trend
+  while dominating any level.
+
+**A `(D/r₀)^(5/3)` exponent gate was specified and withdrawn**, and the reason is
+recorded because it is the M6a "D5" trap in new costume. Sweeping `r₀` at fixed
+screens is a *tautology*: `phase_psd` takes `r₀` only through the multiplicative
+`0.4896·r₀^(−5/3)`, so identical draws scale the screen as `r₀^(−5/6)` and the
+variance as `r₀^(−5/3)` by construction. Measured that way the exponent came back
+**1.66667 for both modes** — five decimals that establish nothing but correct
+multiplication. Sweeping the *aperture* is a real geometric change but is
+Monte-Carlo limited (deviation from 5/3 up to 0.09 at 24 screens, 0.05 at 96,
+0.007 at 256), and a coefficient constant across apertures *is* a 5/3 exponent,
+so N1 is the better-conditioned form of the same claim.
+
+Reference: R. J. Noll, *Zernike polynomials and atmospheric turbulence*,
+J. Opt. Soc. Am. **66**, 207 (1976).
+
 ## M6c — 1-D gas dynamics (the LSD substrate)
 
 ### Compressible Euler equations, HLLC + MUSCL-Hancock

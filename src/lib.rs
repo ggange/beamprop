@@ -37,6 +37,7 @@
 //!   the physics gate — the distinction is load-bearing here.
 
 pub mod airprops;
+pub mod aperture;
 pub mod blooming;
 pub mod breakdown0d;
 pub mod cases;

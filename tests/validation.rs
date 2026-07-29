@@ -15,6 +15,7 @@
 
 use ndarray::Array2;
 
+use beamprop::aperture::{Aperture, TiltRemoval};
 use beamprop::euler1d::{Boundary, Euler1d, IdealGas, Primitive};
 use beamprop::field::Field;
 use beamprop::grid::Grid;
@@ -2089,6 +2090,149 @@ fn plasma_column_absorbs_as_beer_lambert() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// M6a.2 gates N1-N3 — pupil phase statistics against Noll (docs/M6A2_SPEC.md).
+//
+// PHYSICS gates, and independent of M3's structure-function gate rather than a
+// restatement of it: M3 checks D_phi(r) in the plane, these check an integral
+// over a circular pupil in the Zernike basis. Both project the same Kolmogorov
+// statistics; passing one does not imply the other.
+//
+// The coefficients are Noll's (1976) and are parameter-free — they fall out of
+// Kolmogorov statistics and the Zernike basis with nothing to tune.
+// ---------------------------------------------------------------------------
+
+/// Aperture and screen geometry the Noll gates share.
+const NOLL_GRID_N: usize = 512;
+const NOLL_DX: f64 = 2e-3;
+const NOLL_D: f64 = 0.25;
+const NOLL_L0: f64 = 500.0;
+const NOLL_SCREENS: usize = 128;
+const NOLL_SEED: u64 = 1000;
+
+/// Mean residual phase variance over `NOLL_SCREENS` screens at Fried parameter
+/// `r0` and outer scale `l0`, with `mode` projected out.
+fn noll_variance(r0: f64, l0: f64, mode: TiltRemoval) -> f64 {
+    use rand::SeedableRng;
+    let grid = Grid::new(NOLL_GRID_N, NOLL_DX);
+    let aperture = Aperture::new(grid, NOLL_D).expect("Noll aperture");
+    let mut generator = ScreenGenerator::new(grid, r0, l0, true);
+    let total: f64 = (0..NOLL_SCREENS)
+        .map(|i| {
+            let mut rng = rand_chacha::ChaCha12Rng::seed_from_u64(NOLL_SEED + i as u64);
+            let screen = generator.generate(&mut rng);
+            aperture
+                .residual_phase_variance(&screen, mode)
+                .expect("residual variance")
+        })
+        .sum();
+    total / NOLL_SCREENS as f64
+}
+
+/// **N1 — Noll tip/tilt-removed residual variance (PHYSICS).**
+///
+/// Kolmogorov phase over a circular pupil, piston *and* both tilts projected
+/// out, has residual variance `0.134·(D/r0)^(5/3)` (Noll 1976, Δ₃). The
+/// coefficient is parameter-free — it falls out of Kolmogorov statistics and the
+/// Zernike basis with nothing to tune — so reproducing it exercises the PSD
+/// normalisation, the subharmonic compensation, the pupil integral and the
+/// plane projection as one chain.
+///
+/// Independent of M3's structure-function gate rather than a restatement of it:
+/// M3 checks `D_φ(r)` in the plane, this checks an integral over a circular
+/// pupil in the Zernike basis. Passing one does not imply the other.
+///
+/// **Measured 0.1407 at the pinned seed, +5.0 % on Noll.** The band is ±12 %,
+/// and it is set by the ensemble spread rather than by the central value: across
+/// three independent seed sets and 64–128 screens the coefficient runs
+/// 0.129–0.143, i.e. −4 % to +7 %. A tighter band would be gating which
+/// realizations happened to be drawn. What the gate does catch is the thing
+/// worth catching — a pupil integral or a normalisation wrong by tens of
+/// percent or by a factor.
+#[test]
+fn noll_tip_tilt_removed_variance_matches_the_closed_form() {
+    const NOLL_TIP_TILT: f64 = 0.134;
+    let r0 = 0.25_f64;
+    let coeff =
+        noll_variance(r0, NOLL_L0, TiltRemoval::PistonTipTilt) / (NOLL_D / r0).powf(5.0 / 3.0);
+    assert!(
+        (coeff / NOLL_TIP_TILT - 1.0).abs() < 0.12,
+        "tip/tilt-removed coefficient {coeff:.4} vs Noll's {NOLL_TIP_TILT} ({:+.1} %)",
+        100.0 * (coeff / NOLL_TIP_TILT - 1.0)
+    );
+}
+
+/// **N2 — the piston-removed variance converges to Noll as `L0/D → ∞`
+/// (PHYSICS).**
+///
+/// `1.0299·(D/r0)^(5/3)` (Noll 1976, Δ₁) assumes pure Kolmogorov — an infinite
+/// outer scale. The screens are von Kármán with a finite `L0`, and
+/// piston-removed variance is dominated by the largest scales, so it is
+/// **strongly `L0`-dependent**. The gate is therefore the convergence, not the
+/// level.
+///
+/// Measured, `L0/D` → coefficient: 10 → 0.34, 40 → 0.54, 200 → 0.83,
+/// 2000 → 0.99. The tip/tilt-removed coefficient over the same range is
+/// 0.129 → 0.135, i.e. flat from `L0/D ≳ 40` — which is the measurement that
+/// licenses N1 gating a level where this gates only a trend.
+///
+/// **Why a trend gate is the *stronger* choice here, not a concession.** The
+/// absolute piston-removed coefficient swings 1.02–1.23 between seed sets,
+/// far worse than tip/tilt's, because the largest scales carry the fewest
+/// independent samples per screen. That noise is *common-mode* across an `L0`
+/// sweep run on the same seeds, so it cancels in the trend while dominating any
+/// single level. Gating the level here would be gating the draw.
+#[test]
+fn noll_piston_removed_variance_converges_to_kolmogorov() {
+    const NOLL_PISTON: f64 = 1.0299;
+    let r0 = 0.25_f64;
+    let scale = (NOLL_D / r0).powf(5.0 / 3.0);
+
+    let coeffs: Vec<f64> = [10.0_f64, 40.0, 200.0, 2000.0]
+        .iter()
+        .map(|&ratio| noll_variance(r0, ratio * NOLL_D, TiltRemoval::PistonOnly) / scale)
+        .collect();
+
+    for pair in coeffs.windows(2) {
+        assert!(
+            pair[1] > pair[0],
+            "the coefficient must climb toward Kolmogorov as L0 grows: {coeffs:?}"
+        );
+    }
+    let finest = *coeffs.last().unwrap();
+    assert!(
+        finest / NOLL_PISTON > 0.9,
+        "at L0/D = 2000 the coefficient is {finest:.4}, nowhere near Noll's \
+         {NOLL_PISTON}: {coeffs:?}"
+    );
+    // The small-L0 end must be genuinely suppressed, or the sweep is not
+    // measuring the outer-scale truncation it claims to.
+    assert!(
+        coeffs[0] < 0.6 * NOLL_PISTON,
+        "L0/D = 10 should be far below Kolmogorov, got {:.4}",
+        coeffs[0]
+    );
+}
+
+// N3 — a `(D/r0)^(5/3)` exponent gate — was specified and is deliberately NOT
+// implemented. Recorded here because the reason is a trap worth not re-entering.
+//
+// Sweeping `r0` at fixed screens is a TAUTOLOGY. `phase_psd` takes `r0` only
+// through the multiplicative `0.4896·r0^(-5/3)`, so for identical random draws
+// the screen scales as `r0^(-5/6)` and the variance as `r0^(-5/3)` exactly, by
+// construction. Measured that way the exponent came back 1.66667 for both
+// modes — five decimal places of agreement that establish nothing about
+// Kolmogorov statistics, only that the generator multiplies correctly.
+//
+// Sweeping the APERTURE instead is a real geometric change and does test the
+// spatial statistics, but it is Monte-Carlo limited: over four seed sets the
+// fitted exponent deviates from 5/3 by up to 0.09 at 24 screens, 0.05 at 96,
+// and 0.007 at 256 (tip/tilt-removed; piston-removed is still at 0.03 at 256).
+// Reaching a band worth gating costs ~1000 screen generations, and it would
+// state the same content as N1's coefficient check less directly — a
+// coefficient constant across apertures IS a 5/3 exponent. N1 is the
+// better-conditioned form of the claim, so it is the one that ships.
 
 // ---------------------------------------------------------------------------
 // M6c gate G4 — the parameter-free scaling exponent (docs/M6C_SPEC.md, step 5).
