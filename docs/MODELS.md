@@ -561,6 +561,19 @@ that one boolean is independent of it and is gated.
   taper. Gated as the contrast, since either leg alone could be geometry rather
   than physics.
 
+The `ignition` CLI case (`cases::run_ignition_sweep`, rendered by
+`scripts/render_ignition.py`) sweeps `Cn²` and reports the ignition probability
+with its **binomial** error bars, the focal-intensity distribution behind it,
+and the wander law. The figure carries the shape/position caveat inside the
+panel rather than in a caption.
+
+It also reports the transition width — the span from `P_ig` = 0.9 to 0.1,
+measured **1.42 decades**, and roughly invariant (1.49 at 2× drive, 1.39 at
+0.5×, 1.44 at a 1.33× larger pupil) while a 4× drive change slides the curve
+0.6 decades sideways. **Deliberately not gated**: no closed form for the width
+has been derived, so gating it would check the measured number against itself —
+the same trap that retired the `(D/r₀)^(5/3)` exponent gate above.
+
 Reference: L. C. Andrews, R. L. Phillips, *Laser Beam Propagation through Random
 Media*, 2nd ed., SPIE Press (2005) — angle of arrival and beam wander.
 

@@ -263,12 +263,27 @@ lands, next to M6a's own level limitation, and stated on any figure.
 
 ## Open questions
 
-1. **Whether `P_ig` deserves a shape gate at all.** The level is ungated (U1),
-   but the curve's *width* in `log Cn²` may be parameter-free in the D5 sense —
-   set by the log-normal statistics of `𝒮` rather than by the threshold. If it
-   is, that is a second physics gate and it should be found before this rung is
-   called closed. Resolve during implementation with a measurement, not an
-   argument.
+1. **Whether `P_ig` deserves a shape gate at all.** *Resolved by measurement:
+   no — and the reason is the one this project cares about.*
+
+   The width does look approximately invariant. Measured as the span between
+   `P_ig` = 0.9 and 0.1, it is **1.42 decades** at the baseline, **1.49** at 2×
+   drive, **1.39** at 0.5× drive and **1.44** at a 1.33× larger pupil — a ±4 %
+   spread while a 4× change in drive slides the curve sideways by 0.6 decades.
+   Suggestive, and it is reported as a diagnostic (`transition_decades`).
+
+   It is **not gated**, because there is nothing independent to gate it
+   against. No closed form for the width has been derived here, so a gate would
+   be asserting that the measured 1.4 equals the measured 1.4 — the M6a "D5"
+   trap exactly, and the second time this rung has walked up to it (the first
+   was the withdrawn N3). The measurement is also too coarse to carry a tight
+   band: 48 realizations per point gives a binomial error of ~0.07 on each
+   `P_ig`, and 0.25-decade point spacing makes the interpolated crossings
+   coarser still.
+
+   What would change the answer: a derivation of the width from the log-normal
+   statistics of `𝒮`, at which point there is an anchor and the measurement
+   above becomes a test of it rather than a description of itself.
 2. **Whether the wander RMS has a usable closed form here.** *Resolved by
    measurement.* Two answers, because the question has two halves.
 

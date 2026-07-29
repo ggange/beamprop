@@ -1323,3 +1323,138 @@ pub fn run_ignition(p: &IgnitionParams) -> Result<IgnitionRun> {
         guard_frac_mean: guard / n,
     })
 }
+
+/// Parameters of the `ignition` CLI case: an [`IgnitionParams`] geometry swept
+/// over turbulence strength.
+#[derive(Debug, Clone)]
+pub struct IgnitionSweepParams {
+    /// Geometry and ensemble size. Its `cn2` is ignored — the sweep sets it.
+    pub base: IgnitionParams,
+    /// Lowest and highest `Cn²` of the sweep (m^(−2/3)).
+    pub cn2_min: f64,
+    pub cn2_max: f64,
+    /// Number of log-spaced sweep points.
+    pub points: usize,
+}
+
+/// Results of the `ignition` CLI case.
+pub struct IgnitionSweepRun {
+    pub cn2: Vec<f64>,
+    /// Fried parameter at each point (m).
+    pub r0: Vec<f64>,
+    /// `D/r₀` at each point — the parameter the pupil statistics are written in.
+    pub d_over_r0: Vec<f64>,
+    pub p_ignite: Vec<f64>,
+    /// Binomial standard error of each `p_ignite`. Reported because it is the
+    /// honest error bar on a Bernoulli mean and the figure must carry it.
+    pub p_ignite_se: Vec<f64>,
+    pub mean_ratio: Vec<f64>,
+    pub median_ratio: Vec<f64>,
+    pub wander_rms: Vec<f64>,
+    /// Per-point, per-realization focal-intensity ratio `[point, realization]`.
+    pub focal_ratio: Array2<f64>,
+    /// Per-point, per-realization phase-only Strehl `[point, realization]`.
+    pub strehl: Array2<f64>,
+    pub i_focus_vacuum: f64,
+    pub i_threshold: f64,
+    /// Width of the ignition transition, in decades of `Cn²`, measured as the
+    /// span between `p_ignite` = 0.9 and 0.1 by linear interpolation in
+    /// `log₁₀ Cn²`. `NaN` if the sweep does not bracket both.
+    pub transition_decades: f64,
+}
+
+/// Sweep turbulence strength and report how the ignition probability, the focal
+/// intensity and the spot wander respond (the `ignition` CLI case, M6a.2).
+///
+/// # What the figure may and may not claim
+///
+/// The **shape** of the response is this rung's contribution: how fast the
+/// ignition window closes as turbulence strengthens, how the focal-intensity
+/// distribution broadens, and the `Cn²^(1/2)` wander law (gated, W1).
+///
+/// The **position** of the curve on the `Cn²` axis is not a claim about the
+/// world. It is set by where `AirBreakdown`'s absolute threshold falls, and
+/// that threshold is M6a's explicitly ungated quantity — 4.8–7.0× above the
+/// measured Thiyagarajan & Thompson curve, inside the 3–10× inter-lab scatter.
+/// Shifting the threshold slides the whole curve sideways without changing its
+/// shape. Any plot of this must say so.
+pub fn run_ignition_sweep(p: &IgnitionSweepParams) -> Result<IgnitionSweepRun> {
+    if p.points < 2 {
+        anyhow::bail!("ignition sweep: need at least 2 points, got {}", p.points);
+    }
+    if !(p.cn2_min > 0.0 && p.cn2_max > p.cn2_min) {
+        anyhow::bail!(
+            "ignition sweep: need 0 < cn2_min < cn2_max, got {} .. {}",
+            p.cn2_min,
+            p.cn2_max
+        );
+    }
+    let n_real = p.base.realizations;
+    let mut out = IgnitionSweepRun {
+        cn2: Vec::with_capacity(p.points),
+        r0: Vec::with_capacity(p.points),
+        d_over_r0: Vec::with_capacity(p.points),
+        p_ignite: Vec::with_capacity(p.points),
+        p_ignite_se: Vec::with_capacity(p.points),
+        mean_ratio: Vec::with_capacity(p.points),
+        median_ratio: Vec::with_capacity(p.points),
+        wander_rms: Vec::with_capacity(p.points),
+        focal_ratio: Array2::zeros((p.points, n_real)),
+        strehl: Array2::zeros((p.points, n_real)),
+        i_focus_vacuum: 0.0,
+        i_threshold: 0.0,
+        transition_decades: f64::NAN,
+    };
+
+    for i in 0..p.points {
+        let frac = i as f64 / (p.points - 1) as f64;
+        let cn2 = p.cn2_min * (p.cn2_max / p.cn2_min).powf(frac);
+        let run = run_ignition(&IgnitionParams {
+            cn2,
+            ..p.base.clone()
+        })?;
+        let r0 = crate::validate::fried_r0(cn2, p.base.wavelength, p.base.z);
+        let n = n_real as f64;
+        let mut sorted = run.focal_ratio.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).expect("finite focal ratios"));
+
+        out.cn2.push(cn2);
+        out.r0.push(r0);
+        out.d_over_r0.push(p.base.aperture / r0);
+        out.p_ignite.push(run.p_ignite);
+        out.p_ignite_se
+            .push((run.p_ignite * (1.0 - run.p_ignite) / n).sqrt());
+        out.mean_ratio.push(run.focal_ratio.iter().sum::<f64>() / n);
+        out.median_ratio.push(sorted[sorted.len() / 2]);
+        out.wander_rms.push(run.wander_rms);
+        for (j, (&r, &s)) in run.focal_ratio.iter().zip(&run.strehl).enumerate() {
+            out.focal_ratio[[i, j]] = r;
+            out.strehl[[i, j]] = s;
+        }
+        out.i_focus_vacuum = run.i_focus_vacuum;
+        out.i_threshold = run.i_threshold;
+    }
+
+    out.transition_decades = transition_width_decades(&out.cn2, &out.p_ignite);
+    Ok(out)
+}
+
+/// Span in decades of `cn2` between `p_ignite` = 0.9 and 0.1, by linear
+/// interpolation in `log₁₀ cn2`. `NaN` when the sweep does not bracket both.
+fn transition_width_decades(cn2: &[f64], p: &[f64]) -> f64 {
+    let cross = |level: f64| -> Option<f64> {
+        // p_ignite falls with cn2, so find the first descending crossing.
+        for w in p.windows(2).enumerate() {
+            let (i, pair) = w;
+            if pair[0] >= level && pair[1] < level {
+                let t = (pair[0] - level) / (pair[0] - pair[1]);
+                return Some(cn2[i].log10() + t * (cn2[i + 1].log10() - cn2[i].log10()));
+            }
+        }
+        None
+    };
+    match (cross(0.9), cross(0.1)) {
+        (Some(hi), Some(lo)) => lo - hi,
+        _ => f64::NAN,
+    }
+}

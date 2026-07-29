@@ -12,8 +12,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use beamprop::cases::{
-    BloomingParams, BreakdownParams, LsdParams, PropagateParams, TurbulenceParams, run_blooming,
-    run_breakdown, run_lsd, run_propagate, run_turbulence,
+    BloomingParams, BreakdownParams, IgnitionParams, IgnitionSweepParams, LsdParams,
+    PropagateParams, TurbulenceParams, run_blooming, run_breakdown, run_ignition_sweep, run_lsd,
+    run_propagate, run_turbulence,
 };
 use beamprop::field::Field;
 use beamprop::grid::Grid;
@@ -261,6 +262,76 @@ enum Cmd {
         #[arg(long, default_value = "out")]
         out_dir: PathBuf,
     },
+    /// Sweep turbulence strength and report how often a focused beam still
+    /// ignites the air, and where the spark lands (M6a.2). Writes
+    /// <out>_sweep.csv (per turbulence strength), <out>_realizations.npy (the
+    /// per-realization focal-intensity and Strehl distributions), and
+    /// _meta.json/_notes.md. Render with `python3 scripts/render_ignition.py`.
+    Ignition {
+        /// Grid samples per side.
+        #[arg(long, default_value_t = 256)]
+        n: usize,
+        /// Grid spacing in metres.
+        #[arg(long, default_value_t = 2e-3)]
+        dx: f64,
+        /// Vacuum wavelength in metres.
+        #[arg(long, default_value_t = 1064e-9)]
+        wavelength: f64,
+        /// Launch 1/e^2 waist radius in metres.
+        #[arg(long, default_value_t = 0.05)]
+        w0: f64,
+        /// Path length in metres.
+        #[arg(long, default_value_t = 1000.0)]
+        z: f64,
+        /// Phase screens along the path.
+        #[arg(long, default_value_t = 10)]
+        screens: usize,
+        /// Turbulence outer scale in metres.
+        #[arg(long, default_value_t = 100.0)]
+        l0: f64,
+        /// Receiver aperture diameter in metres.
+        #[arg(long, default_value_t = 0.3)]
+        aperture: f64,
+        /// Focal length of the focusing optic in metres. Scales the wander;
+        /// the ignition test does not depend on it.
+        #[arg(long, default_value_t = 10.0)]
+        focal_length: f64,
+        /// Total beam power in watts. Sets where the transition falls, along
+        /// with the M6a threshold; the default puts it mid-sweep.
+        #[arg(long, default_value_t = 3e9)]
+        power: f64,
+        /// Igniting-pulse FWHM in seconds.
+        #[arg(long, default_value_t = 6e-9)]
+        fwhm: f64,
+        /// Ambient pressure in pascals.
+        #[arg(long, default_value_t = 101_325.0)]
+        p0: f64,
+        /// Time slices per pulse for the M6a rate integration.
+        #[arg(long, default_value_t = 200)]
+        ignition_steps: usize,
+        /// Monte-Carlo realizations per sweep point. The binomial error on each
+        /// ignition probability is ~sqrt(p(1-p)/N), so 48 gives ~0.07 at p=0.5.
+        #[arg(long, default_value_t = 48)]
+        realizations: usize,
+        /// Master seed for the reproducible ensemble.
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+        /// Lowest Cn^2 of the sweep, m^(-2/3).
+        #[arg(long, default_value_t = 1e-16)]
+        cn2_min: f64,
+        /// Highest Cn^2 of the sweep, m^(-2/3).
+        #[arg(long, default_value_t = 1e-13)]
+        cn2_max: f64,
+        /// Log-spaced sweep points.
+        #[arg(long, default_value_t = 13)]
+        points: usize,
+        /// Output basename (within --out-dir).
+        #[arg(long, default_value = "ignition")]
+        out: String,
+        /// Directory for all generated files; created if missing.
+        #[arg(long, default_value = "out")]
+        out_dir: PathBuf,
+    },
     /// Remove generated results (.npy, .png, .gif files and *_notes.md /
     /// *_meta.json sidecars) from the output directory. Only those are
     /// touched; other files and the directory itself are left alone.
@@ -346,6 +417,54 @@ fn main() -> Result<()> {
                 cross_fraction: cross,
                 frames,
                 ignition_steps,
+            },
+            &out,
+            &out_dir,
+        ),
+        Cmd::Ignition {
+            n,
+            dx,
+            wavelength,
+            w0,
+            z,
+            screens,
+            l0,
+            aperture,
+            focal_length,
+            power,
+            fwhm,
+            p0,
+            ignition_steps,
+            realizations,
+            seed,
+            cn2_min,
+            cn2_max,
+            points,
+            out,
+            out_dir,
+        } => ignition(
+            &IgnitionSweepParams {
+                base: IgnitionParams {
+                    n,
+                    dx,
+                    wavelength,
+                    w0,
+                    z,
+                    screens,
+                    cn2: cn2_min,
+                    l0,
+                    aperture,
+                    focal_length,
+                    power,
+                    fwhm,
+                    p0,
+                    ignition_steps,
+                    realizations,
+                    seed,
+                },
+                cn2_min,
+                cn2_max,
+                points,
             },
             &out,
             &out_dir,
@@ -1105,6 +1224,206 @@ fn lsd(p: &LsdParams, out: &str, out_dir: &Path) -> Result<()> {
         p.frames,
         p.cells,
         csv_path.display(),
+        meta_path.display(),
+        notes_path.display()
+    );
+    Ok(())
+}
+
+/// M6a.2: how often a focused beam still ignites the air across a turbulence
+/// sweep, and where the spark lands.
+fn ignition(p: &IgnitionSweepParams, out: &str, out_dir: &Path) -> Result<()> {
+    let run = run_ignition_sweep(p)?;
+    let b = &p.base;
+
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    let path = |name: &str| out_dir.join(name);
+
+    println!(
+        "ignition sweep: Cn² {:.1e}–{:.1e} m^(-2/3), {} points × {} realizations",
+        p.cn2_min, p.cn2_max, p.points, b.realizations
+    );
+    println!(
+        "  {:.0} nm, {:.0} m path, {:.2} m aperture, {:.2e} W → I_focus(vacuum) = {:.3e} W/m²",
+        b.wavelength * 1e9,
+        b.z,
+        b.aperture,
+        b.power,
+        run.i_focus_vacuum
+    );
+    println!(
+        "  M6a threshold {:.3e} W/m² — vacuum clears it by {:.1}×",
+        run.i_threshold,
+        run.i_focus_vacuum / run.i_threshold
+    );
+    println!(
+        "  ignition falls 0.9 → 0.1 over {:.2} decades of Cn²",
+        run.transition_decades
+    );
+    println!(
+        "  D/r₀ spans {:.2} → {:.1}; wander {:.2e} → {:.2e} m",
+        run.d_over_r0[0],
+        run.d_over_r0[run.d_over_r0.len() - 1],
+        run.wander_rms[0],
+        run.wander_rms[run.wander_rms.len() - 1]
+    );
+
+    let mut csv = String::from(
+        "# beamprop M6a.2 turbulence-degraded ignition sweep\n\
+         # columns: cn2, r0_m, d_over_r0, p_ignite, p_ignite_binomial_se,\n\
+         #          mean_focal_ratio, median_focal_ratio, wander_rms_m\n\
+         # p_ignite is a Bernoulli mean; its binomial standard error is given\n\
+         # because that is the honest error bar and any plot must carry it.\n\
+         # WHERE this curve sits on the cn2 axis is NOT a validated claim: it\n\
+         # is set by the M6a absolute breakdown threshold, which is explicitly\n\
+         # ungated (4.8-7.0x above the measured T&T curve). The SHAPE is what\n\
+         # this milestone contributes. See docs/M6A2_SPEC.md.\n\
+         cn2,r0_m,d_over_r0,p_ignite,p_ignite_se,mean_focal_ratio,median_focal_ratio,wander_rms_m\n",
+    );
+    for i in 0..run.cn2.len() {
+        csv.push_str(&format!(
+            "{:.6e},{:.6e},{:.6e},{:.6},{:.6},{:.6e},{:.6e},{:.6e}\n",
+            run.cn2[i],
+            run.r0[i],
+            run.d_over_r0[i],
+            run.p_ignite[i],
+            run.p_ignite_se[i],
+            run.mean_ratio[i],
+            run.median_ratio[i],
+            run.wander_rms[i]
+        ));
+    }
+    let csv_path = path(&format!("{out}_sweep.csv"));
+    fs::write(&csv_path, csv).with_context(|| format!("writing {}", csv_path.display()))?;
+
+    // [2, point, realization]: the focal-intensity ratio and the phase-only
+    // Strehl, so the render can show the distribution and not just its mean.
+    let (np, nr) = run.focal_ratio.dim();
+    let mut stack = ndarray::Array3::<f64>::zeros((2, np, nr));
+    stack
+        .index_axis_mut(ndarray::Axis(0), 0)
+        .assign(&run.focal_ratio);
+    stack
+        .index_axis_mut(ndarray::Axis(0), 1)
+        .assign(&run.strehl);
+    let npy_path = path(&format!("{out}_realizations.npy"));
+    ndarray_npy::write_npy(&npy_path, &stack)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", npy_path.display()))?;
+
+    let meta = format!(
+        "{{\n  \"case\": \"ignition\",\n  \"wavelength\": {wl},\n  \"w0\": {w0},\n  \
+         \"z\": {z},\n  \"screens\": {screens},\n  \"l0\": {l0},\n  \
+         \"aperture\": {ap},\n  \"focal_length\": {fl},\n  \"power\": {pw},\n  \
+         \"fwhm\": {fwhm},\n  \"p0\": {p0},\n  \"realizations\": {nr},\n  \
+         \"seed\": {seed},\n  \"cn2_min\": {c0},\n  \"cn2_max\": {c1},\n  \
+         \"points\": {np},\n  \"i_focus_vacuum\": {ivac},\n  \
+         \"i_threshold\": {ithr},\n  \"transition_decades\": {td},\n  \
+         \"quantities\": [\"focal_ratio\", \"phase_only_strehl\"]\n}}\n",
+        wl = b.wavelength,
+        w0 = b.w0,
+        z = b.z,
+        screens = b.screens,
+        l0 = b.l0,
+        ap = b.aperture,
+        fl = b.focal_length,
+        pw = b.power,
+        fwhm = b.fwhm,
+        p0 = b.p0,
+        nr = b.realizations,
+        seed = b.seed,
+        c0 = p.cn2_min,
+        c1 = p.cn2_max,
+        np = p.points,
+        ivac = run.i_focus_vacuum,
+        ithr = run.i_threshold,
+        td = run.transition_decades,
+    );
+    let meta_path = path(&format!("{out}_meta.json"));
+    fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
+
+    let notes = format!(
+        "# Test case: turbulence-degraded ignition statistics (M6a.2)\n\
+         \n\
+         A {w0_cm:.0} cm beam crosses {z:.0} m of turbulence, is collected by a\n\
+         {ap:.2} m aperture and focused. Turbulence aberrates the wavefront, so\n\
+         the focal spot is dimmer and displaced; the question is how often it is\n\
+         still bright enough to break the air down, and where it lands.\n\
+         \n\
+         ## Read the shape, not the position\n\
+         \n\
+         **The position of the curve on the Cn^2 axis is not a validated\n\
+         claim.** It is set by where M6a's absolute breakdown threshold falls,\n\
+         and that threshold is M6a's explicitly ungated quantity -- 4.8-7.0x\n\
+         above the measured Thiyagarajan & Thompson curve, inside the 3-10x\n\
+         inter-lab scatter. Change the threshold and the whole curve slides\n\
+         sideways with its shape intact. Change the beam power and it slides the\n\
+         other way; the default {pw:.1e} W is chosen to put the transition in\n\
+         the middle of the sweep, not because it is a physical operating point.\n\
+         \n\
+         What this milestone does establish, and gates:\n\
+         \n\
+         - the pupil phase statistics against Noll's parameter-free residual\n\
+           variances (N1, N2);\n\
+         - the focal-intensity estimator against its closed forms, including\n\
+           that it reduces to Marechal in the weak limit;\n\
+         - RMS spot wander proportional to Cn^2^(1/2) -- measured 0.4953,\n\
+           0.4977, 0.4987 over two decades and three seeds (W1);\n\
+         - that the aperture only affects the wander once it truncates the beam\n\
+           (W2), which is why the default underfilled geometry shows no\n\
+           aperture dependence and that is correct rather than broken;\n\
+         - the ensemble's convergence and its bitwise thread-count\n\
+           reproducibility (E1, E2).\n\
+         \n\
+         ## What the sweep shows\n\
+         \n\
+         Vacuum focal intensity {ivac:.3e} W/m^2, which clears the M6a threshold\n\
+         of {ithr:.3e} W/m^2 by {margin:.1}x. Ignition falls from 0.9 to 0.1\n\
+         over {td:.2} decades of Cn^2 as D/r0 runs {dr0:.2} -> {dr1:.1}.\n\
+         \n\
+         The transition width is roughly invariant -- 1.42 decades at this\n\
+         drive, 1.49 at 2x, 1.39 at 0.5x, 1.44 at a 1.33x larger pupil -- while\n\
+         a 4x drive change slides the curve 0.6 decades sideways. That is\n\
+         suggestive and is reported, but it is **not gated**: no closed form for\n\
+         the width has been derived, so gating it would be checking the measured\n\
+         number against itself. See docs/M6A2_SPEC.md open question 1.\n\
+         \n\
+         Error bars are binomial. p_ignite is a Bernoulli mean, so its standard\n\
+         error is sqrt(p(1-p)/N) = {se_half:.3} at p = 0.5 with N = {nreal};\n\
+         the CSV carries it per point and the figure must show it.\n\
+         \n\
+         ## Files\n\
+         \n\
+         - `{out}_sweep.csv` -- per turbulence strength: Cn^2, r0, D/r0,\n\
+           ignition probability + its binomial error, mean and median focal\n\
+           intensity ratio, RMS wander.\n\
+         - `{out}_realizations.npy` -- [2, point, realization]: the focal\n\
+           intensity ratio and the phase-only Strehl, so the distribution is\n\
+           available and not just its mean. The two differ by scintillation.\n\
+         - `{out}_meta.json` -- run parameters and the derived numbers above.\n\
+         \n\
+         Render with `python3 scripts/render_ignition.py {out_dir}/{out}`.\n",
+        w0_cm = b.w0 * 100.0,
+        z = b.z,
+        ap = b.aperture,
+        pw = b.power,
+        ivac = run.i_focus_vacuum,
+        ithr = run.i_threshold,
+        margin = run.i_focus_vacuum / run.i_threshold,
+        td = run.transition_decades,
+        dr0 = run.d_over_r0[0],
+        dr1 = run.d_over_r0[run.d_over_r0.len() - 1],
+        se_half = 0.5 / (b.realizations as f64).sqrt(),
+        nreal = b.realizations,
+        out_dir = out_dir.display(),
+    );
+    let notes_path = path(&format!("{out}_notes.md"));
+    fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
+
+    println!(
+        "  wrote {}, {} (2 x {np} x {nr}), {} and {}",
+        csv_path.display(),
+        npy_path.display(),
         meta_path.display(),
         notes_path.display()
     );
