@@ -577,7 +577,7 @@ Two absorption closures:
 Per D7 the plasma couples to the beam through **absorption only**. `PlasmaColumn`
 is the read-only `Medium` the propagator sees: `extinction(z_slab)` from the
 hydro state, and `δn ≡ 0` — no Drude index, which is what keeps M6c clear of the
-near-critical failure that broke M6b as specified.
+near-critical failure a Drude plasma column would hit in a paraxial envelope.
 
 In the M4 Péclet spirit, `check_regime` refuses rather than mis-models: the
 absorption length must be resolved by ≥ 4 cells and be under a quarter of the
@@ -720,7 +720,7 @@ Gates (`tests/validation.rs`):
   step 6: until then D7's claim was carried by `PlasmaColumn`'s unit tests,
   which exercise its `Medium` methods in isolation, and no field had ever been
   marched through one. `δn ≡ 0` is asserted at every slab rather than assumed —
-  a Drude index appearing there is the M6b failure D7 exists to avoid.
+  a Drude index appearing there is the near-critical failure D7 avoids.
 
   Measured at `τ = 339`: **1.7e-13 at 500 slabs, 8.4e-14 at 100**, across 500
   successive amplitude multiplications against a single exponential. Two slab

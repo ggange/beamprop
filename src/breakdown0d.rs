@@ -10,8 +10,8 @@
 //!
 //! Breakdown is declared when `n_e` reaches the criterion density within the
 //! pulse. The kernel is a **driver-callable pure function** (no propagator, no
-//! `Medium`): the later M6a.2 (Monte-Carlo ignition clouds) and M6c (LSD
-//! trigger) rungs evaluate the same [`AirBreakdown`] per point. The governing
+//! `Medium`): anything that needs an ignition test calls the same
+//! [`AirBreakdown`] per point, which is how M6c's LSD trigger uses it. The governing
 //! model, constants, and — importantly — which checks are physics gates versus
 //! integrator unit tests are pinned in `docs/M6A_SPEC.md`.
 //!

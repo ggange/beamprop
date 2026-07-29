@@ -797,7 +797,7 @@ fn breakdown(
          n_e reaches {nbd:.1e} m^-3 within the pulse.\n\
          \n\
          There is no beam and no propagator here: this is a pure rate balance at\n\
-         one point, the kernel the later M6a.2/M6c rungs call per realization.\n\
+         one point, the kernel any ignition test calls per realization.\n\
          \n\
          ## What the sweep shows\n\
          \n\

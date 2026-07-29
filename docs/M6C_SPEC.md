@@ -9,8 +9,7 @@ source the model is built from proves nothing; that lesson is applied here
 before the first line of code, not after. If any of this proves wrong during
 implementation, amend this document first, then the code.
 
-Scope: the deep rung of the M6 ladder (design doc `giuseppe-main-design-20260723`,
-Eng Review Outcome 2026-07-23, decision **D7**). The beam ignites a spark at the
+Scope: the deep rung of the M6 ladder. The beam ignites a spark at the
 M6a threshold; the resulting absorption wave runs **back up the beam** toward
 the laser as a detonation. The propagator sees the plasma column as **pure
 Beer–Lambert absorption** — no Drude index (D7).
@@ -32,8 +31,8 @@ front `S` (W/m²), plasma absorption coefficient `α_pl` (1/m), mean charge `Z̄
 2. **Plasma couples to the beam through absorption only** (D7). The plasma
    column is a **read-only** `Medium` supplying `extinction(z_slab)`
    (`src/medium.rs:73`, already in the trait). No `index_perturbation`, no
-   Drude `δn`. This sidesteps the near-critical failure that broke M6b as
-   specified, and never touches `check_phase_sampling`.
+   Drude `δn`. This sidesteps the near-critical failure a Drude column would
+   hit in a paraxial envelope, and never touches `check_phase_sampling`.
 3. **Coupled state lives in an outside driver** (D3). The driver owns the
    plasma column and the hydro state, reuses one `Propagator` across time
    slices, and records intensity through the existing
@@ -66,8 +65,8 @@ D² = 2(γ² − 1)·q                   strong-detonation CJ velocity
 ⇒  D = [2(γ² − 1)·S / ρ₀]^(1/3)
 ```
 
-So "gate the LSD velocity against C-J theory", as the design doc phrased it,
-and "anchor to Raizer" are the **same closed form**, not two. A solver that
+So "gate the LSD velocity against C-J theory" and "anchor to Raizer" are the
+**same closed form**, not two. A solver that
 deposits energy at the front and is then asked to reproduce that expression is
 being checked against its own derivation — the M6a Raizer-vs-Raizer trap that
 D5 caught, in new clothes.
@@ -212,10 +211,10 @@ per hydro step dt:
   zeros are.
 - **`physical_intensity_scale` (T4/D4) is required here.** The driver must turn
   `on_step`'s `|u|²` into W/m² both to test the M6a trigger and to size the
-  deposition. D4 scheduled this extraction for "when M6a.2 first needs it",
-  written before the D7 reroute; post-reroute **M6c is the first consumer**, so
-  T4 lands with the driver, still under its CRITICAL guard: M4's blooming gate
-  byte-for-byte green.
+  deposition. The extraction was scheduled for whichever model first needed an
+  absolute intensity outside blooming; **M6c is that consumer**, so it lands with
+  the driver, still under its CRITICAL guard: M4's blooming gate byte-for-byte
+  green.
 - **Sub-cycling.** Re-solving the propagation every hydro step is the dominant
   cost. The driver takes `propagation_every: usize`; the spec requires a
   convergence check that the front trajectory is insensitive to it (halving it
@@ -429,7 +428,7 @@ precedent, with the absorber coming from gas dynamics instead of a constant.
 
 The reference is exact and beam-independent because the column is transversely
 uniform. `δn ≡ 0` is asserted at every slab rather than assumed, since a Drude
-index appearing there is precisely the M6b failure D7 exists to avoid. The gate
+index appearing there is precisely the near-critical failure D7 avoids. The gate
 also runs two slab resolutions, because `PlasmaColumn::from_column_resampled` is
 what makes marching a 2500-cell hydro state through an FFT propagator affordable
 and a binning that lost optical depth would surface here.
@@ -454,7 +453,7 @@ velocities, and the spec says so in advance rather than discovering it:
 So the honest claim M6c can make is: **the 1-D model agrees with CJ/Raizer where
 that theory applies, and the gap to experiment is in the predicted direction and
 of the predicted order, for reasons the model has explicitly excluded.** That is
-"expect and explain the ~½·v_CJ result" as the design doc asked, sharpened: the
+"expect and explain the ~½·v_CJ result", sharpened: the
 discrepancy is a *prediction of the omissions*, not a tuning failure. Gating it
 would be gating the absence of 2-D physics.
 
@@ -478,16 +477,15 @@ is labelled as such.
 
 ## NOT in scope (M6c)
 
-- **Full-Drude M6b plasma shielding.** Deferred, and this is its OSS-repo home
-  (D7, D9). The reason, recorded so it is not rediscovered: M6b's own `δn` clamp
-  fires at `n_e > 0.1·n_crit ≈ 2×10²⁴ m⁻³`, which is *inside* the breakdown
+- **Full-Drude plasma shielding.** Not modelled, and the reason is recorded
+  here so it is not rediscovered: the `δn` clamp such a model needs fires at `n_e > 0.1·n_crit ≈ 2×10²⁴ m⁻³`, which is *inside* the breakdown
   density range M6a targets (~10²³–10²⁴ m⁻³). A paraxial split-step envelope
   cannot carry a near-critical plasma — the phase-per-slab and the sampling
-  criterion both fail — so full-Drude M6b is broken **as specified**, not merely
-  unimplemented. Reviving it needs a non-paraxial treatment, which is a
-  different solver, not a `Medium`.
-- **Radial / quasi-1-D expansion.** Planar first (design-doc open question 4).
-  This is also precisely why G7 is ungated and expected high.
+  criterion both fail — so a full-Drude treatment is not merely unimplemented
+  here, it is unreachable from this solver. It needs a non-paraxial method,
+  which is a different solver, not a `Medium`.
+- **Radial / quasi-1-D expansion.** Planar first. This is also precisely why
+  G7 is ungated and expected high.
 - **Runtime Mutation++ FFI.** Offline tabulation only (D8/P3). Re-opened only if
   the frozen LTE table provably fails.
 - **Non-LTE / two-temperature plasma**, and finite-rate ionization kinetics.

@@ -6,11 +6,10 @@ and — most importantly — *which* checks actually validate physics versus whi
 are integrator unit tests. If any of this proves wrong during implementation,
 amend this document first, then the code.
 
-Scope: the standalone 0-D rung of the M6 laser-induced gas-breakdown ladder
-(design doc `giuseppe-main-design-20260723`, Eng Review Outcome 2026-07-23).
-No propagator changes; the kernel is a **driver-callable pure function** so the
-later M6a.2 (Monte-Carlo ignition) and M6c (LSD trigger) rungs call the same
-core.
+Scope: the standalone 0-D rung of the M6 laser-induced gas-breakdown ladder.
+No propagator changes; the kernel is a **driver-callable pure function** rather
+than a `Medium`, so anything that needs an ignition test can call the same core
+(M6c's LSD trigger is the first thing that does).
 
 Conventions follow [MODELS.md](MODELS.md): SI units, `k = 2π/λ`, intensity
 `I = |u|²` (W/m²). New symbols: electron number density `n_e` (m⁻³), pressure
@@ -26,7 +25,7 @@ momentum-transfer collision frequency `ν_m` (s⁻¹), effective ionization ener
   not modelled — this is a single-point electron-density rate balance, not a
   plasma-kinetics code.
 - **0-D**: one point, one intensity history `I(t)`; no transport of `n_e`
-  between points (that is M6a.2's job, which calls this kernel per realization).
+  between points.
 - **Single pulse**: no inter-pulse recombination/afterglow state.
 
 ## Rate model
@@ -686,7 +685,7 @@ climbs.
 
 ## NOT in scope (M6a)
 
-- Any propagator coupling (M6a.2/M6c).
+- Any propagator coupling.
 - Plasma back-reaction on the beam (absorption/refraction) — M6c.
 - Recombination / afterglow / multi-pulse.
 - Absolute-threshold agreement as a gate (only the slope/trend is gated).

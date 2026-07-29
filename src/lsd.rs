@@ -60,13 +60,17 @@
 //!
 //! # What this module does not do
 //!
-//! It does not run the 3-D propagator. [`LsdColumn`] is the 1-D coupled driver,
-//! which is all G3/G5 need and all the closed forms are written for;
-//! [`PlasmaColumn`] exposes the resulting `α(x)` profile to the propagator as a
-//! read-only [`Medium`], and the sub-cycled propagator↔hydro loop (with the
-//! `propagation_every` convergence check the spec requires) lands with the CLI
-//! case. Per D7 the plasma couples to the beam through **absorption only** —
-//! there is no Drude index perturbation here, and `δn ≡ 0`.
+//! It does not run the 3-D propagator in a loop. [`LsdColumn`] is the 1-D
+//! coupled driver, which is all G3/G5 need and all the closed forms are written
+//! for; [`PlasmaColumn`] exposes the resulting `α(x)` profile to the propagator
+//! as a read-only [`Medium`], gated against `exp(−τ)` by G8.
+//!
+//! There is deliberately no sub-cycled propagator↔hydro loop. In this geometry
+//! the coupling is one-way: everything upstream of the front is cold transparent
+//! air, so the front sees the full incident `S` regardless of the column behind
+//! it, and the column's effect on the beam is entirely downstream of the front
+//! where nothing remains to drive. Per D7 the plasma couples to the beam through
+//! **absorption only** — no Drude index perturbation, and `δn ≡ 0`.
 
 use anyhow::{Result, bail};
 use ndarray::Array2;
@@ -691,9 +695,9 @@ impl LsdColumn {
 /// no index perturbation.
 ///
 /// This is decision D7 made concrete. The column supplies `α(z)` per slab and
-/// `δn ≡ 0`, which is what keeps M6c clear of the near-critical failure that
-/// broke M6b as specified: a paraxial split-step envelope cannot carry the
-/// Drude index of a plasma at these densities, so M6c does not ask it to.
+/// `δn ≡ 0`, which is what keeps M6c clear of the near-critical failure a Drude
+/// column would hit: a paraxial split-step envelope cannot carry the Drude index
+/// of a plasma at these densities, so M6c does not ask it to.
 ///
 /// Read-only by construction — it is built from a snapshot of the hydro state
 /// and never writes back. The outer loop rebuilds it after each hydro step.

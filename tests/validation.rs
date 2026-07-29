@@ -2032,7 +2032,7 @@ fn lsd_energy_budget_closes() {
 /// The M2 twin (`beer_lambert_matches_closed_form`) does the same for a uniform
 /// absorber; this is its M6c counterpart with the absorber coming from gas
 /// dynamics. Both must also leave `δn ≡ 0`, which is asserted here rather than
-/// assumed, because a Drude index sneaking in is exactly the M6b failure D7
+/// assumed, because a Drude index sneaking in is exactly the failure D7
 /// exists to avoid.
 #[test]
 fn plasma_column_absorbs_as_beer_lambert() {
