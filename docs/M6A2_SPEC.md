@@ -222,9 +222,11 @@ What is gated instead is the honest pair:
 Plus a non-vacuity assertion that `P_ig` is not saturated at 0 or 1, where a
 convergence gate would pass trivially.
 
-### W1/W2 — focal-spot wander (PHYSICS)
+### W1 — focal-spot wander vs `Cn²` (PHYSICS)
 
-Landed with the driver; see open question 2 below, which they resolve.
+Landed with the driver; see open question 2 below, which it resolves. A
+companion aperture-dependence gate (W2) was landed and then **retired as
+seed-dependent** — the reasoning is under open question 2 and beside the code.
 
 ### E2 — thread-count reproducibility (verification)
 
@@ -293,17 +295,30 @@ lands, next to M6a's own level limitation, and stated on any figure.
    sense: path length, aperture, outer scale and beam all enter as coefficients
    and none can produce a 1/2.
 
-   **The aperture dependence: only in the regime the closed form was written
-   for.** The textbook `σ_α² ∝ D^(−1/3)` gives `D^(−1/6)` = −0.167 for the RMS,
-   and the driver's default geometry does **not** show it — measured −0.003.
-   That is correct physics, not a defect: the tilt estimator is
-   intensity-weighted, so a 5 cm beam inside a 15–40 cm pupil is weighted by its
-   own footprint and enlarging the pupil adds only unilluminated area. Refill
-   the pupil (25 cm beam, so it truncates) and the exponent appears: **−0.145**,
-   the residual gap being the finite outer scale — the same flattening N2
-   measures directly — plus the Gaussian taper, which is not the uniform
-   illumination the closed form assumes. Gated as the **contrast** (**W2**),
-   since either leg alone could be an accident of geometry.
+   **The aperture dependence: documented, not gated — W2 was retired.** The
+   textbook `σ_α² ∝ D^(−1/3)` gives `D^(−1/6)` = −0.167 for the RMS, and the
+   driver's default geometry does not show it (−0.003). The explanation is
+   sound: the tilt estimator is intensity-weighted, so a 5 cm beam inside a
+   15–40 cm pupil is weighted by its own footprint, and the closed form assumes
+   *uniform* illumination.
+
+   **But the measurement cannot carry a gate.** The exponent is a slope across
+   four *nested* apertures on shared screens — strongly correlated points, and
+   the tilt they measure is dominated by the largest scales, which carry the
+   fewest independent samples per realization (the same root cause that makes
+   N2's coefficient seed-sensitive). Across three seeds the fitted overfilled
+   exponent runs `−0.183 / −0.249 / +0.004` at 16 realizations,
+   `−0.140 / −0.346 / −0.043` at 24, and `−0.102 / −0.318 / −0.143` at 32 —
+   a spread of 0.22–0.30 that **does not shrink with ensemble size**. At one of
+   those seeds the overfilled leg shows no aperture dependence at all, failing
+   both the band and the contrast.
+
+   W2 passed only because it pinned a seed where the draw was favourable. It was
+   measuring the realization set, not the physics, and it is gone. Averaging
+   over seed sets would fix it at several times the runtime, for a claim that is
+   already secondary to W1 — whose exponent is stable to 0.003 across the same
+   seeds. The aperture dependence stays a documented observation with its
+   uncertainty stated.
 
 ## References
 

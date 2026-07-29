@@ -1042,6 +1042,16 @@ fn lsd(p: &LsdParams, out: &str, out_dir: &Path) -> Result<()> {
         run.ib_alpha_co2,
         run.ib_optical_depth_co2
     );
+    if let Some(t) = run.hottest_temperature {
+        println!(
+            "  hottest gas {t:.0} K{}",
+            if run.used_singly_ionized_approximation {
+                " — above the table's singly-ionized ceiling, where n_e (and so α_IB) is understated"
+            } else {
+                ""
+            }
+        );
+    }
     if !run.boundaries_undisturbed {
         println!("  WARNING: the wave reached a domain boundary; results are contaminated.");
     }

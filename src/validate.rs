@@ -111,6 +111,17 @@ pub fn loglog_slope(curve: &[(f64, f64)]) -> Option<f64> {
     Some((n * sxy - sx * sy) / denom)
 }
 
+/// [`loglog_slope`] for callers holding `x` and `y` as separate slices — the
+/// shape every sweep gate uses. Same fit, same caveats; `None` also when the
+/// lengths differ.
+pub fn loglog_slope_xy(x: &[f64], y: &[f64]) -> Option<f64> {
+    if x.len() != y.len() {
+        return None;
+    }
+    let curve: Vec<(f64, f64)> = x.iter().copied().zip(y.iter().copied()).collect();
+    loglog_slope(&curve)
+}
+
 // ------------------------------------------------------------------------
 // M3 references: Kolmogorov turbulence statistics (plane-wave forms).
 // ------------------------------------------------------------------------

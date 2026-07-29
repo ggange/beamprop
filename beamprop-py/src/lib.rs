@@ -758,6 +758,11 @@ fn py_run_lsd<'py>(
     d.set_item("ib_optical_depth", r.ib_optical_depth)?;
     d.set_item("ib_alpha_co2", r.ib_alpha_co2)?;
     d.set_item("ib_optical_depth_co2", r.ib_optical_depth_co2)?;
+    d.set_item("hottest_temperature", r.hottest_temperature)?;
+    d.set_item(
+        "used_singly_ionized_approximation",
+        r.used_singly_ionized_approximation,
+    )?;
     Ok(d)
 }
 

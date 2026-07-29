@@ -601,6 +601,16 @@ pub struct LsdRun {
     /// optical depth under it. Reported, not used — see [`run_lsd`].
     pub ib_alpha: f64,
     pub ib_optical_depth: f64,
+    /// Hottest gas temperature the run's absorption model reported (K), or
+    /// `None` under the grey closure, which keys on internal energy and never
+    /// forms one. The reporting half of the `IonizationCeiling::Flag` contract.
+    pub hottest_temperature: Option<f64>,
+    /// Whether the run queried the plasma table above its singly-ionized
+    /// ceiling, where it understates `n_e`. Reported rather than left implicit:
+    /// the spec's answer to "how hot is the run allowed to get" is that an
+    /// unquantified bias becomes an explicit boundary, and a boundary nobody
+    /// prints is not explicit.
+    pub used_singly_ionized_approximation: bool,
     /// The same two at 10.6 µm, the CO₂ wavelength LSD experiments are actually
     /// done at. The comparison is the point, not either number alone.
     pub ib_alpha_co2: f64,
@@ -747,6 +757,8 @@ pub fn run_lsd(p: &LsdParams) -> Result<LsdRun> {
             boundaries_undisturbed: true,
             ib_alpha: f64::NAN,
             ib_optical_depth: f64::NAN,
+            hottest_temperature: None,
+            used_singly_ionized_approximation: false,
             ib_alpha_co2: f64::NAN,
             ib_optical_depth_co2: f64::NAN,
         });
@@ -887,6 +899,8 @@ pub fn run_lsd(p: &LsdParams) -> Result<LsdRun> {
         boundaries_undisturbed: column.boundaries_undisturbed(),
         ib_alpha,
         ib_optical_depth: ib_alpha * p.length,
+        hottest_temperature: column.hottest_temperature(),
+        used_singly_ionized_approximation: column.used_singly_ionized_approximation(),
         ib_alpha_co2,
         ib_optical_depth_co2: ib_alpha_co2 * p.length,
     })

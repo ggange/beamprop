@@ -361,16 +361,6 @@ impl LsdColumn {
         self.incident
     }
 
-    /// Set the incident intensity (W/m²) — the seam a propagator-driven outer
-    /// loop writes through.
-    pub fn set_incident_intensity(&mut self, incident: f64) -> Result<()> {
-        if !(incident > 0.0 && incident.is_finite()) {
-            bail!("lsd: incident intensity must be positive and finite, got {incident}");
-        }
-        self.incident = incident;
-        Ok(())
-    }
-
     /// Absorption coefficient per cell (1/m).
     pub fn alpha_profile(&mut self) -> Result<Vec<f64>> {
         let gas = self.hydro.gas();

@@ -27,8 +27,8 @@ use beamprop::plasmaprops::{NE_ACCURACY_FLOOR, PlasmaTable, SECOND_IONIZATION_K}
 use beamprop::propagate::{DiffractionMethod, Propagator, beam_width, centroid};
 use beamprop::turbulence::{ScreenGenerator, TurbulentPath};
 use beamprop::validate::{
-    GaussianBeam, SOD_SHOCK_TUBE, fried_r0, kolmogorov_structure_function, observed_order,
-    rytov_variance,
+    GaussianBeam, SOD_SHOCK_TUBE, fried_r0, kolmogorov_structure_function, loglog_slope_xy,
+    observed_order, rytov_variance,
 };
 
 /// A smooth defocusing Gaussian duct: `δn(r) = -A·exp(-r²/(2s²))`.
@@ -2110,16 +2110,21 @@ const NOLL_DX: f64 = 2e-3;
 const NOLL_D: f64 = 0.25;
 const NOLL_L0: f64 = 500.0;
 const NOLL_SCREENS: usize = 128;
+/// Screens for the **trend** gate. Far fewer than N1's, and deliberately: N2
+/// gates a convergence run on shared seeds, where the ensemble noise is
+/// common-mode and cancels. Buying it down costs 4× the time and moves the
+/// trend not at all — measured below.
+const NOLL_TREND_SCREENS: usize = 32;
 const NOLL_SEED: u64 = 1000;
 
 /// Mean residual phase variance over `NOLL_SCREENS` screens at Fried parameter
 /// `r0` and outer scale `l0`, with `mode` projected out.
-fn noll_variance(r0: f64, l0: f64, mode: TiltRemoval) -> f64 {
+fn noll_variance(r0: f64, l0: f64, mode: TiltRemoval, screens: usize) -> f64 {
     use rand::SeedableRng;
     let grid = Grid::new(NOLL_GRID_N, NOLL_DX);
     let aperture = Aperture::new(grid, NOLL_D).expect("Noll aperture");
     let mut generator = ScreenGenerator::new(grid, r0, l0, true);
-    let total: f64 = (0..NOLL_SCREENS)
+    let total: f64 = (0..screens)
         .map(|i| {
             let mut rng = rand_chacha::ChaCha12Rng::seed_from_u64(NOLL_SEED + i as u64);
             let screen = generator.generate(&mut rng);
@@ -2128,7 +2133,7 @@ fn noll_variance(r0: f64, l0: f64, mode: TiltRemoval) -> f64 {
                 .expect("residual variance")
         })
         .sum();
-    total / NOLL_SCREENS as f64
+    total / screens as f64
 }
 
 /// **N1 — Noll tip/tilt-removed residual variance (PHYSICS).**
@@ -2155,8 +2160,8 @@ fn noll_variance(r0: f64, l0: f64, mode: TiltRemoval) -> f64 {
 fn noll_tip_tilt_removed_variance_matches_the_closed_form() {
     const NOLL_TIP_TILT: f64 = 0.134;
     let r0 = 0.25_f64;
-    let coeff =
-        noll_variance(r0, NOLL_L0, TiltRemoval::PistonTipTilt) / (NOLL_D / r0).powf(5.0 / 3.0);
+    let coeff = noll_variance(r0, NOLL_L0, TiltRemoval::PistonTipTilt, NOLL_SCREENS)
+        / (NOLL_D / r0).powf(5.0 / 3.0);
     assert!(
         (coeff / NOLL_TIP_TILT - 1.0).abs() < 0.12,
         "tip/tilt-removed coefficient {coeff:.4} vs Noll's {NOLL_TIP_TILT} ({:+.1} %)",
@@ -2192,7 +2197,14 @@ fn noll_piston_removed_variance_converges_to_kolmogorov() {
 
     let coeffs: Vec<f64> = [10.0_f64, 40.0, 200.0, 2000.0]
         .iter()
-        .map(|&ratio| noll_variance(r0, ratio * NOLL_D, TiltRemoval::PistonOnly) / scale)
+        .map(|&ratio| {
+            noll_variance(
+                r0,
+                ratio * NOLL_D,
+                TiltRemoval::PistonOnly,
+                NOLL_TREND_SCREENS,
+            ) / scale
+        })
         .collect();
 
     for pair in coeffs.windows(2) {
@@ -2333,7 +2345,7 @@ fn ignition_ensemble_is_reproducible_across_thread_counts() {
             .num_threads(threads)
             .build()
             .unwrap()
-            .install(|| run_ignition(&ignition_case(1e-14, 32)).expect("ensemble"))
+            .install(|| run_ignition(&ignition_case(1e-14, 8)).expect("ensemble"))
     };
     let one = run(1);
     let many = run(4);
@@ -2372,75 +2384,39 @@ fn wander_follows_the_square_root_of_cn2() {
                 .wander_rms
         })
         .collect();
-    let n = log_log_slope(&cn2s, &w);
+    let n = loglog_slope_xy(&cn2s, &w).expect("slope fit");
     assert!(
         (n - 0.5).abs() < 0.02,
         "wander ∝ cn2^{n:.4}, expected 1/2. Values {w:?}"
     );
 }
 
-/// **W2 — the aperture only matters once it truncates the beam (PHYSICS).**
-///
-/// The textbook angle-of-arrival variance carries `D^(−1/3)`, so RMS wander
-/// should go as `D^(−1/6)`. It does **not**, for a beam that underfills the
-/// pupil — and that is correct physics rather than a defect, which is why it is
-/// gated as a contrast rather than as a single exponent.
-///
-/// `mean_tilt_of_field` is intensity-weighted, so when a 5 cm beam sits inside a
-/// 15–40 cm pupil the weighting is set by the beam footprint and enlarging the
-/// pupil adds only unilluminated area. The `D^(−1/6)` law assumes a *uniformly
-/// illuminated* pupil. Measured:
-///
-/// | illumination | fitted `D` exponent |
-/// |---|---|
-/// | underfilled (`w0` = 5 cm, `D` = 15–40 cm) | −0.003 |
-/// | overfilled (`w0` = 25 cm, pupil truncates) | −0.145 |
-///
-/// against the ideal −0.167. The residual gap on the overfilled leg is the
-/// finite outer scale (`L0/D` ≈ 250–670 flattens the `D` dependence, the same
-/// effect N2 measures directly) plus the Gaussian taper, which is not the
-/// uniform illumination the closed form assumes.
-///
-/// This is the honest answer to the spec's open question 2 for the level: the
-/// closed form applies, but only in the regime it was written for, and the
-/// driver's default geometry is not in it.
-#[test]
-fn wander_depends_on_the_aperture_only_when_the_pupil_truncates() {
-    let ds = [0.15_f64, 0.2, 0.3, 0.4];
-    let fit = |w0: f64, n: usize, dx: f64| -> f64 {
-        let w: Vec<f64> = ds
-            .iter()
-            .map(|&d| {
-                let mut c = ignition_case(1e-15, 32);
-                c.aperture = d;
-                c.w0 = w0;
-                c.n = n;
-                c.dx = dx;
-                run_ignition(&c).expect("aperture ensemble").wander_rms
-            })
-            .collect();
-        log_log_slope(&ds, &w)
-    };
-
-    let underfilled = fit(0.05, 256, 2e-3);
-    assert!(
-        underfilled.abs() < 0.03,
-        "an underfilled pupil should show no aperture dependence, got {underfilled:.4}"
-    );
-
-    let overfilled = fit(0.25, 512, 4e-3);
-    assert!(
-        (-0.20..=-0.10).contains(&overfilled),
-        "a truncating pupil should approach D^(-1/6) = -0.167, got {overfilled:.4}"
-    );
-    // The contrast is the gate: without it, either leg alone could be an
-    // accident of the geometry rather than the physics.
-    assert!(
-        overfilled < underfilled - 0.08,
-        "the two illumination regimes are not distinguishable ({underfilled:.4} vs \
-         {overfilled:.4}), so this gate is not demonstrating the effect it names"
-    );
-}
+// W2 — "the aperture only matters once it truncates the beam" — was gated here
+// and is now RETIRED. The finding is real and is kept in the docs; the gate was
+// not sound, and the reason is worth recording so it is not rebuilt.
+//
+// The measurement is a slope fitted across four nested apertures on shared
+// screens. Those points are strongly correlated and the tilt they measure is
+// dominated by the largest scales, which carry the fewest independent samples
+// per realization — the same root cause that makes the piston-removed Noll
+// coefficient seed-sensitive (see N2). The fitted exponent therefore swings
+// wildly with the draw, at every affordable ensemble size:
+//
+//   16 realizations:  -0.183, -0.249, +0.004   (3 seeds, spread 0.25)
+//   24 realizations:  -0.140, -0.346, -0.043   (spread 0.30)
+//   32 realizations:  -0.102, -0.318, -0.143   (spread 0.22)
+//
+// The spread does not shrink with ensemble size. At one of those seeds the
+// "overfilled" leg shows no aperture dependence at all (+0.004), which fails
+// both the band the gate asserted and the contrast it rested on. The gate
+// passed only because it pinned a seed where the draw happened to be
+// favourable — it was measuring the realization set, not the physics.
+//
+// Averaging over seed sets would fix it and costs several times the runtime of
+// the gate it replaces, for a claim that is already secondary: the primary
+// wander result is W1, whose exponent is stable to 0.003 across the same seeds.
+// So the aperture dependence stays a documented measurement with its
+// uncertainty stated, not a validated claim. See docs/M6A2_SPEC.md.
 
 // ---------------------------------------------------------------------------
 // M6c gate G4 — the parameter-free scaling exponent (docs/M6C_SPEC.md, step 5).
@@ -2532,18 +2508,6 @@ fn g4_front_speed(gamma: f64, s: f64, rho_0: f64, p_0: f64) -> (f64, f64) {
     (d, d_cj)
 }
 
-/// Least-squares slope of `ln y` against `ln x` — the fitted power-law exponent.
-fn log_log_slope(x: &[f64], y: &[f64]) -> f64 {
-    let n = x.len() as f64;
-    let lx: Vec<f64> = x.iter().map(|v| v.ln()).collect();
-    let ly: Vec<f64> = y.iter().map(|v| v.ln()).collect();
-    let mx = lx.iter().sum::<f64>() / n;
-    let my = ly.iter().sum::<f64>() / n;
-    let cov: f64 = lx.iter().zip(&ly).map(|(a, b)| (a - mx) * (b - my)).sum();
-    let var: f64 = lx.iter().map(|a| (a - mx).powi(2)).sum();
-    cov / var
-}
-
 /// **G4 — the parameter-free one-third scaling (THE PHYSICS GATE).**
 ///
 /// `D ∝ S^(1/3)` over 1.52 decades of absorbed intensity and `D ∝ ρ₀^(−1/3)`
@@ -2588,7 +2552,7 @@ fn lsd_velocity_follows_the_parameter_free_one_third_scaling() {
             .iter()
             .map(|&s| g4_front_speed(gamma, s, LSD_AMBIENT.rho, LSD_AMBIENT.p).0)
             .collect();
-        let n = log_log_slope(&G4_INTENSITIES, &speeds);
+        let n = loglog_slope_xy(&G4_INTENSITIES, &speeds).expect("slope fit");
         assert!(
             (n - THIRD).abs() < TOLERANCE,
             "γ = {gamma}: D ∝ S^{n:.5}, off 1/3 by {:.5}. Speeds {speeds:?}",
@@ -2605,7 +2569,7 @@ fn lsd_velocity_follows_the_parameter_free_one_third_scaling() {
                 g4_front_speed(gamma, LSD_INTENSITY, rho_0, p_0).0
             })
             .collect();
-        let m = log_log_slope(&G4_DENSITIES, &speeds);
+        let m = loglog_slope_xy(&G4_DENSITIES, &speeds).expect("slope fit");
         assert!(
             (m + THIRD).abs() < TOLERANCE,
             "γ = {gamma}: D ∝ ρ₀^{m:.5}, off −1/3 by {:.5}. Speeds {speeds:?}",

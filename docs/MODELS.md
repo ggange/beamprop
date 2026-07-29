@@ -502,8 +502,10 @@ in the plane. Passing one does not imply the other.
 - **N2** (`noll_piston_removed_variance_converges_to_kolmogorov`) — Noll assumes
   an infinite outer scale; the screens are von Kármán. Piston-removed variance
   is dominated by the largest scales, so it is strongly `L₀`-dependent:
-  `L₀/D` = 10 → 0.34, 40 → 0.54, 200 → 0.83, 2000 → 0.99, against Noll's 1.0299.
-  Gated as the convergence. A trend gate is the *stronger* choice here — the
+  `L₀/D` = 10 → 0.345, 40 → 0.541, 200 → 0.842, 2000 → 1.001, against Noll's
+  1.0299. Gated as the convergence. Runs 32 screens, not N1's 128: the trend is
+  identical at either count because the noise is common-mode across the sweep,
+  so the extra screens buy nothing and cost 4× the runtime. A trend gate is the *stronger* choice here — the
   absolute coefficient swings 1.02–1.23 between seed sets, and that noise is
   common-mode across an `L₀` sweep on the same seeds, so it cancels in the trend
   while dominating any level.
@@ -550,16 +552,17 @@ that one boolean is independent of it and is gated.
   `∝ Cn²^(1/2)`; measured **0.4953 / 0.4977 / 0.4987** over two decades and
   three seeds, gated at ±0.02. Parameter-free: path length, aperture, outer
   scale and beam all enter as coefficients, and none can produce a 1/2.
-- **W2** (`wander_depends_on_the_aperture_only_when_the_pupil_truncates`) —
-  **PHYSICS.** The textbook `σ_α² ∝ D^(−1/3)` implies `D^(−1/6)` = −0.167 for
-  the RMS, and the default geometry does not show it (measured **−0.003**). That
-  is correct physics: the tilt estimator is intensity-weighted, so a 5 cm beam
-  in a 15–40 cm pupil is weighted by its own footprint and a larger pupil adds
-  only unilluminated area — the closed form assumes *uniform* illumination.
-  Overfill the pupil and the exponent appears (**−0.145**), the gap being the
-  finite outer scale (the flattening N2 measures directly) plus the Gaussian
-  taper. Gated as the contrast, since either leg alone could be geometry rather
-  than physics.
+- **W2 — retired, not gated.** An aperture-dependence gate was landed and then
+  withdrawn as seed-dependent. The observation stands: the textbook
+  `σ_α² ∝ D^(−1/3)` implies `D^(−1/6)` = −0.167 for the RMS and the default
+  geometry does not show it (−0.003), because the tilt estimator is
+  intensity-weighted and a 5 cm beam in a 15–40 cm pupil is weighted by its own
+  footprint while the closed form assumes *uniform* illumination. The
+  *measurement* cannot carry a gate: it fits a slope across four nested
+  apertures on shared screens, and across three seeds the overfilled exponent
+  runs −0.183/−0.249/+0.004 at 16 realizations and −0.102/−0.318/−0.143 at 32,
+  a spread that does not shrink with ensemble size. The gate passed only at the
+  seed it pinned. Documented observation, not a validated claim.
 
 The `ignition` CLI case (`cases::run_ignition_sweep`, rendered by
 `scripts/render_ignition.py`) sweeps `Cn²` and reports the ignition probability
