@@ -357,8 +357,7 @@ fn split_step_is_second_order() {
     );
 }
 
-/// T2 verify: different `Medium` implementations flow through the same
-/// propagator. `ConstantDeltaN(0)` must equal `Vacuum` exactly, and a uniform
+/// Different `Medium` implementations flow through the same propagator. `ConstantDeltaN(0)` must equal `Vacuum` exactly, and a uniform
 /// nonzero δn is a pure global phase — identical intensity to vacuum.
 #[test]
 fn medium_trait_interchangeability() {

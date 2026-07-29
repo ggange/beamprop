@@ -2,8 +2,8 @@
 # investigation of 1064 nm laser induced air plasmas", J. Appl. Phys. 111,
 # 073302 (2012) -- the measured breakdown threshold electric field E_B curve of
 # the figure plotting E_B and E_eff against pressure p on twin vertical scales.
-# Figure: Fig. 4 (pinned at digitization time, plan task T2/D5 -- required so
-#   the digitization is reproducible against the paper, not just describable).
+# Figure: Fig. 4, pinned at digitization time -- required so the digitization
+#   is reproducible against the paper, not just describable.
 # Traced with WebPlotDigitizer (curve digitized point-by-point, not by eye).
 #
 # E_B is the RMS field amplitude, not the peak. This is not stated in the axis

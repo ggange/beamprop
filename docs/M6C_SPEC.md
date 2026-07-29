@@ -498,8 +498,9 @@ is labelled as such.
 
 ## Open questions
 
-1. **Which measured LSD dataset anchors G7.** The T2-equivalent for M6c, and
-   the one input this spec cannot supply itself. Needs the same treatment
+1. **Which measured LSD dataset anchors G7.** The M6c counterpart of M6a's
+   digitized anchor, and the one input this spec cannot supply itself. Needs
+   the same treatment
    `tests/data/tt2012_*.csv` got: a named paper, the figure number pinned in the
    provenance header at digitization time, and the setup quoted so the solver's
    inputs are fixed by the source rather than chosen. Until then G7 compares

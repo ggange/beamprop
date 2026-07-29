@@ -8,6 +8,11 @@ code, it is in this table.
 Conventions: `λ` vacuum wavelength (m), `k = 2π/λ` (rad/m), `z` propagation
 distance (m), `κ` transverse spatial frequency (rad/m), intensity `I = |u|²`.
 
+`D`- and `T`-numbered tags (`D5`, `T4`, …) label the project's design decisions
+and implementation tasks. They are **shorthand, not citations**: wherever one
+carries weight the substance is stated in full alongside it, so nothing here
+depends on looking a number up.
+
 ## M1 — Diffraction
 
 ### Scalar paraxial propagation, split-step spectral method

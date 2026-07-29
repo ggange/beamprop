@@ -2,8 +2,8 @@
 # investigation of 1064 nm laser induced air plasmas", J. Appl. Phys. 111,
 # 073302 (2012) -- the effective electric field E_eff curve of the figure
 # plotting E_B and E_eff against pressure p on twin vertical scales.
-# Figure: Fig. 4 (pinned at digitization time, plan task T2/D5) -- the same
-#   figure as tests/data/tt2012_E_B_vs_pressure.csv, second curve.
+# Figure: Fig. 4, pinned at digitization time -- the same figure as
+#   tests/data/tt2012_E_B_vs_pressure.csv, second curve.
 # Traced with WebPlotDigitizer (curve digitized point-by-point, not by eye).
 #
 # E_eff is the field that would deposit the same energy at zero frequency:
