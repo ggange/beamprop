@@ -53,6 +53,12 @@ When you change or add a model, update the docs in the same PR:
 - **`docs/MODELS.md`** — the catalog of every physical model: its equation,
   implementation site, validation gate (with the measured numbers), and
   literature reference.
+- **`docs/MODELS.md` § Claims ledger** — the status table. Adding, retiring, or
+  flipping a gate updates its ledger row **in the same PR**, including the census
+  line at the top of the section. A green test that asserts a known disagreement
+  is a `pinned` row, not a `validated` one; if you cannot say which of the four
+  statuses your new gate has, the gate is not finished. An asserted constant with
+  no test behind it gets an `ungated` row rather than no row.
 - **`docs/M*_SPEC.md`** — per-milestone pre-spec gates and design records. New
   milestone work is spec'd here before it is implemented.
 - **`README.md`** — the milestone status table and the CLI examples. A finished

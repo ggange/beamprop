@@ -13,6 +13,188 @@ and implementation tasks. They are **shorthand, not citations**: wherever one
 carries weight the substance is stated in full alongside it, so nothing here
 depends on looking a number up.
 
+## Claims ledger
+
+**Read this before the test count.** `cargo test` runs 187 tests. That number is
+not a measure of how much of this solver is validated against the world, and
+reading it as one would be a mistake: most of those tests check that the code
+solves the equations it was given, several deliberately assert a *known
+disagreement* so it cannot drift silently, and some of the constants that move
+the answer most are not gated at all. This section says which is which.
+
+Every claim below carries exactly one of four statuses:
+
+- **verified** — reproduces a closed form or analytic result the model does not
+  itself assume (an exact Riemann solution, Noll's Zernike coefficients, the
+  Rytov weak-fluctuation variance, the Keldysh limits), or a numerical property
+  the model must have (observed order of accuracy, step/window/seed
+  independence, thread-count determinism). Verification says the code is right
+  about the equations. It says nothing about whether the equations are right
+  about air.
+- **validated** — compared against something external and measured: a digitized
+  published dataset, or an independent third-party code. This is the only status
+  that puts the model against the world.
+- **pinned** — a **known disagreement**, asserted green so that its size is
+  fixed in CI and any change to it has to be argued for. A pinned gate passing
+  means the gap is still exactly as big as we said it was. It does **not** mean
+  the model agrees with anything.
+- **ungated** — asserted from literature or from geometry, with no test behind
+  it. These are where the model is most exposed.
+
+Two rows carry an extra flag in the number column:
+
+- **circular** — the reference is the construction the model is built from, so
+  agreement is arithmetic, not evidence (`lsd_front_speed_matches_the_raizer_closed_form`).
+- **same lineage** — the reference is a closed form from the same paper whose
+  data is the comparison target, so it establishes agreement with *that theory*,
+  not with the measurement (`tt2012_cascade_theory_reference`,
+  `tt2012_wavelength_scaling_matches_cascade_theory`).
+
+**Census of the 78 rows below: 49 verified, 6 validated, 11 pinned, 12 ungated.**
+Every `site` names a test function or a `src/` symbol; a claim with neither does
+not belong in this table. The 129 remaining unit tests in `src/` are code-level
+verification (constructors, guards, closed-form limits of individual rate terms)
+and are counted here only where they carry a physics claim in their own right.
+
+### M1 — Diffraction
+
+| claim | site | status | number |
+|---|---|---|---|
+| Gaussian beam evolution matches the closed form | `gaussian_free_space_evolution` | verified | width and divergence < 1 % |
+| Lossless propagation conserves power | `power_conservation_lossless` | verified | ~1e-14 |
+| The boundary absorbs rather than wrapping around | `boundary_absorbs_instead_of_wrapping` | verified | wraparound suppressed |
+| Split-step is 2nd order in `dz` | `split_step_is_second_order` | verified | observed order 2 |
+| Long-throw path matches the Fresnel impulse response | `fresnel_impulse_response_long_throw` | verified | closed form |
+| Phase bends the beam toward higher index | `medium_phase_bends_toward_higher_index` | verified | sign of the deflection |
+| A positive-index duct focuses | `positive_index_duct_focuses` | verified | focusing recovered |
+| `Medium` implementations are interchangeable | `medium_trait_interchangeability` | verified | identical results |
+
+### M2 — Attenuation
+
+| claim | site | status | number |
+|---|---|---|---|
+| Uniform extinction matches `exp(−α z)` | `beer_lambert_matches_closed_form` | verified | ~1e-13 |
+| `α = 0` is bit-identical to vacuum | `zero_extinction_matches_vacuum` | verified | bitwise |
+| A transverse absorber removes exactly the predicted power | `transverse_extinction_removes_predicted_power` | verified | exact |
+
+### M3 — Turbulence
+
+| claim | site | status | number |
+|---|---|---|---|
+| Phase-screen structure function is Kolmogorov | `phase_screen_structure_function_matches_kolmogorov` | verified | < 10 % over a decade of lags |
+| Long-exposure spread matches Andrews–Phillips | `long_exposure_beam_spread_matches_theory` | verified | 0.5 % |
+| Scintillation index matches Rytov weak theory | `scintillation_index_matches_rytov_weak_theory` | verified | 1.6 % |
+| Monte-Carlo is thread-count reproducible | `monte_carlo_reproducible_across_thread_counts` | verified | bitwise |
+
+### M4 — Thermal blooming
+
+| claim | site | status | number |
+|---|---|---|---|
+| Closed-form erf blooming phase | `b1_closed_form_blooming_phase` | verified | 0.39 % max |
+| Weak-blooming first-order limit, quadratic back-reaction | `b2_weak_blooming_linear_limit` | verified | 0.008 %; ratio 3.65 vs 4 |
+| Slab coupling is 2nd order by self-convergence | `coupling_is_second_order` | verified | slope 2.000 |
+| Stable at `N_φ` = 20 with a closed power budget | `strong_blooming_is_stable` | verified | budget closes |
+| The beam bends upwind | `beam_bends_upwind` | verified | sign of the centroid shift |
+| Crescent + irradiance-rollover signatures | `b3_qualitative_signatures` | verified | qualitative |
+| **Smith (1977) whole-beam `I_REL(N)` curve** | `b3_smith1977_curve_quantitative` | **validated** | 7.2 % over `N ∈ [0.5, 1.8]`, `F₀ = 5` |
+| `IntensityScale` extraction is arithmetically identical | `g0_intensity_scale_extraction_is_arithmetically_identical` | verified | bitwise |
+| The M4 air table is untouched by T4 | `g0_m4_air_table_is_untouched` | verified | bitwise |
+
+### M6a — Optical breakdown threshold
+
+The milestone with the most pins, and the reason this ledger exists. Its
+external status in one line: **`K_m` is validated, the digitizations are
+validated, the shape is not** — the kernel's `I_thr(p)` disagrees with both
+measured datasets, and the disagreement is pinned rather than papered over.
+
+| claim | site | status | number |
+|---|---|---|---|
+| Electron-neutral collision frequency `K_m` vs T&T's `E_eff/E_B` | `tt2012_collision_frequency_matches_literature` | **validated** | ratio 1.05×, flat to < 0.15 over 46–1858 Torr |
+| `E_eff` rises with pressure (the sign is the physics) | `tt2012_effective_field_rises_with_pressure` | **validated** | `p^+0.695` vs predicted `p^+0.642` |
+| Chylek Fig. 3 air trace reproduces the printed exponent | `chylek1990_digitization_reproduces_the_published_slope` | **validated** | α = 0.43–0.46 vs printed 0.45 ± 0.01 |
+| Chylek Fig. 2 He/Ar/Xe traces reproduce six printed exponents | `chylek1990_fig2_digitization_reproduces_the_published_slopes` | **validated** | all six inside their printed tolerances |
+| Level vs T&T's cascade closed form (Eq. 4) | `tt2012_cascade_theory_reference` | verified *(same lineage)* | 4.1–5.1× (climb), 1.3–3.2× (fixed `⟨ε⟩`) |
+| `I_thr ∝ λ⁻²`, and the plateau is Eq. 4's `λ⁻²` coefficient | `tt2012_wavelength_scaling_matches_cascade_theory` | verified *(same lineage)* | −2.000 over 0.53–10.6 µm; coefficient 1.01× |
+| Keldysh `γ → ∞` recovers the multiphoton photon order | `keldysh_multiphoton_limit_recovers_the_photon_order` | verified | `K = U_i/ħω` |
+| Keldysh `γ → 0` recovers the static-field tunnelling exponent | `keldysh_tunnelling_limit_matches_the_static_field_exponent` | verified | closed form |
+| The small-`γ` series joins the direct form | `keldysh_exponent_series_matches_direct_form` | verified | join pinned at γ = 0.1 |
+| Threshold is independent of the integration window | `breakdown0d::tests::threshold_is_window_independent` | verified | invariant in `w` |
+| The high-pressure slope lies between the model's analytic limits | `breakdown0d::tests::high_pressure_threshold_slope_lies_between_analytic_limits` | verified | 0.095 … 0.468 |
+| The literature-range inelastic envelope brackets the slope | `breakdown0d::tests::inelastic_loss_envelope_brackets_the_slope` | verified | over `δ_eff` 0.01–0.05, `⟨ε⟩` 2–5 eV |
+| Per-slice integrator is exact and step-size independent | `breakdown0d::tests::{pure_cascade_is_exponential_growth, pure_loss_is_exponential_decay, mpi_only_seeding_is_linear, balance_point_is_linear_from_seed, slice_refinement_is_consistent}` | verified | 1e-9 relative |
+| **Measured `I_thr(p)` slope is unreachable by a cascade-only kernel** | `tt2012_threshold_slope_matches_measurement` *(`#[ignore]`d, red by design)* | **pinned** | measured `p^-0.329`; T&T's own cascade theory says `n ≈ 0` |
+| **Chylek's air threshold is a power law and the kernel is not** | `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | **pinned** | measured 0.428/0.413/0.468; kernel 1.951/1.047/0.170 — it *crosses* the data near 250 Torr |
+| **Cascade `λ⁻²` is falsified against measurement, in sign** | `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared` | **pinned** | kernel 3.99 vs measured ≈ 0.80; overshoot ≈ 4.99× |
+| **Keldysh MPI does not close the wavelength gap** | `keldysh_mpi_does_not_close_the_wavelength_gap` | **pinned** | closes ~3 % of it at any sane prefactor |
+| **T&T's own MPI calibration undershoots their own measurement** | `breakdown0d::tests::tt2012_mpi_calibration_undershoots_the_data` | **pinned** | 37× below |
+| Level offset stays inside the inter-lab scatter, with a drift pin | `tt2012_level_ratio_is_bounded_within_scatter` | **pinned** | bounded offset; drift in the direction the corrected slope predicts |
+| The two cascade limits bracket the measurement | `breakdown0d::tests::the_two_cascade_models_bracket_the_measurement` | **pinned** | 0.468 / 0.095 straddle 0.329 — but this is a **one-parameter sensitivity**, not two independent limits |
+| The cascade plateau floor is free of every transport constant | `cascade_plateau_floor_is_independent_of_the_transport_constants` | verified | invariant under `D_e` ×0.01…×100; `ν_i ≡ 0` below it at every pressure |
+| **Parameter-free noble-gas floor: ordering right, spacing wrong** | `chylek1990_noble_gas_plateau_floors_are_unequally_tight` | **pinned** | He/Ar predicted 15.6 vs measured ≈2.5; Ar/Xe 4.27 vs ≈3.0; headroom 1.85×/7.8×/13.2× |
+| Noble-gas `K_m` and `D_e` | `Gas::from_monatomic` | **ungated** | required arguments, not defaults — no citable momentum-transfer table; Ar/Xe cross sections swing 100× across the Ramsauer minimum |
+| Chylek's focal geometry (`Λ`, focal volume) | — | **ungated** | the paper gives the lens and spot but not the beam diameter, so the divergence-limited depth of focus cannot be reconstructed as T&T's Eq. 5 was |
+| `D_e,ref` = 0.2 m²/s is consistent with the gated `K_m` | `d_e_ref_implies_a_stated_electron_energy` | verified | ⟺ `ε` = 6.740 eV at `p_ref`, inside the (2, `U_i`] eV band the cascade occupies |
+| **Diffusion and inelastic loss assume different electron energies** | `d_e_ref_implies_a_stated_electron_energy` | **pinned** | 6.74 eV vs `⟨ε⟩` = 3 eV — **2.25×**, same population, two terms of one balance |
+| **`D_e` cannot explain the slope gap** | `d_e_sensitivity_is_pinned_across_the_kinetic_band` | **pinned** | a 6.0× band in `D_e` moves `n` by 0.101 (0.0532 → 0.1545) against a 0.234 shortfall to the measured 0.329 |
+| Absolute threshold **level** | — | **ungated** | published thresholds scatter 3–10× across labs |
+| `D_e,ref` against a **measurement** | — | **ungated** | swarm data sits at 0.1–2 eV and reaches 6.7 eV only through the same formula, so it would re-validate `K_m`, not `D_e`; needs a measurement at the cascade's own energy |
+| `δ_eff` = 0.02 | `AirBreakdown::new` | **ungated** | free within ≈0.01–0.05; sets the plateau level |
+| `⟨ε⟩` = 3 eV (`FixedMeanEnergy` only) | `AirBreakdown::new` | **ungated** | free within ≈2–5 eV |
+| `n_bd` = 10²³ m⁻³ | `AirBreakdown::new` | **ungated** | asserted; audit says the slope is insensitive to ×0.1/×10 |
+| Seed density `n_e0 = 1/V_focal` | `AirBreakdown::with_seed_density` | **ungated** | known **~10⁴ unphysical** — cosmic-ray background gives ~10⁻⁴ electrons in this focus |
+| `Λ` = 7.74 µm | `dry_air_tt2012_focus` | **ungated** | pinned from T&T's Eq. 5 geometry, never fit; matches the 8 µm the paper states |
+| The `ε_∞ → U_i` margin at threshold | — | **ungated** | `ε_∞/U_i` = 1.032 at 760 Torr, 1.011 at 1500 — the model sits at the bifurcation that *is* its plateau |
+
+### M6a.2 — Aperture optics and ignition statistics
+
+| claim | site | status | number |
+|---|---|---|---|
+| Tip/tilt-removed residual variance vs Noll (1976) | `noll_tip_tilt_removed_variance_matches_the_closed_form` | verified | 0.1407 vs 0.134, banded at ±12 % by the ensemble spread |
+| Piston-removed variance converges to Kolmogorov | `noll_piston_removed_variance_converges_to_kolmogorov` | verified | 0.34 → 0.99 over `L₀/D` = 10 → 2000 |
+| RMS focal-spot wander `∝ Cn²^(1/2)` | `wander_follows_the_square_root_of_cn2` | verified | +0.4953 / +0.4977 / +0.4987 |
+| The ignition ensemble converges | `ignition_ensemble_converges` | verified | numerical hygiene |
+| The ignition ensemble is thread-count reproducible | `ignition_ensemble_is_reproducible_across_thread_counts` | verified | bitwise |
+| Where the ignition curve sits on the `Cn²` axis | — | **ungated** | rides M6a's absolute threshold; the *shape* is the result, the position is not — the figure says so in-panel |
+
+Three gates here were **landed and then withdrawn**, which the ledger records
+because a retired gate is a claim that was made and taken back: an aperture-dependence
+exponent (seed-dependent — it was measuring the draw, swinging −0.10 to −0.32
+across seeds), a `(D/r₀)^(5/3)` exponent (a tautology — the generator scales the
+screen linearly in `r₀`), and a width gate (no independent anchor).
+
+### M6c — 1-D gas dynamics and the LSD wave
+
+| claim | site | status | number |
+|---|---|---|---|
+| G1 — Sod vs the exact Riemann solution | `sod_shock_tube_matches_exact_riemann_solution` | verified | L1(ρ) 6.55e-3 → 6.55e-4, rate 0.79–0.88 |
+| G2 — 2nd order on smooth flow | `euler_muscl_hancock_is_second_order_on_smooth_flow` | verified | 1.86 → 1.94 |
+| G2b — coupled hydro↔source is 2nd order | `lsd_source_coupling_is_second_order` | verified | 1.99/2.03/1.99 vs a 1st-order contrast at 0.88/1.02/1.07 |
+| G3 — LSD velocity vs Raizer's closed form | `lsd_front_speed_matches_the_raizer_closed_form` | verified *(**circular**)* | 5402 vs 5392 m/s, +0.19 % — it is the Chapman–Jouguet construction the model is built from |
+| G3b — residual falls as the absorption layer thins | `lsd_front_speed_converges_as_the_absorption_layer_thins` | verified | −8.26 % → +0.19 % |
+| G3c — front speed is seed-independent | `lsd_front_speed_is_seed_independent` | verified | 1.1e-3 |
+| **G4 — parameter-free `D ∝ S^(1/3)`, `ρ₀^(−1/3)`** | `lsd_velocity_follows_the_parameter_free_one_third_scaling` | verified | `S^+0.33190` over 1.52 decades, `ρ₀^−0.33020` over 1.50, gated inside ±0.01 |
+| The level rides the EOS coefficient while the exponents do not | `lsd_velocity_level_tracks_the_eos_coefficient` | verified | level moves 59 % under `γ`; exponents move 0.001 |
+| G5 — energy budget closes | `lsd_energy_budget_closes` | verified | 2.1e-16 |
+| **G6 — frozen plasma table vs direct Mutation++ off-grid** | `plasma_table_matches_direct_mutationpp_off_grid` | **validated** | worst 1.48e-3 in `n_e` (independent third-party code) |
+| G8 — a real beam through the plasma column is Beer–Lambert, `δn ≡ 0` | `plasma_column_absorbs_as_beer_lambert` | verified | 1.7e-13 at τ = 339 |
+| The table's charge-state ceiling | `plasma_table_charge_state_ceiling_is_pinned` | **pinned** | regression pin on the table's extrapolation limit |
+| G7 — absolute LSD velocity vs measurement | — | **ungated** | on purpose: a planar solver has no radial relief, so the known experimental gap is a *prediction* of the omissions |
+
+### What this table says, in one paragraph
+
+Six claims in this solver are checked against something external and measured,
+and two of those six are M6a data-integrity checks — they establish that a
+digitization reproduces its own published figure, not that the model reproduces
+the gas. The two genuine external agreements in M6a are `K_m` and the sign of
+`E_eff(p)`; both are inputs to the model rather than its output. **The
+breakdown-threshold curve itself has no validated agreement, and three separate
+pins record why.** M1–M4 are in a different position: their physics is
+diffraction, extinction and turbulence, where closed forms are exact and
+verification is close to the whole job, and M4 additionally reproduces a
+published experimental curve. M6c's core is verified to high order but its one
+headline agreement (Raizer) is circular by construction, which is why G4 — a
+parameter-free scaling exponent — is the milestone's real physics gate.
+
 ## M1 — Diffraction
 
 ### Scalar paraxial propagation, split-step spectral method
@@ -284,6 +466,19 @@ The loss terms are attachment from measured rate coefficients (dissociative
 `ν_diff = D_e(p)/Λ²` with `D_e ∝ 1/p`. Attachment is negligible against
 diffusion throughout the gate window — `6.7×10⁷` vs `3.3×10⁹ s⁻¹` at 1 atm.
 
+`D_e,ref` used to be M6a's largest ungated number. It is no longer free: kinetic
+theory ties it to the externally-gated `K_m` by `D_e = 2ε/(3 m_e K_m p)`, so
+`D_e,ref = 0.2 m²/s` **is** the statement `ε = 6.740 eV`
+(`d_e_ref_implies_a_stated_electron_energy`). Sweeping the whole band that
+formula admits — `ε` from 2 eV to `U_i`, a 6.0× range in `D_e` — moves the fitted
+slope by only 0.101 (0.0532 → 0.1545), against a 0.234 shortfall to the measured
+0.329, so `D_e` **cannot** account for the slope gap
+(`d_e_sensitivity_is_pinned_across_the_kinetic_band`). Two debts remain, both
+recorded rather than papered over: diffusion assumes 6.74 eV while the
+`FixedMeanEnergy` loss term assumes `⟨ε⟩` = 3 eV (a 2.25× internal
+inconsistency), and there is still no measurement of `D_e` at the cascade's own
+energy — swarm data reaches only 0.1–2 eV. See `docs/M6A_SPEC.md`.
+
 `Λ` is the diffusion length of T&T's **divergence-limited** focus, from their
 Eq. 5: `(1/Λ)² = (π/l₀)² + (2.405/r₀)²` with `r₀ = f·α/2 = 20 µm` and
 `l₀ = 0.414·(α/d)·f² = 66 µm`, giving **`Λ = 7.74 µm`** — matching the 8 µm the
@@ -508,6 +703,57 @@ branch from 0.170 to ≈0.47 — with `K = 6` photons at 532 nm against `K = 11`
 `chylek1990_*` gates pin all three numbers, so a channel that fixes one while
 breaking another cannot land quietly.
 
+### General-gas kernel and the parameter-free plateau floor
+
+The gas-dependent constants live in `breakdown0d::Gas`; the laser and the focal
+geometry stay on `AirBreakdown`. `Gas::dry_air()` is a re-packaging that changes
+no number — the `breakdown` case is bit-identical across the split.
+
+Writing out the equilibrium energy,
+`ε_∞ = (e²I/(m_e c ε₀))·ν_m/((ν_m²+ω²)·δ_eff·ν_m)`, the collision frequency
+**cancels exactly** in the optical regime `ν_m ≪ ω`, because heating and
+inelastic loss both scale `∝ ν_m`. Ionization needs `ε_∞ > U_i`, so the cascade
+has a hard floor with no transport constant in it at all:
+
+```text
+I_plateau = δ_eff · U_i · m_e·c·ε₀·ω² / e²
+```
+
+Site: `breakdown0d::cascade_plateau_intensity`, `AirBreakdown::plateau_intensity`.
+Gated as `cascade_plateau_floor_is_independent_of_the_transport_constants`,
+which perturbs `D_e` by 100× either way and demands the floor not move, and
+checks `cascade_rate` is identically zero just below it at every pressure.
+
+For a **monatomic** gas this is a prediction with nothing to choose:
+`δ = 2m_e/M` is the atomic mass, `U_i` is spectroscopy. `breakdown0d::MonatomicGas`
+carries only those exactly-known constants:
+
+| gas | `U_i` (eV) | first excitation (eV) | `M` (u) | `δ = 2m_e/M` | `K` @ 532 nm | floor (W/cm²) |
+|---|---|---|---|---|---|---|
+| He | 24.587 | 19.82 | 4.0026 | 2.741e-4 | 11 | 1.275e11 |
+| Ar | 15.760 | 11.55 | 39.948 | 2.747e-5 | 7 | 8.190e9 |
+| Xe | 12.130 | 8.32 | 131.293 | 8.357e-6 | 6 | 1.918e9 |
+
+Against Chylek's Fig. 2 measurements
+(`chylek1990_noble_gas_plateau_floors_are_unequally_tight`): every curve sits
+above its own floor, and the *ordering* He > Ar > Xe is right. The **spacing** is
+not — predicted floor ratios He/Ar = 15.6 and Ar/Xe = 4.27 against measured
+threshold ratios ≈2.5 and ≈3.0, so He/Ar is over by 6.3× and He/Xe by 8.8×, with
+no constant left to turn. The headroom above the floors is 1.85× (He), 7.8× (Ar),
+13.2× (Xe) — monotone in atomic mass, which a cascade-only kernel gives no reason
+for. And `δ_elastic` is a **lower bound**: the last leg of every climb runs above
+the first excitation threshold (19 % of the ascent in He, 27 % Ar, 31 % Xe),
+where inelastic loss dwarfs elastic recoil, so the true floors are higher and He
+— with 1.85× of room — is the gas that breaks first.
+
+Three gases at **one** wavelength and one bench span `K` = 11/7/6, which is the
+only way in this repository to separate photon order from wavelength; the air
+data confounds them. `Gas::from_monatomic` takes `K_m` and `D_e` as **required
+arguments** rather than defaults, because no citable momentum-transfer table was
+landed and for Ar and Xe those cross sections swing two orders of magnitude
+across the Ramsauer minimum. Full noble-gas *threshold curves* are therefore not
+computed here; the plateau gate needs neither constant.
+
 Full model and constants: `docs/M6A_SPEC.md`.
 
 References:
@@ -535,10 +781,12 @@ References:
   gases span `U_i` = 24.59 / 15.76 / 12.13 eV, i.e. multiphoton order
   **K = 11 / 7 / 6 at a single wavelength and a single apparatus** — the one
   dataset here that separates photon order from `λ` — and having no attachment
-  channel they isolate cascade + diffusion + MPI. No physics gate consumes them
-  yet: the kernel is `AirBreakdown`, so a noble gas needs a general-gas model
-  first. Carried with an integrity gate
-  (`chylek1990_fig2_digitization_reproduces_the_published_slopes`) meanwhile.
+  channel they isolate cascade + diffusion + MPI. Consumed since 2026-07-30 by
+  `chylek1990_noble_gas_plateau_floors_are_unequally_tight`, which tests the
+  parameter-free plateau floor `δ·U_i·m_e c ε₀ ω²/e²` against them — `δ = 2m_e/M`
+  is the atomic mass, so for these gases the cascade has no free constant at all.
+  Their own integrity gate
+  (`chylek1990_fig2_digitization_reproduces_the_published_slopes`) stays.
 
 ## M6a.2 — Aperture optics and pupil phase statistics
 

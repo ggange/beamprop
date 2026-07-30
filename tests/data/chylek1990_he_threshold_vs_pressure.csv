@@ -30,10 +30,13 @@
 # What this file reproduces is checked in tests/validation.rs,
 # chylek1990_fig2_digitization_reproduces_the_published_slopes.
 #
-# NOTE: no physics gate consumes this yet. The kernel is AirBreakdown -- U_i,
-# K_m and the attachment chemistry are air-specific -- so gating a noble gas
-# needs a general-gas model first. This file is the substrate for that, and
-# carries only its own integrity gate until then.
+# CONSUMED (2026-07-30) by chylek1990_noble_gas_plateau_floors_are_unequally_tight.
+# The cascade kernel has a hard plateau floor I = delta_eff*U_i*m_e*c*eps0*w^2/e^2
+# in which the collision frequency cancels exactly, so no transport constant
+# enters it. For a monatomic gas delta = 2*m_e/M is the atomic mass and U_i is
+# spectroscopy, making that floor a PARAMETER-FREE prediction -- which is what
+# this file tests. Its own integrity gate
+# (chylek1990_fig2_digitization_reproduces_the_published_slopes) also stays.
 #
 # columns: pressure_torr, I_th_W_per_cm2
 pressure_torr,I_th_W_per_cm2

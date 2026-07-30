@@ -1375,6 +1375,217 @@ fn omega_of(lambda: f64) -> f64 {
     2.0 * std::f64::consts::PI * 299_792_458.0 / lambda
 }
 
+// ---------------------------------------------------------------------------
+// M6a — the free-electron diffusion coefficient `D_e`.
+//
+// `D_e,ref = 0.2 m²/s` shipped as a bare literal with a one-line comment, and
+// the project's own 2026-07-24 sensitivity audit rated its leverage on the
+// result **large** — it sets `ν_diff`, which is the dominant loss term at every
+// pressure in the gate window (3.3e9 s⁻¹ against 6.7e7 for attachment at 1 atm)
+// and which drives the whole low-pressure branch of `I_thr(p)`. It was the
+// largest ungated number in M6a. These two gates remove it as a free parameter
+// and put a number on the audit's adjective.
+//
+// What they do NOT do is validate it against a measurement; see the debt
+// recorded under G-D1 and in docs/M6A_SPEC.md.
+// ---------------------------------------------------------------------------
+
+/// **G-D1 — verification, and explicitly not validation.** `D_e,ref` is not
+/// independent of the collision frequency the kernel already carries.
+///
+/// Kinetic theory gives the free-electron diffusion coefficient as
+///
+/// ```text
+/// D_e = v²/(3·ν_m) = 2ε/(3·m_e·k_m·p)
+/// ```
+///
+/// and `k_m` is **externally gated** — `tt2012_collision_frequency_matches_literature`
+/// checks it against T&T's measured `E_eff/E_B` ratio at 1.05× with a spread
+/// under 0.15 over 46–1858 Torr. So naming an electron energy fixes `D_e`, and
+/// naming `D_e` fixes an electron energy. The constant stops being free and
+/// becomes a **claim about how energetic the diffusing electrons are** — which
+/// is a quantity a reader can argue with, and which the model states elsewhere.
+///
+/// Read in that direction, the shipped value says:
+///
+/// ```text
+/// D_e,ref = 0.2 m²/s   ⟺   ε = 6.740 eV   at p_ref
+/// ```
+///
+/// 6.74 eV is a defensible number for an electron mid-climb: it is above the
+/// 2–5 eV literature band for `⟨ε⟩` in a weakly-driven swarm and below the
+/// `U_i` = 12.06 eV the cascade is climbing to. The gate bounds it by exactly
+/// that interval, `(2 eV, U_i]`, because outside it the constant would be
+/// describing electrons the model does not have.
+///
+/// **The inconsistency this exposes, pinned rather than fixed.** The
+/// `FixedMeanEnergy` cascade variant evaluates its inelastic loss at
+/// `⟨ε⟩ = 3 eV`. Diffusion and inelastic loss are therefore assigned electron
+/// energies that differ by **2.25×** — the same electron population, two
+/// different energies, in two different terms of the same balance. That is a
+/// real defect and it is asserted here so it cannot drift. It is deliberately
+/// *not* repaired in this change: moving `D_e` to match `⟨ε⟩` would drop it to
+/// 0.089 m²/s and move every published M6a gate number, which is a physics
+/// change that needs its own argument, not a side effect of writing a gate.
+/// (`SelfConsistentClimb`, the default, has no `⟨ε⟩` at all — it runs to
+/// `ε_∞` ≈ 12–15 eV at threshold — so for the default variant 6.74 eV is the
+/// less strained of the two readings.)
+///
+/// **The external-anchor debt, and why it is not the debt it looks like.** The
+/// obvious independent anchor is electron-swarm data — measured `ND_T` or the
+/// characteristic energy `D/µ` for air or N₂ (Dutton 1975; Huxley & Crompton).
+/// No such gate is landed here, and the reason is not only that no citable
+/// numeric table was obtained. Swarm measurements sit at characteristic energies
+/// of order 0.1–2 eV; the cascade electron sits at 6.7 eV. Getting from one to
+/// the other runs back through *this same formula*, whose only external input is
+/// `k_m` — already validated. A swarm gate would therefore re-validate `k_m`
+/// while appearing to validate `D_e`. The honest status is: `D_e` is **verified
+/// as consistent, not validated as correct**, and closing that needs a
+/// measurement at the cascade's own energy, not a swarm table. Recorded in
+/// docs/MODELS.md § Claims ledger and docs/M6A_SPEC.md.
+#[test]
+fn d_e_ref_implies_a_stated_electron_energy() {
+    use beamprop::breakdown0d::AirBreakdown;
+    const P_REF: f64 = 101_325.0;
+
+    let m = AirBreakdown::air_1064nm();
+    let gas = m.gas();
+    let d_e_ref = gas.diffusion_coefficient_ref();
+
+    // The accessor and the rate path agree, so this gates the code `loss_rate`
+    // takes rather than a re-derivation of it.
+    assert!(
+        (m.diffusion_coefficient(P_REF) / d_e_ref - 1.0).abs() < 1e-12,
+        "diffusion_coefficient(p_ref) = {:.6e} but D_e,ref = {d_e_ref:.6e}",
+        m.diffusion_coefficient(P_REF)
+    );
+
+    // The formula round-trips: energy → D_e → energy.
+    let probe = 5.0 * Q_E;
+    let round =
+        gas.diffusion_implied_energy(P_REF, gas.kinetic_diffusion_coefficient(P_REF, probe));
+    assert!(
+        (round / probe - 1.0).abs() < 1e-12,
+        "kinetic D_e does not invert: {probe:.6e} → {round:.6e} J"
+    );
+
+    // The claim: 0.2 m²/s is an electron energy, and this is which one.
+    let implied_ev = gas.diffusion_implied_energy(P_REF, d_e_ref) / Q_E;
+    assert!(
+        (implied_ev - 6.740).abs() < 0.01,
+        "D_e,ref = {d_e_ref} m²/s implies ε = {implied_ev:.3} eV, expected 6.740 — \
+         if D_e or K_m moved, this is the first thing to re-read"
+    );
+
+    // And it must lie in the band the model's own electrons occupy: above the
+    // low-energy swarm regime, at or below the ionization potential it climbs to.
+    let u_ion_ev = gas.ionization_energy() / Q_E;
+    assert!(
+        implied_ev > 2.0 && implied_ev <= u_ion_ev,
+        "D_e,ref implies ε = {implied_ev:.3} eV, outside the (2, {u_ion_ev:.2}] eV band \
+         the cascade electrons occupy — the constant is describing a population \
+         this model does not have"
+    );
+
+    // The pinned inconsistency with the FixedMeanEnergy variant's ⟨ε⟩.
+    let mean_ev = gas.mean_energy() / Q_E;
+    let mismatch = implied_ev / mean_ev;
+    assert!(
+        (2.0..=2.5).contains(&mismatch),
+        "diffusion assumes ε = {implied_ev:.3} eV while the FixedMeanEnergy loss term \
+         assumes ⟨ε⟩ = {mean_ev:.3} eV — ratio {mismatch:.3}, expected ≈2.25. This gate \
+         PINS a known inconsistency; if it moved, say why in docs/M6A_SPEC.md"
+    );
+}
+
+/// **G-D3 — the sensitivity audit's "large", as a number.**
+///
+/// The 2026-07-24 audit table in `docs/M6A_SPEC.md` recorded `D_e ×0.5 / ×2` as
+/// having a **large** effect on the fitted threshold slope, and left it there as
+/// a word. A word cannot fail in CI. This sweeps `D_e,ref` across the full band
+/// that G-D1's kinetic formula admits — `ε` from 2 eV to `U_i` = 12.06 eV, a
+/// 6.0× range in `D_e` — refits the 300–2000 Torr slope at each end, and pins
+/// how far the answer moves.
+///
+/// This is **not** a tuning sweep. Nothing here selects a `D_e`; the assertion
+/// is on the *spread*, and the default value is never treated as preferred
+/// because it agrees with anything. It is the same construction as
+/// `inelastic_loss_envelope_brackets_the_slope`, applied to the other large
+/// ungated constant.
+///
+/// The result is the honest scale of M6a's remaining freedom on this axis: the
+/// slope is monotone in `D_e` (more diffusion loss ⇒ a steeper low-pressure
+/// branch ⇒ a larger fitted `n`), and the band's width is reported in the
+/// failure message so a future change shows its own number.
+#[test]
+fn d_e_sensitivity_is_pinned_across_the_kinetic_band() {
+    use beamprop::breakdown0d::AirBreakdown;
+    const P_REF: f64 = 101_325.0;
+
+    let base = AirBreakdown::air_1064nm();
+    let gas = base.gas();
+    let u_ion = gas.ionization_energy();
+
+    // The band: what D_e would be if the diffusing electron sat at 2 eV, and
+    // what it would be at the ionization potential.
+    let d_lo = gas.kinetic_diffusion_coefficient(P_REF, 2.0 * Q_E);
+    let d_hi = gas.kinetic_diffusion_coefficient(P_REF, u_ion);
+    assert!(
+        d_lo < gas.diffusion_coefficient_ref() && gas.diffusion_coefficient_ref() < d_hi,
+        "the shipped D_e,ref = {:.4} is outside its own kinetic band [{d_lo:.4}, {d_hi:.4}]",
+        gas.diffusion_coefficient_ref()
+    );
+
+    let slope_at = |d_e: f64| {
+        let c = base.with_diffusion_coefficient(d_e).pressure_sweep(
+            TT_P_LO * TORR,
+            TT_P_HI * TORR,
+            8,
+            6e-9,
+            400,
+        );
+        assert_eq!(c.len(), 8, "sweep lost points at D_e = {d_e:.4}");
+        -beamprop::validate::loglog_slope(&c).expect("slope")
+    };
+    let (n_lo, n_mid, n_hi) = (
+        slope_at(d_lo),
+        slope_at(gas.diffusion_coefficient_ref()),
+        slope_at(d_hi),
+    );
+
+    // Monotone: more diffusion loss steepens the curve.
+    assert!(
+        n_lo < n_mid && n_mid < n_hi,
+        "slope is not monotone in D_e: {n_lo:.4} / {n_mid:.4} / {n_hi:.4} — \
+         the low-pressure branch is supposed to be diffusion-driven"
+    );
+    // And the pin: how much freedom the constant actually buys.
+    // Measured: n = 0.0532 at ε = 2 eV, 0.0951 at the default 6.74 eV, 0.1545
+    // at ε = U_i. A 6.0× range in D_e, and the slope moves 0.101.
+    let span = n_hi - n_lo;
+    assert!(
+        (0.09..=0.115).contains(&span),
+        "D_e's kinetic band moves the fitted slope by {span:.4} \
+         (n = {n_lo:.4} at ε = 2 eV → {n_hi:.4} at ε = U_i, default {n_mid:.4}); \
+         the audit called this 'large' and this gate is where that number lives"
+    );
+
+    // **The conclusion that matters, and it is negative.** T&T measure
+    // n = 0.329. The entire kinetic band tops out at 0.155 — the whole 6.0×
+    // freedom in D_e buys 0.101 of slope against a 0.234 shortfall, so even the
+    // most diffusion-heavy defensible choice leaves the model less than halfway
+    // there. D_e is the largest ungated constant in M6a and it **cannot** be the
+    // explanation for the slope gap. That closes off a re-tuning route which,
+    // before this gate, nothing in the repo ruled out.
+    const MEASURED: f64 = 0.329;
+    assert!(
+        n_hi < MEASURED * 0.6,
+        "the top of D_e's kinetic band now reaches n = {n_hi:.4} against the measured \
+         {MEASURED} — if D_e alone can get there, the slope gap has a cheaper \
+         explanation than M6a claims and docs/M6A_SPEC.md needs rewriting"
+    );
+}
+
 /// **Verification.** In the multiphoton limit `γ ≫ 1` the Keldysh rate must
 /// become a power law in intensity whose exponent is `U_i/ħω` — the photon order,
 /// fixed entirely by the gas and the wavelength.
@@ -3175,5 +3386,247 @@ fn lsd_velocity_level_tracks_the_eos_coefficient() {
     assert!(
         (measured / predicted - 1.0).abs() < 0.01,
         "level ratio {measured:.4} vs the closed form's {predicted:.4}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M6a — the noble gases (Chylek 1990 Fig. 2).
+//
+// Three digitized curves — He, Ar, Xe — sat in tests/data/ carrying only their
+// own integrity gate, because the kernel was air-specific. They are the only
+// data in this repository that can test the cascade model with `δ_eff` **not**
+// free: a monatomic gas has no vibrational or low-lying electronic modes, so
+// below its first excitation threshold the energy loss per collision is elastic
+// recoil, `δ = 2m_e/M`, fixed by the atomic mass with nothing to choose. In air
+// `δ_eff` is a fitted-range constant that sets the plateau level; here it is
+// arithmetic.
+//
+// The two gates below use only that fact and the ionization potential. They do
+// NOT use `k_m` or `D_e` for the noble gases — no citable momentum-transfer
+// table was landed, and G-N1 proves the result does not need one.
+// ---------------------------------------------------------------------------
+
+/// **G-N1 — verification.** The cascade's plateau floor is independent of the
+/// two transport constants, and this measures that rather than asserting it.
+///
+/// `ε_∞ = heating/(δ_eff·ν_m)` with `heating ∝ I·ν_m/(ν_m²+ω²)`, so in the
+/// optical regime `ν_m ≪ ω` the collision frequency **cancels exactly** —
+/// heating and loss both scale `∝ ν_m`. Ionization needs `ε_∞ > U_i`, leaving a
+/// floor that depends only on `δ_eff`, `U_i` and `ω`.
+///
+/// This matters beyond tidiness. `D_e` and `k_m` are the kernel's two least
+/// defensible constants (see `d_e_ref_implies_a_stated_electron_energy`), and
+/// for the noble gases neither is sourced at all. If the plateau leaned on
+/// either, G-N2's comparison against measurement would inherit that. It does
+/// not: the gate perturbs both by 100× and demands the floor not move.
+#[test]
+fn cascade_plateau_floor_is_independent_of_the_transport_constants() {
+    use beamprop::breakdown0d::{AirBreakdown, cascade_plateau_intensity};
+
+    let base = AirBreakdown::air_1064nm();
+    let floor = base.plateau_intensity();
+
+    // The closed form and the model's own accessor agree.
+    let gas = base.gas();
+    let omega = omega_of(1064e-9);
+    let closed = cascade_plateau_intensity(
+        omega,
+        gas.ionization_energy(),
+        gas.inelastic_loss_fraction(),
+    );
+    assert!(
+        (floor / closed - 1.0).abs() < 1e-12,
+        "accessor {floor:.6e} vs closed form {closed:.6e}"
+    );
+
+    // 100× either way in D_e: the floor must not move at all.
+    for factor in [0.01, 100.0] {
+        let moved = base
+            .with_diffusion_coefficient(gas.diffusion_coefficient_ref() * factor)
+            .plateau_intensity();
+        assert!(
+            (moved / floor - 1.0).abs() < 1e-12,
+            "plateau moved with D_e ×{factor}: {moved:.6e} vs {floor:.6e}"
+        );
+    }
+
+    // And the floor is real in the integrated model, not just in algebra:
+    // just below it the cascade rate is identically zero at every pressure,
+    // just above it is positive.
+    for p_torr in [10.0, 100.0, 760.0, 2000.0] {
+        let p = p_torr * TORR;
+        assert_eq!(
+            base.cascade_rate(floor * 0.999, p),
+            0.0,
+            "cascade runs below the plateau floor at {p_torr} Torr"
+        );
+        assert!(
+            base.cascade_rate(floor * 1.001, p) > 0.0,
+            "cascade dead above the plateau floor at {p_torr} Torr"
+        );
+    }
+}
+
+/// **G-N2 — external gate, and the first physics use of the He/Ar/Xe data.**
+///
+/// A parameter-free prediction, tested against measurement. For a monatomic gas
+/// the plateau floor `I_plateau = δ·U_i·m_e c ε₀ ω²/e²` contains nothing that
+/// can be chosen: `δ = 2m_e/M` is the atomic mass, `U_i` is spectroscopy, `ω` is
+/// Chylek's 532 nm. No transport constant appears (G-N1), and the noble gases
+/// have no attachment channel. This is the cleanest statement the cascade kernel
+/// makes anywhere in M6a.
+///
+/// At 532 nm the floors are **He 1.275e11, Ar 8.190e9, Xe 1.918e9 W/cm²**.
+/// Against Chylek's measured thresholds near the top of his range:
+///
+/// | gas | `K` | measured `I_th` (W/cm²) | floor | headroom |
+/// |---|---|---|---|---|
+/// | He | 11 | 2.36e11 @ 672 Torr | 1.275e11 | **1.85×** |
+/// | Ar | 7 | 6.37e10 @ 838 Torr | 8.190e9 | 7.8× |
+/// | Xe | 6 | 2.53e10 @ 725 Torr | 1.918e9 | 13.2× |
+///
+/// **What passes.** No curve falls below its floor, so the elastic-`δ` cascade
+/// is not outright falsified by any of the three. The *ordering* is right too:
+/// He > Ar > Xe in threshold, as `δ·U_i` demands.
+///
+/// **What fails, and is pinned.** The *spacing* is wrong, and wrong in a way
+/// that tracks the mass ratio. Predicted `I_plateau` ratios are He/Ar = 15.6 and
+/// Ar/Xe = 4.27; measured threshold ratios are ≈2.5 and ≈3.0. Ar/Xe is close;
+/// He/Ar is over by 6.3× and He/Xe by 8.8×. A model whose only gas-dependence is
+/// `δ·U_i` has no freedom left to fix that — there is no constant to turn.
+///
+/// **And the headroom is the sharper reading.** The three margins are 1.85×,
+/// 7.8×, 13.2×. A cascade-only kernel offers no reason for that spread: every
+/// gas has to clear the same diffusion and finite-pulse growth requirement above
+/// its floor, and He — the lightest, with the largest `δ` — is the one left with
+/// almost none. Worse, `δ_elastic` is a **lower bound**: the top of each climb
+/// runs above the first excitation threshold (19 % of the ascent in He, 27 % in
+/// Ar, 31 % in Xe), where inelastic losses dwarf elastic recoil. The true floors
+/// are all higher than these, and He, with 1.85× of room, is the one that breaks
+/// first. The gate asserts the ordering of the margins so that a
+/// distribution-resolved cascade — which is what would actually compute the
+/// correction — shows up here as a loud change.
+#[test]
+fn chylek1990_noble_gas_plateau_floors_are_unequally_tight() {
+    use beamprop::breakdown0d::{MonatomicGas, cascade_plateau_intensity};
+
+    /// Chylek's bench: Nd:YAG second harmonic, 6.5 ns, 1–800 Torr.
+    const CHYLEK_LAMBDA: f64 = 532e-9;
+    let omega = omega_of(CHYLEK_LAMBDA);
+
+    let species = [
+        ("he", MonatomicGas::HELIUM, 11),
+        ("ar", MonatomicGas::ARGON, 7),
+        ("xe", MonatomicGas::XENON, 6),
+    ];
+
+    let mut floors = Vec::new();
+    let mut measured_hi = Vec::new();
+    let mut headroom = Vec::new();
+
+    for (tag, gas, k_photons) in species {
+        // The photon order at this wavelength is a property of the gas, and the
+        // three span 11/7/6 at ONE wavelength — the decoupling the air data
+        // cannot provide. It plays no part in the cascade floor, which is the
+        // point: if the measured spread followed K rather than δ·U_i, the
+        // missing channel would be multiphoton.
+        let k = (gas.ionization_energy() / (HBAR * omega)).ceil() as i32;
+        assert_eq!(
+            k,
+            k_photons,
+            "{} has K = {k} at 532 nm, expected {k_photons}",
+            gas.name()
+        );
+
+        let floor =
+            cascade_plateau_intensity(omega, gas.ionization_energy(), gas.elastic_loss_fraction());
+        floors.push(floor);
+
+        let curve: Vec<(f64, f64)> =
+            load_digitized_curve(&format!("chylek1990_{tag}_threshold_vs_pressure.csv"))
+                .into_iter()
+                .map(|(p_torr, i_w_cm2)| (p_torr, i_w_cm2 * 1e4))
+                .collect();
+        assert!(curve.len() >= 15, "{tag} curve has {} points", curve.len());
+
+        // The measurement at the top of the range, where the cascade branch is
+        // strongest and the floor is the binding constraint.
+        let (p_top, i_top) = *curve.last().expect("non-empty");
+        assert!(
+            p_top > 600.0,
+            "{tag} trace stops at {p_top:.0} Torr, short of the cascade branch"
+        );
+        measured_hi.push(i_top);
+
+        // Nothing may sit below its own floor: a cascade-only threshold cannot.
+        let margin = i_top / floor;
+        assert!(
+            margin > 1.0,
+            "{} measured {i_top:.3e} W/m² at {p_top:.0} Torr is BELOW its parameter-free \
+             cascade floor {floor:.3e} — that falsifies the cascade model for this gas \
+             outright, which is a bigger finding than this gate was written for",
+            gas.name()
+        );
+        headroom.push(margin);
+
+        // The elastic δ is a lower bound, and the gate records by how much of
+        // the climb it is one.
+        let above = gas.inelastic_climb_fraction();
+        assert!(
+            (0.15..=0.35).contains(&above),
+            "{} runs {:.0}% of its climb above the first excitation threshold; \
+             expected 19/27/31% for He/Ar/Xe",
+            gas.name(),
+            above * 100.0
+        );
+    }
+
+    // Floors, pinned: these are arithmetic from mass and spectroscopy.
+    for (got, want) in floors.iter().zip([1.2751e15, 8.1895e13, 1.9179e13]) {
+        assert!(
+            (got / want - 1.0).abs() < 1e-3,
+            "plateau floors moved: {floors:?}, expected [1.275e15, 8.190e13, 1.918e13] W/m²"
+        );
+    }
+
+    // **The failure.** Predicted spacing against measured spacing.
+    let pred_he_ar = floors[0] / floors[1];
+    let pred_ar_xe = floors[1] / floors[2];
+    let meas_he_ar = measured_hi[0] / measured_hi[1];
+    let meas_ar_xe = measured_hi[1] / measured_hi[2];
+    assert!(
+        (15.0..=16.2).contains(&pred_he_ar) && (4.1..=4.5).contains(&pred_ar_xe),
+        "predicted ratios moved: He/Ar {pred_he_ar:.2}, Ar/Xe {pred_ar_xe:.2}, \
+         expected ≈15.6 and ≈4.27"
+    );
+    assert!(
+        pred_he_ar / meas_he_ar > 3.0,
+        "the cascade's He/Ar spacing ({pred_he_ar:.2}) is no longer far above the \
+         measured {meas_he_ar:.2} — if a change closed this, it is a real result and \
+         docs/M6A_SPEC.md needs it"
+    );
+    assert!(
+        (0.7..=1.8).contains(&(pred_ar_xe / meas_ar_xe)),
+        "Ar/Xe was the pair the cascade nearly got right ({pred_ar_xe:.2} vs \
+         {meas_ar_xe:.2}); it has moved"
+    );
+
+    // **The sharper reading**: the headroom above the floor is wildly unequal,
+    // and monotone in atomic mass — He is left with almost none.
+    assert!(
+        headroom[0] < headroom[1] && headroom[1] < headroom[2],
+        "headroom above the cascade floor is no longer mass-ordered: \
+         He {:.2}× / Ar {:.2}× / Xe {:.2}×",
+        headroom[0],
+        headroom[1],
+        headroom[2]
+    );
+    assert!(
+        headroom[0] < 2.5 && headroom[2] > 8.0,
+        "headroom spread is He {:.2}× … Xe {:.2}×, expected ≈1.85× … ≈13.2×. \
+         The elastic δ is a LOWER bound on δ_eff, so these floors are lower bounds \
+         too, and He has the least room to absorb the correction",
+        headroom[0],
+        headroom[2]
     );
 }

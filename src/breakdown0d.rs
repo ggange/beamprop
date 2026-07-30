@@ -61,7 +61,23 @@
 //! fixed-`⟨ε⟩` limit, straddling 0.329) is a weaker claim than it looks: the
 //! two variants differ only in the cascade cutoff energy, so it is a
 //! one-parameter sensitivity, not two independent limits. See [`CascadeModel`].
-//! Analysis in `docs/M6A_SPEC.md`; external gates in `tests/validation.rs`.
+//!
+//! **The one prediction here with nothing to tune** is the plateau floor
+//! ([`cascade_plateau_intensity`]). Heating and inelastic loss both scale
+//! `∝ ν_m`, so the collision frequency cancels exactly out of `ε_∞`, and the
+//! intensity below which no cascade runs at any pressure is
+//! `δ_eff·U_i·m_e c ε₀ ω²/e²` — containing neither `k_m` nor `D_e`, the kernel's
+//! two least defensible constants. For a monatomic gas `δ = 2m_e/M` is the
+//! atomic mass and `U_i` is spectroscopy, so the floor is parameter-free. Tested
+//! against Chylek's He/Ar/Xe data by
+//! `chylek1990_noble_gas_plateau_floors_are_unequally_tight`: the ordering is
+//! right, the spacing is wrong by up to 8.8×, and the headroom above the floor
+//! is mass-ordered (1.85× / 7.8× / 13.2×) in a way a cascade-only model gives no
+//! reason for.
+//!
+//! Analysis in `docs/M6A_SPEC.md`; external gates in `tests/validation.rs`;
+//! what is verified vs validated vs pinned vs ungated is in
+//! `docs/MODELS.md` § Claims ledger.
 
 use std::f64::consts::PI;
 
@@ -246,16 +262,152 @@ pub fn keldysh_rate(intensity: f64, omega: f64, u_ion: f64, prefactor: f64) -> f
     prefactor * omega * (-s.min(MAX_EXPONENT)).exp()
 }
 
-/// A dry-air optical-breakdown point model at one wavelength.
+/// A monatomic gas, carrying only the two constants that are **exactly known**
+/// for one: the ionization potential, and the elastic fractional energy loss per
+/// collision `δ = 2m_e/M`.
 ///
-/// Construct with [`AirBreakdown::air_1064nm`] for the pinned M6a case, or
-/// [`AirBreakdown::new`] to vary the geometry. All rate methods are pure
-/// functions of `(intensity, pressure)`; the struct holds only fixed gas and
-/// laser parameters.
+/// This type exists because those two constants are enough to state the
+/// cascade's **plateau floor** ([`cascade_plateau_intensity`]) — and because
+/// they are all this repository has a source for. The transport constants a full
+/// threshold curve also needs (`k_m`, `D_e`) come from momentum-transfer cross
+/// sections, which for Ar and Xe swing two orders of magnitude across the
+/// Ramsauer minimum and the resonance peak; no citable table for them has been
+/// landed here, so [`Gas::from_monatomic`] makes the caller supply them rather
+/// than shipping a guess dressed as a constant.
+///
+/// **Why `δ` is not free here, and why that matters.** In air `δ_eff` is a
+/// lumped fitted-range constant (0.01–0.05) that sets the plateau level, and its
+/// freedom is one of M6a's open weaknesses. A monatomic gas has no vibrational
+/// modes and no low-lying electronic ones, so below the first excitation
+/// threshold the only energy loss is elastic recoil, `δ = 2m_e/M` — fixed by the
+/// atomic mass to five figures, with nothing to choose. That removes the knob,
+/// which is what makes the noble gases a sharper test of the cascade model than
+/// air can be.
+///
+/// **And why it is a lower bound, not the answer.** The last leg of every climb
+/// here is above the gas's first excitation threshold — 19.82 of 24.59 eV in He,
+/// 11.55 of 15.76 in Ar, 8.32 of 12.13 in Xe — and in that leg inelastic
+/// excitation dominates elastic recoil by orders of magnitude. So `δ_elastic` is
+/// a **lower bound** on the true `δ_eff`, [`cascade_plateau_intensity`] built
+/// from it is a **lower bound** on the real plateau, and a measured threshold
+/// that already sits close to that bound is in trouble. Quantifying the
+/// correction needs an energy-resolved treatment of the climb, which is exactly
+/// the distribution-resolved cascade M6a hands forward.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MonatomicGas {
+    name: &'static str,
+    /// Ionization potential (J).
+    u_ion: f64,
+    /// Elastic fractional energy loss per collision, `δ = 2m_e/M`.
+    delta_elastic: f64,
+    /// First excitation threshold (J) — above this, `delta_elastic` understates
+    /// the true loss badly. Carried so the bound's direction can be gated.
+    u_excite: f64,
+}
+
+/// Unified atomic mass unit (kg), CODATA.
+const AMU: f64 = 1.660_539_066_60e-27;
+
+impl MonatomicGas {
+    /// Build from the ionization potential (eV), first excitation threshold
+    /// (eV), and atomic mass (u). `δ = 2m_e/M` is computed, never supplied.
+    const fn new(name: &'static str, u_ion_ev: f64, u_excite_ev: f64, mass_u: f64) -> Self {
+        Self {
+            name,
+            u_ion: u_ion_ev * E_CHARGE,
+            delta_elastic: 2.0 * M_E / (mass_u * AMU),
+            u_excite: u_excite_ev * E_CHARGE,
+        }
+    }
+
+    /// Helium. `U_i` = 24.587 eV, first excitation (2³S) 19.82 eV, `M` = 4.0026 u
+    /// ⇒ `δ` = 2.741e-4. Chylek's Fig. 2 filled squares; `K` = 11 at 532 nm.
+    pub const HELIUM: Self = Self::new("He", 24.587, 19.82, 4.002_602);
+    /// Argon. `U_i` = 15.760 eV, first excitation (³P₂) 11.55 eV, `M` = 39.948 u
+    /// ⇒ `δ` = 2.747e-5. Chylek's Fig. 2 filled triangles; `K` = 7 at 532 nm.
+    pub const ARGON: Self = Self::new("Ar", 15.760, 11.55, 39.948);
+    /// Xenon. `U_i` = 12.130 eV, first excitation (³P₂) 8.32 eV, `M` = 131.293 u
+    /// ⇒ `δ` = 8.357e-6. Chylek's Fig. 2 saltire crosses; `K` = 6 at 532 nm.
+    pub const XENON: Self = Self::new("Xe", 12.130, 8.32, 131.293);
+
+    /// Chemical symbol, for gate failure messages.
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Ionization potential (J).
+    pub fn ionization_energy(&self) -> f64 {
+        self.u_ion
+    }
+
+    /// Elastic fractional energy loss per collision, `δ = 2m_e/M` — a **lower
+    /// bound** on the effective `δ_eff`; see the type docs.
+    pub fn elastic_loss_fraction(&self) -> f64 {
+        self.delta_elastic
+    }
+
+    /// First excitation threshold (J), above which [`Self::elastic_loss_fraction`]
+    /// understates the loss.
+    pub fn excitation_energy(&self) -> f64 {
+        self.u_excite
+    }
+
+    /// Fraction of the climb to `U_i` that lies above the first excitation
+    /// threshold — i.e. how much of the ascent the elastic bound does not cover.
+    pub fn inelastic_climb_fraction(&self) -> f64 {
+        (self.u_ion - self.u_excite) / self.u_ion
+    }
+}
+
+/// The cascade's **plateau intensity** (W/m²): the intensity below which
+/// [`CascadeModel::SelfConsistentClimb`] cannot ionize at all, at any pressure
+/// and for any pulse length.
+///
+/// ```text
+/// I_plateau = δ_eff · U_i · m_e·c·ε₀·ω² / e²
+/// ```
+///
+/// **This is the sharpest thing the kernel says, because `k_m` and `D_e` are not
+/// in it.** The equilibrium energy is
+/// `ε_∞ = (e²I/(m_e c ε₀))·ν_m/((ν_m²+ω²)·δ_eff·ν_m)`, and in the optical regime
+/// `ν_m ≪ ω` the collision frequency cancels **exactly** — heating and the
+/// energy-loss rate both scale `∝ ν_m`. Ionization requires `ε_∞ > U_i`, so the
+/// floor depends only on `δ_eff`, `U_i` and the wavelength. Every transport
+/// constant in the model, including the two least defensible ones, drops out.
+///
+/// For a monatomic gas, where `δ_eff` is fixed by the atomic mass rather than
+/// fitted, that makes the floor a **parameter-free prediction** — which is what
+/// `chylek1990_noble_gas_plateau_floors_are_unequally_tight` tests against
+/// measurement.
+///
+/// A cascade-only threshold can never fall below this. A measurement that does
+/// falsifies the model for that gas outright, and a measurement that merely sits
+/// close to it leaves the model no room for the losses it also has to overcome.
+pub fn cascade_plateau_intensity(omega: f64, u_ion: f64, delta_eff: f64) -> f64 {
+    delta_eff * u_ion * M_E * C_LIGHT * EPS0 * omega * omega / (E_CHARGE * E_CHARGE)
+}
+
+/// The gas-dependent constants of the avalanche balance, separated from the
+/// laser and the focal geometry.
+///
+/// Everything here is a property of the **species**, not of the experiment:
+/// ionization potential, momentum-transfer collision frequency, inelastic loss
+/// fraction, free-electron diffusion, and the attachment chemistry. The rest of
+/// [`AirBreakdown`] — `ω`, `Λ`, the focal volume, the breakdown criterion — is a
+/// property of the bench.
+///
+/// The split exists so a second gas can be run through the *same* kernel. That
+/// is not a generality flourish: air's threshold data confounds photon order
+/// with wavelength (a shorter `λ` lowers `K` and raises the cascade term at the
+/// same time), and the only way to separate them in this repo's data is to hold
+/// `λ` fixed and change the gas. See [`Gas::helium`], [`Gas::argon`],
+/// [`Gas::xenon`].
+///
+/// **Constants are set from each species' own literature before any gate runs.**
+/// Tuning one to move a threshold onto a measured curve is curve-fitting and is
+/// forbidden here for the same reason it is forbidden for `Λ` (D5).
 #[derive(Debug, Clone, Copy)]
-pub struct AirBreakdown {
-    /// Laser angular frequency `ω = 2πc/λ` (rad/s).
-    omega: f64,
+pub struct Gas {
     /// Effective ionization energy `U_i` (J).
     u_ion: f64,
     /// Electron-neutral collision-frequency slope `ν_m = k_m·p` (s⁻¹·Pa⁻¹).
@@ -268,6 +420,150 @@ pub struct AirBreakdown {
     /// Mean electron energy `⟨ε⟩` (J), used only by
     /// [`CascadeModel::FixedMeanEnergy`]. Literature ≈ 2–5 eV.
     mean_energy: f64,
+    /// Dissociative-attachment rate coefficient `e + O₂ → O⁻ + O` (m³/s).
+    k_att_2body: f64,
+    /// Three-body attachment rate coefficient `e + O₂ + M → O₂⁻ + M` (m⁶/s).
+    /// Dominant channel in air at atmospheric density; scales as `p²`.
+    k_att_3body: f64,
+    /// Fraction of the gas, by number, that is the attaching species (O₂ in
+    /// air). Zero for the noble gases, which have no attachment channel at all.
+    f_att: f64,
+}
+
+impl Gas {
+    /// Dry air — the M6a case. Every constant is the one the kernel shipped
+    /// with; this constructor is a pure re-packaging and changes no number.
+    pub fn dry_air() -> Self {
+        Self {
+            u_ion: 12.06 * E_CHARGE,
+            k_m: 3.9e7,
+            d_e_ref: 2.0e-1,
+            // δ_eff = 0.02, ⟨ε⟩ = 3 eV — the CENTRE of the literature ranges
+            // (δ_eff ≈ 0.01–0.05 for air above ~1 eV, ⟨ε⟩ ≈ 2–5 eV), not a
+            // value chosen to improve agreement. The ~12× spread in these
+            // ranges is why the external slope gate is an envelope test rather
+            // than a point comparison. See docs/M6A_SPEC.md.
+            delta_eff: 0.02,
+            mean_energy: 3.0 * E_CHARGE,
+            // Attachment from measured rate coefficients, not an s⁻¹Pa⁻¹ fudge
+            // (Kossyi et al. 1992; Itikawa 2009). The three-body channel is the
+            // dominant one at atmospheric density. Both are ~150x smaller than
+            // the order-of-magnitude constant they replaced, which makes
+            // attachment negligible against diffusion and the growth
+            // requirement — see docs/M6A_SPEC.md.
+            k_att_2body: 1.0e-17,
+            k_att_3body: 1.0e-43,
+            f_att: 0.21,
+        }
+    }
+
+    /// A monatomic gas, with the transport constants supplied explicitly.
+    ///
+    /// `U_i` and `δ_eff` come from [`MonatomicGas`] and are exact. `k_m` and
+    /// `d_e_ref` are **required arguments rather than tabulated defaults**, and
+    /// that is deliberate: momentum-transfer cross sections for Ar and Xe swing
+    /// two orders of magnitude between the Ramsauer minimum and the resonance
+    /// peak, so a single `ν_m = k_m·p` is a far cruder approximation for them
+    /// than it is for air, and no citable table has been landed here. Making the
+    /// caller name them keeps an unsourced number from acquiring the authority
+    /// of a constructor default.
+    ///
+    /// Attachment is identically zero — a noble gas has no attaching species,
+    /// which is the other reason these gases isolate the cascade.
+    ///
+    /// Note that the plateau floor ([`cascade_plateau_intensity`]) does **not**
+    /// depend on either supplied constant, so the parameter-free gate does not
+    /// inherit this uncertainty.
+    pub fn from_monatomic(gas: MonatomicGas, k_m: f64, d_e_ref: f64) -> Self {
+        Self {
+            u_ion: gas.u_ion,
+            k_m,
+            d_e_ref,
+            delta_eff: gas.delta_elastic,
+            // No FixedMeanEnergy ⟨ε⟩ is defensible for a gas whose loss is
+            // elastic recoil; the self-consistent climb is the only variant
+            // these species should be run under.
+            mean_energy: gas.delta_elastic * gas.u_ion,
+            k_att_2body: 0.0,
+            k_att_3body: 0.0,
+            f_att: 0.0,
+        }
+    }
+
+    /// Effective ionization energy `U_i` (J).
+    pub fn ionization_energy(&self) -> f64 {
+        self.u_ion
+    }
+
+    /// Electron-neutral collision-frequency slope `k_m`, `ν_m = k_m·p`
+    /// (s⁻¹·Pa⁻¹) — the constant `tt2012_collision_frequency_matches_literature`
+    /// checks against T&T's measured `E_eff/E_B`.
+    pub fn collision_frequency_slope(&self) -> f64 {
+        self.k_m
+    }
+
+    /// Free-electron diffusion coefficient at [`P_REF`] (m²/s).
+    pub fn diffusion_coefficient_ref(&self) -> f64 {
+        self.d_e_ref
+    }
+
+    /// Fractional electron energy loss per collision, `δ_eff`.
+    pub fn inelastic_loss_fraction(&self) -> f64 {
+        self.delta_eff
+    }
+
+    /// Mean electron energy `⟨ε⟩` (J) — [`CascadeModel::FixedMeanEnergy`] only.
+    pub fn mean_energy(&self) -> f64 {
+        self.mean_energy
+    }
+
+    /// Free-electron diffusion coefficient this gas' `k_m` implies at `pressure`
+    /// for an electron of energy `energy` (J), from kinetic theory:
+    ///
+    /// ```text
+    /// D_e = v²/(3·ν_m) = 2ε/(3·m_e·k_m·p)
+    /// ```
+    ///
+    /// **This is why `D_e,ref` is not an independent constant.** `k_m` is
+    /// externally gated against T&T's measured `E_eff/E_B` ratio
+    /// (`tt2012_collision_frequency_matches_literature`, 1.05× and flat over
+    /// 46–1858 Torr), so once an electron energy is named, `D_e` follows. What
+    /// had been a free number becomes a statement about **what energy the
+    /// diffusing electrons are assumed to have** — a quantity a reader can
+    /// judge, and one the model states elsewhere.
+    ///
+    /// The inverse reading is the useful one and is what
+    /// `d_e_ref_implies_a_stated_electron_energy` gates: divide the shipped
+    /// `D_e,ref` by this and ask what `ε` it corresponds to.
+    pub fn kinetic_diffusion_coefficient(&self, pressure: f64, energy: f64) -> f64 {
+        2.0 * energy / (3.0 * M_E * self.k_m * pressure)
+    }
+
+    /// The electron energy (J) that a given `d_e` at `pressure` implies, i.e.
+    /// [`kinetic_diffusion_coefficient`](Self::kinetic_diffusion_coefficient)
+    /// solved for `ε`.
+    pub fn diffusion_implied_energy(&self, pressure: f64, d_e: f64) -> f64 {
+        1.5 * M_E * self.k_m * pressure * d_e
+    }
+}
+
+/// An optical-breakdown point model: one [`Gas`] at one wavelength in one focus.
+///
+/// Construct with [`AirBreakdown::air_1064nm`] for the pinned M6a case, or
+/// [`AirBreakdown::new`] to vary the gas or the geometry. All rate methods are
+/// pure functions of `(intensity, pressure)`; the struct holds only fixed gas
+/// and laser parameters.
+///
+/// The name is historical — the kernel is no longer air-specific — and is kept
+/// deliberately, because every gate in `tests/validation.rs` and every number in
+/// `docs/MODELS.md` refers to it. Renaming it would churn the record for no
+/// physics.
+#[derive(Debug, Clone, Copy)]
+pub struct AirBreakdown {
+    /// Laser angular frequency `ω = 2πc/λ` (rad/s).
+    omega: f64,
+    /// The species: `U_i`, `k_m`, `D_e`, `δ_eff`, `⟨ε⟩`, attachment.
+    gas: Gas,
     /// Which limit of the energy balance drives the cascade.
     cascade_model: CascadeModel,
     /// Pulse-integration half-window, in FWHMs. A converged model must give a
@@ -275,13 +571,6 @@ pub struct AirBreakdown {
     window_half_widths: f64,
     /// Diffusion length `Λ` (m), from the focal geometry — **pinned, not fit**.
     lambda_diff: f64,
-    /// Dissociative-attachment rate coefficient `e + O₂ → O⁻ + O` (m³/s).
-    k_att_2body: f64,
-    /// Three-body attachment rate coefficient `e + O₂ + M → O₂⁻ + M` (m⁶/s).
-    /// Dominant channel in air at atmospheric density; scales as `p²`.
-    k_att_3body: f64,
-    /// O₂ fraction of dry air by number.
-    f_o2: f64,
     /// Per-neutral multiphoton ionization rate at [`Self::mpi_i_ref`] (s⁻¹).
     /// Zero disables the MPI source entirely (the default).
     mpi_rate_ref: f64,
@@ -303,14 +592,13 @@ pub struct AirBreakdown {
 }
 
 impl AirBreakdown {
-    /// General constructor. `wavelength` (m), `u_ion_ev` effective ionization
-    /// energy (eV), `lambda_diff` diffusion length (m, from geometry),
-    /// `temperature` (K) for the neutral density, `focal_volume` (m³) for the
-    /// single-electron seed.
+    /// General constructor. `wavelength` (m), the [`Gas`], `lambda_diff`
+    /// diffusion length (m, from geometry), `temperature` (K) for the neutral
+    /// density, `focal_volume` (m³) for the single-electron seed.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         wavelength: f64,
-        u_ion_ev: f64,
+        gas: Gas,
         lambda_diff: f64,
         temperature: f64,
         focal_volume: f64,
@@ -327,39 +615,23 @@ impl AirBreakdown {
         if !(focal_volume > 0.0 && focal_volume.is_finite()) {
             bail!("focal volume must be positive and finite, got {focal_volume}");
         }
-        if !(u_ion_ev > 0.0 && u_ion_ev.is_finite()) {
-            bail!("ionization energy must be positive and finite, got {u_ion_ev} eV");
+        if !(gas.u_ion > 0.0 && gas.u_ion.is_finite()) {
+            bail!(
+                "ionization energy must be positive and finite, got {} J",
+                gas.u_ion
+            );
         }
         const K_B: f64 = 1.380_649e-23;
         let omega = 2.0 * PI * C_LIGHT / wavelength;
         let photon_energy = HBAR * omega;
-        let u_ion = u_ion_ev * E_CHARGE;
         // Photons to reach the ionization potential, ⌈U_ion/ħω⌉.
-        let k_photons = (u_ion / photon_energy).ceil() as i32;
+        let k_photons = (gas.u_ion / photon_energy).ceil() as i32;
         Ok(Self {
             omega,
-            u_ion,
-            k_m: 3.9e7,
-            d_e_ref: 2.0e-1,
-            // δ_eff = 0.02, ⟨ε⟩ = 3 eV — the CENTRE of the literature ranges
-            // (δ_eff ≈ 0.01–0.05 for air above ~1 eV, ⟨ε⟩ ≈ 2–5 eV), not a
-            // value chosen to improve agreement. The ~12× spread in these
-            // ranges is why the external slope gate is an envelope test rather
-            // than a point comparison. See docs/M6A_SPEC.md.
-            delta_eff: 0.02,
-            mean_energy: 3.0 * E_CHARGE,
+            gas,
             cascade_model: CascadeModel::SelfConsistentClimb,
             window_half_widths: 2.0,
             lambda_diff,
-            // Attachment from measured rate coefficients, not an s⁻¹Pa⁻¹ fudge
-            // (Kossyi et al. 1992; Itikawa 2009). The three-body channel is the
-            // dominant one at atmospheric density. Both are ~150x smaller than
-            // the order-of-magnitude constant they replaced, which makes
-            // attachment negligible against diffusion and the growth
-            // requirement — see docs/M6A_SPEC.md.
-            k_att_2body: 1.0e-17,
-            k_att_3body: 1.0e-43,
-            f_o2: 0.21,
             // MPI source off by default: the seed electron (n_e0 = 1/V_focal)
             // is the initial condition, and the avalanche multiplies it. The
             // continuous multiphoton source is the swappable term (docs Open
@@ -417,7 +689,12 @@ impl AirBreakdown {
         let l_axial = 0.414 * (1e-3 / 1e-2) * 0.04_f64.powi(2); // = 66.2 µm
         let lambda_diff = 1.0 / ((PI / l_axial).powi(2) + (2.405 / r_focus).powi(2)).sqrt();
         let focal_volume = PI * r_focus * r_focus * l_axial;
-        Self::new(wavelength, 12.06, lambda_diff, 288.0, focal_volume)
+        Self::new(wavelength, Gas::dry_air(), lambda_diff, 288.0, focal_volume)
+    }
+
+    /// The gas this model is running.
+    pub fn gas(&self) -> Gas {
+        self.gas
     }
 
     /// Rebuild with a different inelastic-loss parameterisation, from the two
@@ -430,8 +707,23 @@ impl AirBreakdown {
     /// default sits at the centre of those ranges and the gate never selects a
     /// value that improves agreement.
     pub fn with_inelastic_loss(mut self, delta_eff: f64, mean_energy_ev: f64) -> Self {
-        self.delta_eff = delta_eff;
-        self.mean_energy = mean_energy_ev * E_CHARGE;
+        self.gas.delta_eff = delta_eff;
+        self.gas.mean_energy = mean_energy_ev * E_CHARGE;
+        self
+    }
+
+    /// Rebuild with a different free-electron diffusion coefficient at
+    /// [`P_REF`] (m²/s).
+    ///
+    /// Exists for the same reason [`Self::with_inelastic_loss`] does, and under
+    /// the same rule: it is there so a gate can **sweep** `D_e` across the band
+    /// kinetic theory allows and pin how far the threshold slope moves, not so a
+    /// value can be selected. The project's 2026-07-24 sensitivity audit
+    /// flagged `D_e` as the constant with the largest unmeasured leverage on the
+    /// result; `d_e_sensitivity_is_pinned_across_the_kinetic_band` is what turns
+    /// that word into a number.
+    pub fn with_diffusion_coefficient(mut self, d_e_ref: f64) -> Self {
+        self.gas.d_e_ref = d_e_ref;
         self
     }
 
@@ -520,7 +812,7 @@ impl AirBreakdown {
     /// loss both scale `∝ p`. [`CascadeModel::SelfConsistentClimb`] ionizes only
     /// where this exceeds `U_i`, which is what fixes its threshold plateau.
     pub fn equilibrium_energy(&self, intensity: f64, pressure: f64) -> f64 {
-        self.heating_power(intensity, pressure) / (self.delta_eff * self.k_m * pressure)
+        self.heating_power(intensity, pressure) / (self.gas.delta_eff * self.gas.k_m * pressure)
     }
 
     /// Initial seed density `n_e0` (m⁻³): one electron in the focal volume.
@@ -545,7 +837,7 @@ impl AirBreakdown {
     /// `P = (e²·I)/(m_e·c·ε₀) · ν_m/(ν_m²+ω²)` with `ν_m = k_m·p`. In the
     /// optical regime `ν_m ≪ ω` this is `∝ I·p`.
     pub fn heating_power(&self, intensity: f64, pressure: f64) -> f64 {
-        let nu_m = self.k_m * pressure;
+        let nu_m = self.gas.k_m * pressure;
         let p_abs = E_CHARGE * E_CHARGE * intensity / (M_E * C_LIGHT * EPS0);
         p_abs * nu_m / (nu_m * nu_m + self.omega * self.omega)
     }
@@ -555,7 +847,7 @@ impl AirBreakdown {
     /// Vibrational and electronic excitation of N₂/O₂ drain the electron on its
     /// climb to `U_i`. Scales `∝ p` because it goes as the collision frequency.
     pub fn inelastic_loss_power(&self, pressure: f64) -> f64 {
-        self.delta_eff * self.k_m * pressure * self.mean_energy
+        self.gas.delta_eff * self.gas.k_m * pressure * self.gas.mean_energy
     }
 
     /// Cascade (avalanche) ionization frequency `ν_i(I, p)` (s⁻¹).
@@ -576,18 +868,18 @@ impl AirBreakdown {
             CascadeModel::FixedMeanEnergy => {
                 let net =
                     self.heating_power(intensity, pressure) - self.inelastic_loss_power(pressure);
-                net.max(0.0) / self.u_ion
+                net.max(0.0) / self.gas.u_ion
             }
             CascadeModel::SelfConsistentClimb => {
                 let eps_inf = self.equilibrium_energy(intensity, pressure);
-                if eps_inf <= self.u_ion {
+                if eps_inf <= self.gas.u_ion {
                     // Losses cap the electron below the ionization potential:
                     // the climb never completes, however long the pulse.
                     return 0.0;
                 }
                 // t_climb = t_r·ln(ε_∞/(ε_∞ − U_i)), t_r = 1/(δ_eff·ν_m).
-                let nu_relax = self.delta_eff * self.k_m * pressure;
-                nu_relax / (eps_inf / (eps_inf - self.u_ion)).ln()
+                let nu_relax = self.gas.delta_eff * self.gas.k_m * pressure;
+                nu_relax / (eps_inf / (eps_inf - self.gas.u_ion)).ln()
             }
         }
     }
@@ -615,11 +907,33 @@ impl AirBreakdown {
     /// validated.
     pub fn loss_rate(&self, pressure: f64) -> f64 {
         let n_neutral = self.n_over_p * pressure;
-        let n_o2 = self.f_o2 * n_neutral;
-        let nu_att = self.k_att_2body * n_o2 + self.k_att_3body * n_o2 * n_neutral;
-        let d_e = self.d_e_ref * (P_REF / pressure);
-        let nu_diff = d_e / (self.lambda_diff * self.lambda_diff);
+        let n_o2 = self.gas.f_att * n_neutral;
+        let nu_att = self.gas.k_att_2body * n_o2 + self.gas.k_att_3body * n_o2 * n_neutral;
+        let nu_diff = self.diffusion_coefficient(pressure) / (self.lambda_diff * self.lambda_diff);
         nu_att + nu_diff
+    }
+
+    /// Free-electron diffusion coefficient at `pressure` (m²/s),
+    /// `D_e = D_e,ref·(p_ref/p)`.
+    ///
+    /// Exposed as its own method so the `D_e` gates test the path
+    /// [`loss_rate`](Self::loss_rate) actually takes, rather than a
+    /// re-derivation of it in the test file.
+    pub fn diffusion_coefficient(&self, pressure: f64) -> f64 {
+        self.gas.d_e_ref * (P_REF / pressure)
+    }
+
+    /// Diffusion length `Λ` (m) — from the focal geometry, **pinned, not fit**.
+    pub fn diffusion_length(&self) -> f64 {
+        self.lambda_diff
+    }
+
+    /// This model's cascade plateau floor (W/m²) — see
+    /// [`cascade_plateau_intensity`]. Below it
+    /// [`CascadeModel::SelfConsistentClimb`] gives `ν_i = 0` at every pressure,
+    /// so no cascade-only threshold can lie beneath it.
+    pub fn plateau_intensity(&self) -> f64 {
+        cascade_plateau_intensity(self.omega, self.gas.u_ion, self.gas.delta_eff)
     }
 
     /// Multiphoton seed rate `S_mpi` (m⁻³·s⁻¹), written about a reference
@@ -637,7 +951,12 @@ impl AirBreakdown {
         let n_neutral = self.n_over_p * pressure;
         if self.keldysh_prefactor > 0.0 {
             return n_neutral
-                * keldysh_rate(intensity, self.omega, self.u_ion, self.keldysh_prefactor);
+                * keldysh_rate(
+                    intensity,
+                    self.omega,
+                    self.gas.u_ion,
+                    self.keldysh_prefactor,
+                );
         }
         if self.mpi_rate_ref == 0.0 {
             return 0.0;
@@ -856,9 +1175,12 @@ mod tests {
         // Suppress losses and source for this limit by evaluating advance with
         // a model whose loss and MPI are zero: build a bespoke one.
         let bare = AirBreakdown {
-            k_att_2body: 0.0,
-            k_att_3body: 0.0,
-            d_e_ref: 0.0,
+            gas: Gas {
+                k_att_2body: 0.0,
+                k_att_3body: 0.0,
+                d_e_ref: 0.0,
+                ..m.gas
+            },
             mpi_rate_ref: 0.0,
             ..m
         };
@@ -905,9 +1227,12 @@ mod tests {
         let p = 760.0 * TORR;
         let s = 1e30; // m⁻³ s⁻¹
         let balanced = AirBreakdown {
-            k_att_2body: 0.0,
-            k_att_3body: 0.0,
-            d_e_ref: 0.0,
+            gas: Gas {
+                k_att_2body: 0.0,
+                k_att_3body: 0.0,
+                d_e_ref: 0.0,
+                ..m.gas
+            },
             ..m
         };
         // Force β=0 by giving cascade zero intensity and injecting S via a
@@ -922,7 +1247,10 @@ mod tests {
         // At I0 the cascade is nonzero, so also null it to isolate β=0: use a
         // separate check via advance math with cascade suppressed.
         let src0 = AirBreakdown {
-            u_ion: f64::INFINITY, // ν_i → 0
+            gas: Gas {
+                u_ion: f64::INFINITY, // ν_i → 0
+                ..src.gas
+            },
             ..src
         };
         let dt = 1e-11;
@@ -947,10 +1275,13 @@ mod tests {
         let s = 5e29;
         let i0: f64 = 1e17;
         let bal = AirBreakdown {
-            u_ion: f64::INFINITY, // no cascade → β = −loss; cancel loss too
-            k_att_2body: 0.0,
-            k_att_3body: 0.0,
-            d_e_ref: 0.0,
+            gas: Gas {
+                u_ion: f64::INFINITY, // no cascade → β = −loss; cancel loss too
+                k_att_2body: 0.0,
+                k_att_3body: 0.0,
+                d_e_ref: 0.0,
+                ..m.gas
+            },
             mpi_rate_ref: s / (m.n_over_p * p),
             mpi_i_ref: i0,
             ..m
@@ -1223,9 +1554,9 @@ mod tests {
         let m = model();
         let p = P_REF;
         let n = m.n_over_p * p;
-        let n_o2 = m.f_o2 * n;
-        let nu_att = m.k_att_2body * n_o2 + m.k_att_3body * n_o2 * n;
-        let nu_diff = m.d_e_ref * (P_REF / p) / (m.lambda_diff * m.lambda_diff);
+        let n_o2 = m.gas.f_att * n;
+        let nu_att = m.gas.k_att_2body * n_o2 + m.gas.k_att_3body * n_o2 * n;
+        let nu_diff = m.gas.d_e_ref * (P_REF / p) / (m.lambda_diff * m.lambda_diff);
         assert!(
             nu_att < 0.05 * nu_diff,
             "attachment {nu_att:e} is not negligible against diffusion {nu_diff:e}"
@@ -1237,8 +1568,8 @@ mod tests {
         // Torr rather than in the gate window. (An earlier comment here claimed
         // three-body was dominant at 1 atm; it is not, and nothing was gated on
         // it — this assertion only ever demanded it be non-negligible.)
-        let two_body = m.k_att_2body * n_o2;
-        let three_body = m.k_att_3body * n_o2 * n;
+        let two_body = m.gas.k_att_2body * n_o2;
+        let three_body = m.gas.k_att_3body * n_o2 * n;
         assert!(three_body > 0.1 * two_body && three_body < two_body);
     }
 

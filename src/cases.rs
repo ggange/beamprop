@@ -15,7 +15,7 @@ use ndarray::{Array2, Array3, s};
 use crate::airprops::AirTable;
 use crate::aperture::Aperture;
 use crate::blooming::ThermalBlooming;
-use crate::breakdown0d::AirBreakdown;
+use crate::breakdown0d::{AirBreakdown, Gas};
 use crate::euler1d::{IdealGas, Primitive};
 use crate::field::{Field, IntensityScale};
 use crate::grid::Grid;
@@ -410,7 +410,7 @@ pub fn run_breakdown(p: &BreakdownParams) -> Result<BreakdownRun> {
         let r_focus = 20e-6;
         AirBreakdown::new(
             p.wavelength,
-            12.06,
+            Gas::dry_air(),
             r_focus / std::f64::consts::PI,
             288.0,
             4.0 / 3.0 * std::f64::consts::PI * r_focus.powi(3),

@@ -191,7 +191,7 @@ constants moved the slope substantially:
 |---|---|
 | `n_bd` ×0.1 / ×10 | negligible |
 | pulse FWHM 5 / 7 ns | ±2 % |
-| `D_e` ×0.5 / ×2 | **large** — `ν_diff` and `G` are comparable, not sub-dominant |
+| `D_e` ×0.5 / ×2 | **large** — `ν_diff` and `G` are comparable, not sub-dominant (quantified 2026-07-30, below) |
 | generation prefactor `ln 2` vs 1 | **~30 %** |
 
 Both findings stand. The `D_e` sensitivity in particular withdraws any claim
@@ -200,6 +200,61 @@ pre-plateau model. What the 2026-07-24 audit *missed* was the window artifact,
 which a numerical-hygiene check (vary the integration bounds, demand
 invariance) would have caught immediately; that check now exists as
 `threshold_is_window_independent`.
+
+**`D_e` gated — 2026-07-30.** The audit's "large" was a word for two years of
+this milestone's life, and a word cannot fail in CI. Two gates now replace it.
+
+*`d_e_ref_implies_a_stated_electron_energy` (verification).* `D_e` is not
+independent of `K_m`, which **is** externally gated. Kinetic theory gives
+`D_e = v²/(3ν_m) = 2ε/(3·m_e·K_m·p)`, so naming an energy fixes `D_e` and naming
+`D_e` fixes an energy. Read that way the shipped constant says
+
+```text
+D_e,ref = 0.2 m²/s   ⟺   ε = 6.740 eV   at p_ref
+```
+
+which is a defensible energy for an electron mid-climb — above the 2–5 eV swarm
+band, below the `U_i` = 12.06 eV it is climbing to. `D_e` is no longer free; it
+is a stated assumption about the diffusing population.
+
+*The inconsistency this exposed, pinned not fixed.* `FixedMeanEnergy` evaluates
+its inelastic loss at `⟨ε⟩ = 3 eV`. Diffusion and inelastic loss therefore assign
+the same electrons **two energies differing by 2.25×**, in two terms of one
+balance. The gate asserts that ratio so it cannot drift. It is deliberately not
+repaired here: matching `D_e` to `⟨ε⟩` would take it to 0.089 m²/s and move every
+published M6a number, which needs its own argument. (The default
+`SelfConsistentClimb` has no `⟨ε⟩` and runs to `ε_∞` ≈ 12–15 eV at threshold, so
+for the default variant 6.74 eV is the less strained of the two.)
+
+*`d_e_sensitivity_is_pinned_across_the_kinetic_band` (the number).* Sweeping
+`D_e` over the full band that formula admits — `ε` from 2 eV to `U_i`, a 6.0×
+range — and refitting the 300–2000 Torr slope at each end:
+
+| `ε` (eV) | `D_e,ref` (m²/s) | fitted `n` |
+|---|---|---|
+| 2.00 | 0.0593 | 0.0532 |
+| 3.00 | 0.0890 | 0.0608 |
+| 5.00 | 0.1484 | 0.0779 |
+| **6.74 (default)** | **0.2000** | **0.0951** |
+| 10.00 | 0.2967 | 0.1307 |
+| 12.06 (`U_i`) | 0.3578 | 0.1545 |
+
+**The conclusion is negative, and it is the useful part.** A 6.0× range in the
+milestone's largest ungated constant moves the slope by 0.101, against a
+shortfall of 0.234 to T&T's measured 0.329. Even the most diffusion-heavy
+defensible choice leaves the model less than halfway there. `D_e` **cannot**
+explain the slope gap, and the gate asserts that it cannot — closing off a
+re-tuning route that nothing in the repo previously ruled out.
+
+**The external-anchor debt, stated precisely.** No swarm-data gate is landed, and
+the reason is stronger than "the table was not obtained". Swarm measurements
+(Dutton 1975; Huxley & Crompton) sit at characteristic energies of 0.1–2 eV; the
+cascade electron sits at 6.7 eV. Getting from one to the other runs back through
+*this same kinetic formula*, whose only external input is `K_m` — already
+validated. A swarm gate would re-validate `K_m` while appearing to validate
+`D_e`. So the honest status is **verified as consistent, not validated as
+correct**, and closing it needs a diffusion measurement at the cascade's own
+energy. That is the D5 discipline applied to a second constant.
 
 ### Diffusion loss `ν_diff` — Λ is pinned, never fit (D5)
 
@@ -818,6 +873,82 @@ M6a's headline. M6a's status, stated plainly: **verified against cascade theory,
 falsified against air on both the pressure and the wavelength axis.** The debt is
 closed in the sense D5 cares about — an independent anchor exists and has been
 confronted — not in the sense of the model having been vindicated.
+
+### General-gas kernel — 2026-07-30, and the one knob-free prediction
+
+The kernel's gas-dependent constants (`U_i`, `K_m`, `D_e`, `δ_eff`, `⟨ε⟩`, the
+attachment chemistry) are now a `Gas` value; the laser and the focal geometry
+stay on `AirBreakdown`. `Gas::dry_air()` is a pure re-packaging — the `breakdown`
+case's output is bit-identical across the change and no gate number moved. The
+type name `AirBreakdown` is kept deliberately: every gate and every published
+number refers to it, and renaming would churn the record for no physics.
+
+**What this unlocks, and why it is sharper than air.** Three digitized Chylek
+Fig. 2 curves (He / Ar / Xe) had been sitting in `tests/data/` with only their own
+integrity gate, because nothing could consume them. They are the only data here
+that tests the cascade with `δ_eff` **not free**. A monatomic gas has no
+vibrational and no low-lying electronic modes, so below its first excitation
+threshold the loss per collision is elastic recoil, `δ = 2m_e/M` — the atomic
+mass, to five figures, with nothing to choose. In air `δ_eff` is a
+literature-range constant that sets the plateau level and is one of M6a's
+standing weaknesses. Here it is arithmetic.
+
+**The prediction has no parameters at all.** Writing out the equilibrium energy,
+`ε_∞ = (e²I/(m_e c ε₀))·ν_m/((ν_m²+ω²)·δ_eff·ν_m)`, the collision frequency
+**cancels exactly** in the optical regime `ν_m ≪ ω` — heating and loss both go as
+`ν_m`. Ionization requires `ε_∞ > U_i`, so the cascade has a hard floor
+
+```text
+I_plateau = δ_eff · U_i · m_e·c·ε₀·ω² / e²
+```
+
+containing no transport constant whatsoever. `D_e` and `K_m` — the kernel's two
+least defensible numbers, and for the noble gases wholly unsourced — drop out.
+`cascade_plateau_floor_is_independent_of_the_transport_constants` proves this by
+perturbing `D_e` 100× either way and demanding the floor not move, and by
+checking the integrated `cascade_rate` is identically zero just below the floor
+at every pressure. So the comparison below inherits none of that uncertainty.
+
+**The comparison** (`chylek1990_noble_gas_plateau_floors_are_unequally_tight`),
+at Chylek's 532 nm:
+
+| gas | `K` | `δ = 2m_e/M` | `U_i` (eV) | floor (W/cm²) | measured `I_th` | headroom |
+|---|---|---|---|---|---|---|
+| He | 11 | 2.741e-4 | 24.587 | 1.275e11 | 2.36e11 @ 672 Torr | **1.85×** |
+| Ar | 7 | 2.747e-5 | 15.760 | 8.190e9 | 6.37e10 @ 838 Torr | 7.8× |
+| Xe | 6 | 8.357e-6 | 12.130 | 1.918e9 | 2.53e10 @ 725 Torr | 13.2× |
+
+*What passes.* No curve falls below its floor, so the elastic-`δ` cascade is not
+outright falsified for any of the three, and the **ordering** He > Ar > Xe is
+right, as `δ·U_i` demands.
+
+*What fails, and is pinned.* The **spacing** is wrong and tracks the mass ratio.
+Predicted floor ratios are He/Ar = 15.6 and Ar/Xe = 4.27; measured threshold
+ratios are ≈2.5 and ≈3.0. Ar/Xe is nearly right; He/Ar is over by 6.3× and He/Xe
+by 8.8×. There is no constant left to turn — that is what "parameter-free" costs
+when the prediction misses.
+
+*The sharper reading is the headroom.* 1.85× / 7.8× / 13.2×, monotone in atomic
+mass. A cascade-only kernel offers no reason for that spread: every gas must
+clear the same diffusion and finite-pulse growth requirement above its own floor,
+and He is left with almost none. And `δ_elastic` is a **lower bound** — the top
+of each climb runs above the first excitation threshold (19 % of the ascent in
+He, 27 % in Ar, 31 % in Xe), where inelastic losses dwarf elastic recoil, so the
+true floors are all higher than these. He, with 1.85×, is the gas that breaks
+first. Computing that correction is precisely the distribution-resolved cascade
+work M6a hands forward, and this gate is where it would show up.
+
+**What is deliberately not landed.** Full noble-gas *threshold curves*. Those
+need `K_m` and `D_e` per gas, which come from momentum-transfer cross sections —
+and for Ar and Xe those swing two orders of magnitude between the Ramsauer
+minimum and the resonance peak, so a single `ν_m = K_m·p` is a far cruder
+approximation there than in air. No citable table was obtained, so
+`Gas::from_monatomic` takes both as **required arguments** rather than shipping a
+guess with the authority of a constructor default. Chylek's focal geometry is
+short of a derivation too: the paper gives a 10 cm lens and a ~33 µm focal
+diameter but not the beam diameter, so the divergence-limited depth of focus —
+and with it `Λ` and the focal volume — cannot be reconstructed the way T&T's Eq. 5
+was. Both are recorded as debts rather than filled with plausible numbers.
 
 ## NOT in scope (M6a)
 
