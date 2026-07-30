@@ -1519,10 +1519,13 @@ fn d_e_ref_implies_a_stated_electron_energy() {
 /// failure message so a future change shows its own number.
 #[test]
 fn d_e_sensitivity_is_pinned_across_the_kinetic_band() {
-    use beamprop::breakdown0d::AirBreakdown;
+    use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
     const P_REF: f64 = 101_325.0;
 
-    let base = AirBreakdown::air_1064nm();
+    // Pin the closure explicitly. Every number in this gate is a
+    // mean-trajectory number, and reading the crate default instead would make
+    // the gate silently re-target itself if that default ever moves.
+    let base = AirBreakdown::air_1064nm().with_cascade_model(CascadeModel::SelfConsistentClimb);
     let gas = base.gas();
     let u_ion = gas.ionization_energy();
 
@@ -3421,9 +3424,14 @@ fn lsd_velocity_level_tracks_the_eos_coefficient() {
 /// not: the gate perturbs both by 100× and demands the floor not move.
 #[test]
 fn cascade_plateau_floor_is_independent_of_the_transport_constants() {
-    use beamprop::breakdown0d::{AirBreakdown, cascade_plateau_intensity};
+    use beamprop::breakdown0d::{AirBreakdown, CascadeModel, cascade_plateau_intensity};
 
-    let base = AirBreakdown::air_1064nm();
+    // The hard cutoff below is a property of the MEAN-TRAJECTORY closure, so it
+    // is pinned here rather than inherited from the crate default:
+    // `DistributionResolved` ionizes below this floor by design
+    // (`distribution_resolved_softens_the_plateau_floor`), and a gate that read
+    // the default would turn that intended behaviour into a failure.
+    let base = AirBreakdown::air_1064nm().with_cascade_model(CascadeModel::SelfConsistentClimb);
     let floor = base.plateau_intensity();
 
     // The closed form and the model's own accessor agree.
