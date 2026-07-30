@@ -9,8 +9,11 @@
 //!   O(N_φ²) residual, checked against an analytic first-order reference;
 //! - **stability** — a strong-blooming run stays finite and dz-convergent;
 //! - **B3** qualitative signatures (upwind shift, crescent, irradiance
-//!   rollover); the quantitative Smith/Gebhardt curve is `#[ignore]`d pending
-//!   the digitized figure.
+//!   rollover), plus the quantitative Smith (1977) `I_REL(N)` curve — reproduced
+//!   to 7.2 % over `N ∈ [0.5, 1.8]` at `F₀ = 5` against
+//!   `tests/data/smith1977_F5.csv`. (This note used to say that gate was
+//!   `#[ignore]`d pending the digitized figure; the figure landed and the gate
+//!   has been running ever since.)
 
 use ndarray::Array2;
 

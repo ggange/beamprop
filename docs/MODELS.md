@@ -50,7 +50,7 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 86 rows below: 54 verified, 7 validated, 13 pinned, 12 ungated.**
+**Census of the 86 rows below: 54 verified, 8 validated, 12 pinned, 12 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
 not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
@@ -122,12 +122,12 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | The high-pressure slope lies between the model's analytic limits | `breakdown0d::tests::high_pressure_threshold_slope_lies_between_analytic_limits` | verified | 0.095 … 0.468 |
 | The literature-range inelastic envelope brackets the slope | `breakdown0d::tests::inelastic_loss_envelope_brackets_the_slope` | verified | over `δ_eff` 0.01–0.05, `⟨ε⟩` 2–5 eV |
 | Per-slice integrator is exact and step-size independent | `breakdown0d::tests::{pure_cascade_is_exponential_growth, pure_loss_is_exponential_decay, mpi_only_seeding_is_linear, balance_point_is_linear_from_seed, slice_refinement_is_consistent}` | verified | 1e-9 relative |
-| **Measured `I_thr(p)` slope is unreachable by a cascade-only kernel** | `tt2012_threshold_slope_matches_measurement` *(`#[ignore]`d, red by design)* | **pinned** | measured `p^-0.329`; T&T's own cascade theory says `n ≈ 0` |
-| **Chylek's air threshold is a power law and the kernel is not** | `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | **pinned** | measured 0.428/0.413/0.468; kernel 1.951/1.047/0.170 — it *crosses* the data near 250 Torr |
-| **Cascade `λ⁻²` is falsified against measurement, in sign** | `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared` | **pinned** | kernel 3.99 vs measured ≈ 0.80; overshoot ≈ 4.99× |
-| **Keldysh MPI does not close the wavelength gap** | `keldysh_mpi_does_not_close_the_wavelength_gap` | **pinned** | closes ~3 % of it at any sane prefactor |
+| **Measured `I_thr(p)` slope, against the `δ_eff` literature envelope** | `tt2012_threshold_slope_matches_measurement` | **validated** | measured 0.329 inside `[0.183, 0.407]`; centre 0.279. Red and `#[ignore]`d 2026-07-25 → 2026-07-30, retired by the closure change, not by re-banding |
+| **Chylek's low-pressure branch: the kernel is still far too steep** | `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | **pinned** | 10–100 Torr: kernel 1.954 vs measured 0.428. The high-pressure window now *agrees* (0.466 vs 0.468), so the failure is one-sided and localised to diffusion |
+| **The wavelength ratio is falsified against measurement, in sign** | `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared` | **pinned** | kernel 3.39 vs measured ≈ 0.80; overshoot ≈ 4.24× (was 3.99 / 4.99× before the closure change) |
+| **Keldysh MPI does not close the wavelength gap** | `keldysh_mpi_does_not_close_the_wavelength_gap` | **pinned** | order-unity prefactor lands at 2.89 vs measured 0.80; the 18 % of the gap it closes is a smaller denominator, not a better rate |
 | **T&T's own MPI calibration undershoots their own measurement** | `breakdown0d::tests::tt2012_mpi_calibration_undershoots_the_data` | **pinned** | 37× below |
-| Level offset stays inside the inter-lab scatter, with a drift pin | `tt2012_level_ratio_is_bounded_within_scatter` | **pinned** | bounded offset; drift in the direction the corrected slope predicts |
+| Level offset stays inside the inter-lab scatter, with a drift pin | `tt2012_level_ratio_is_bounded_within_scatter` | **pinned** | 3.90–4.69× high; drift 1.48× → 1.20× as the slope error shrank |
 | The two cascade limits bracket the measurement | `breakdown0d::tests::the_two_cascade_models_bracket_the_measurement` | **pinned** | 0.468 / 0.095 straddle 0.329 — but this is a **one-parameter sensitivity**, not two independent limits |
 | First-passage rate reduces to the mean-trajectory closed form as `D_ε → 0` | `first_passage_reduces_to_the_mean_energy_climb` | verified | ratio 0.821 → 0.990 as `ħω` falls 1.166 → 0.05 eV; grid-converged at each point |
 | First-passage quadrature is 2nd order and the shipped `N` is converged | `first_passage_quadrature_is_converged` | verified | order ≈2; `N` = 512 within 2e-4 at 1064 and 532 nm |
@@ -190,17 +190,19 @@ screen linearly in `r₀`), and a width gate (no independent anchor).
 
 ### What this table says, in one paragraph
 
-Seven claims in this solver are checked against something external and measured,
-and two of those seven are M6a data-integrity checks — they establish that a
+Eight claims in this solver are checked against something external and measured,
+and two of those eight are M6a data-integrity checks — they establish that a
 digitization reproduces its own published figure, not that the model reproduces
 the gas. Of the rest, `K_m` and the sign of `E_eff(p)` are agreements about
 model *inputs* rather than outputs. **M6a's threshold curve has exactly one
 validated agreement, and it is recent and partial**: resolving the electron
 energy distribution brought the high-pressure slope from outside the model's
-literature envelope to inside it, on both measured datasets. The low-pressure
-branch, the wavelength ratio, and the noble-gas spacing are all still pinned
-disagreements — and the fact that the same change moved the first and not the
-others is what now separates M6a's remaining failures into distinct mechanisms.
+literature envelope to inside it, on both measured datasets, which retired a gate
+that had been failing on purpose for five days. It is envelope containment over a
+constant still free within a 5× literature range, not a point agreement. The
+low-pressure branch, the wavelength ratio, and the noble-gas spacing remain
+pinned disagreements — and the fact that one change moved the first and left the
+others untouched is what now separates M6a's failures into distinct mechanisms.
 M1–M4 are in a different position: their physics is
 diffraction, extinction and turbulence, where closed forms are exact and
 verification is close to the whole job, and M4 additionally reproduces a
@@ -770,7 +772,17 @@ plateau floor no longer bounds anything: the threshold slides under it,
 (`distribution_resolved_softens_the_plateau_floor`), so the noble-gas headroom
 figures below are a bound for the mean-trajectory closure only.
 
-**Not the default**, so every other number in this file is unaffected.
+**The default since 2026-07-30.** It landed as a variant first so that its
+effect on every published number was measured rather than asserted, then was
+promoted. The promotion retired M6a's long-standing red gate:
+`tt2012_threshold_slope_matches_measurement` had been `#[ignore]`d and failing
+since 2026-07-25 and now passes — with no tolerance moved and no constant
+touched, because the model changed rather than the test. Numbers that moved with
+it: the level-ratio drift 1.48× → 1.20× (a smaller drift is a smaller residual
+*slope* error), the λ-ratio baseline 3.99 → 3.39, and the M6c pulse-length floor,
+which is now asymptotic rather than flat — 8.510e15 at 6 ns converging to
+6.797e15 by ~10 µs, a bounded 1.25 % … 1.25× fall rather than the fluence
+criterion that would break M6c's two-stage argument.
 
 Reference: A. J. F. Siegert, *On the first passage time probability problem*,
 Phys. Rev. **81**, 617 (1951) — the mean-first-passage quadrature; the

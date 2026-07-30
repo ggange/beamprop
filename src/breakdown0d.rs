@@ -46,7 +46,8 @@
 //! `tt2012_cascade_theory_reference`. Against the raw measurement it does not,
 //! and cannot: no cascade-only model can produce the measured `n = 0.329` when
 //! accepted cascade theory says `n ≈ 0`. That gate
-//! (`tt2012_threshold_slope_matches_measurement`) is red on purpose.
+//! (`tt2012_threshold_slope_matches_measurement`) was red on purpose until the
+//! cascade closure changed; see the distribution-resolved note below.
 //!
 //! On the **wavelength** axis the agreement is structural rather than a level
 //! comparison: both terms of `I_thr` carry `1/h ∝ ω²`, so the kernel predicts
@@ -57,8 +58,10 @@
 //! inelastic energy loss per collision — and agree to 1 % at the literature
 //! centre. That is the branch's sharpest physical result.
 //!
-//! The pressure-slope **bracket** (`n = 0.095` here, `0.468` for the
-//! fixed-`⟨ε⟩` limit, straddling 0.329) is a weaker claim than it looks: the
+//! The pressure-slope **bracket** (`n = 0.095` for the mean-trajectory closure,
+//! `0.468` for the fixed-`⟨ε⟩` limit, straddling 0.329) is a weaker claim than
+//! it looks, and it is superseded by the distribution-resolved default below:
+//! the
 //! two variants differ only in the cascade cutoff energy, so it is a
 //! one-parameter sensitivity, not two independent limits. See [`CascadeModel`].
 //!
@@ -150,9 +153,12 @@ pub enum CascadeModel {
     /// ```
     ///
     /// No free `⟨ε⟩` at all, and still exactly `∝ p` (the scaling the external
-    /// `E_eff` gate confirms). **The default**, chosen for parameter parsimony
-    /// — *not* for agreement: it gives `n = 0.095` against a measured 0.329,
-    /// which is the flatter side of the bracket and misses by 3.5×.
+    /// `E_eff` gate confirms). **Was the default until 2026-07-30**, chosen for
+    /// parameter parsimony — *not* for agreement: it gives `n = 0.095` against a
+    /// measured 0.329, which is the flatter side of the bracket and misses by
+    /// 3.5×. Retained because a great many gate numbers are stated against it,
+    /// and because it is the `D_ε → 0` limit that
+    /// [`Self::DistributionResolved`] is verified to reduce to.
     ///
     /// Its idealization is the flip side of its parsimony, and it is the likely
     /// reason it is too flat: putting every electron on the *mean* trajectory
@@ -203,9 +209,13 @@ pub enum CascadeModel {
     ///   energy steps and reaches `U_i` more easily — the direction the measured
     ///   532/1064 ratio of ≈0.80 demands and the cascade gets backwards.
     ///
-    /// **Not the default.** It lands as a variant so every published M6a number
-    /// stays put and what it does to them is measured, not asserted; see
-    /// `docs/M6A_SPEC.md` § Distribution-resolved cascade for the outcome.
+    /// **The default since 2026-07-30.** It landed first as a variant, so that
+    /// what it did to every published M6a number was measured rather than
+    /// asserted; it was promoted once those numbers were in. The promotion
+    /// retired M6a's long-standing red gate — `tt2012_threshold_slope_matches_measurement`
+    /// had been `#[ignore]`d and failing since 2026-07-25 and now passes, with
+    /// no tolerance moved and no constant touched. See `docs/M6A_SPEC.md`
+    /// § Distribution-resolved cascade.
     DistributionResolved,
 }
 
@@ -773,7 +783,7 @@ impl AirBreakdown {
         Ok(Self {
             omega,
             gas,
-            cascade_model: CascadeModel::SelfConsistentClimb,
+            cascade_model: CascadeModel::DistributionResolved,
             window_half_widths: 2.0,
             lambda_diff,
             // MPI source off by default: the seed electron (n_e0 = 1/V_focal)

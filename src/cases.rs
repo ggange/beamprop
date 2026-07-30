@@ -1116,15 +1116,46 @@ mod lsd_tests {
             "the sustaining drive is only {ratio:.2e} of the breakdown threshold; \
              the two-stage argument in run_lsd's docs no longer holds"
         );
-        // And it is an intensity floor, not a fluence one: a pulse a hundred
-        // thousand times longer does not lower it appreciably.
+        // And it is an intensity floor, not a fluence one — but the claim is
+        // now the *asymptotic* one, and the amendment is worth stating.
+        //
+        // Under the old mean-trajectory closure the threshold was flat in pulse
+        // length to 3.5 %, because the cascade switched off entirely below
+        // ε_∞ = U_i and no pulse length could buy past that hard cutoff. With
+        // the distribution resolved there is no cutoff: below the old floor the
+        // rate is small but nonzero, so a longer pulse does buy something. It
+        // buys 1.25×, and then stops:
+        //
+        //     6 ns   8.510e15        600 ns  6.886e15
+        //     60 ns  7.204e15        6 µs    6.814e15
+        //                            1 ms    6.797e15
+        //
+        // So the threshold *converges* to a genuine intensity floor of
+        // 6.797e15 W/m² by ~10 µs rather than being exactly flat from the
+        // start. That is the physically expected shape — real breakdown
+        // thresholds do depend on pulse duration — and the two-stage argument
+        // in `run_lsd`'s docs is untouched by it, because the drive sits ~10⁵
+        // below the threshold either way. What would break that argument is a
+        // threshold falling *without limit* with pulse length, i.e. a fluence
+        // criterion, and this asserts that it does not.
         let igniter = AirBreakdown::dry_air_tt2012_focus(1064e-9).unwrap();
-        let short = igniter.threshold_intensity(6e-9, 101_325.0, 400).unwrap();
-        let long = igniter.threshold_intensity(1e-3, 101_325.0, 400).unwrap();
+        let at = |fwhm: f64| igniter.threshold_intensity(fwhm, 101_325.0, 400).unwrap();
+        let short = at(6e-9);
+        let long = at(1e-3);
+        // Bounded total fall: not a fluence criterion.
         assert!(
-            long > 0.9 * short,
+            long > 0.7 * short,
             "the threshold fell from {short:.3e} to {long:.3e} over 6 ns → 1 ms; \
-             it is not the intensity floor run_lsd's docs describe"
+             a fall that large is a fluence criterion, not the intensity floor \
+             run_lsd's docs describe"
+        );
+        // And genuinely asymptotic: the last two decades of pulse length buy
+        // essentially nothing, which is what makes it a floor at all.
+        let converged = at(6e-6);
+        assert!(
+            (long / converged - 1.0).abs() < 1e-2,
+            "the threshold is still moving at long pulse: {converged:.4e} at 6 µs \
+             vs {long:.4e} at 1 ms — it has no asymptotic floor"
         );
     }
 

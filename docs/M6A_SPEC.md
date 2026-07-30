@@ -118,7 +118,7 @@ one is the **default**.
 |---|---|---|---|
 | no inelastic loss | — | 1.737 | 5.3× too steep |
 | `FixedMeanEnergy` | `δ_eff`, `⟨ε⟩` | 0.468 | 1.4× steeper |
-| **`SelfConsistentClimb`** (default) | `δ_eff` | **0.095** | 3.5× flatter |
+| **`SelfConsistentClimb`** (default until 2026-07-30) | `δ_eff` | **0.095** | 3.5× flatter |
 
 *(Numbers corrected 2026-07-25. The values previously in this table — 0.800 and
 0.356 — were inflated by the seed-window artifact described under Seeding
@@ -235,7 +235,7 @@ range — and refitting the 300–2000 Torr slope at each end:
 | 2.00 | 0.0593 | 0.0532 |
 | 3.00 | 0.0890 | 0.0608 |
 | 5.00 | 0.1484 | 0.0779 |
-| **6.74 (default)** | **0.2000** | **0.0951** |
+| **6.74 (shipped)** | **0.2000** | **0.0951** |
 | 10.00 | 0.2967 | 0.1307 |
 | 12.06 (`U_i`) | 0.3578 | 0.1545 |
 
@@ -476,7 +476,8 @@ diffusion-limited:             I_thr = U_i·ν_diff/(h·p)         ∝ p^-2
 
 Any mixture falls between them, and the gate asserts **`n ∈ (0, 1)`** — the
 plateau must be doing work, since without `L′` the model cannot get below
-`n = 1` at all. Observed with the default `SelfConsistentClimb`: **`n = 0.095`**,
+`n = 1` at all. Observed with `SelfConsistentClimb` (the default until
+2026-07-30): **`n = 0.095`**,
 level at 760 Torr `1.18×10¹² W/cm²` (not gated). With `FixedMeanEnergy`:
 `n = 0.468`, level `4.58×10¹¹`. Both envelopes are pinned separately —
 `[0.023, 0.231]` and `[0.187, 0.785]` respectively.
@@ -975,8 +976,20 @@ Siegert's formula (`breakdown0d::first_passage_ionization_rate`). A quadrature,
 not a PDE solve: no time grid, no stability condition, and an exact analytic
 limit to check against.
 
-**Landed as a variant, not the default.** Every published number is unchanged and
-the `breakdown` case is bit-identical. Promotion is a separate decision.
+**Landed as a variant, then promoted — 2026-07-30.** It went in as a variant
+first so that its effect on every published number was *measured* rather than
+argued, and was made the default once those numbers were in hand. Flipping it
+moved five gates and one M6c claim; all are itemised below.
+
+**It retired M6a's red gate.** `tt2012_threshold_slope_matches_measurement` had
+been `#[ignore]`d and failing since 2026-07-25 — deliberately left red rather
+than re-banded to pass. It now passes, with **no tolerance moved and no constant
+touched**: the measured 0.329 sits inside the `δ_eff` envelope `[0.183, 0.407]`
+where the old closure's `[0.023, 0.231]` excluded it. That history is why the
+gate now carries a warning to read it carefully — the same test passed once
+before, in 2026-07-25, for a bad reason (an integration bound was setting the
+answer). The difference is that this pass comes from removing an idealization
+while every constant stayed put. The suite has no `#[ignore]`d gates left.
 
 **Verified** — `first_passage_reduces_to_the_mean_energy_climb` (as `D_ε → 0` the
 rate returns the old closed form, ratio 0.821 → 0.990 as `ħω` falls from 1.166 to
@@ -1033,6 +1046,36 @@ it can cross it. What survives from
 failure (He/Ar predicted 15.6 against a measured ≈2.5), which is a statement
 about `δ·U_i` and is untouched. Whether the noble-gas thresholds are actually
 reproduced still needs the unsourced per-gas `K_m` and `D_e`.
+
+**What promotion cost, itemised.** Five gates were re-pinned against measured
+numbers, none by widening a tolerance to accommodate a failure:
+
+| gate | before → after |
+|---|---|
+| `tt2012_threshold_slope_matches_measurement` | red/`#[ignore]`d → **green** |
+| `tt2012_level_ratio_is_bounded_within_scatter` | drift 1.48× → 1.20×, level 3.90–4.69× high |
+| `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | spread 11.5× → 4.19×; the high-pressure window now *agrees* (0.466 vs 0.468), so the gate asserts a **one-sided** failure |
+| `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared` | 3.99 → 3.39, overshoot 4.99× → 4.24× |
+| `keldysh_mpi_does_not_close_the_wavelength_gap` | baseline 3.99 → 3.39; order-unity 3.87 → 2.89 |
+
+And one **M6c claim needed refining rather than retracting**. `run_lsd`'s docs
+call M6a's threshold an *intensity floor* — flat in pulse length, which under the
+old closure it was to 3.5 %, because no pulse length could buy past the hard
+`ε_∞ = U_i` cutoff. With no cutoff, a longer pulse does buy something:
+
+```text
+6 ns   8.510e15        600 ns  6.886e15
+60 ns  7.204e15        6 µs    6.814e15
+                       1 ms    6.797e15
+```
+
+It buys 1.25×, and then stops — the threshold *converges* to a genuine floor of
+6.797e15 W/m² by ~10 µs. That is the physically expected shape; real breakdown
+thresholds do depend on pulse duration, and the perfectly flat one was an
+artifact of the bifurcation. M6c's two-stage argument is untouched, because what
+would break it is a threshold falling *without limit* with pulse length — a
+fluence criterion — and `the_sustaining_drive_is_far_below_the_breakdown_threshold`
+now asserts both the bounded fall and the asymptote.
 
 **Two implementation notes worth keeping**, because both were caught by gates
 rather than by reading. The obvious `O(N)` evaluation of the Siegert integral —

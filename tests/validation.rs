@@ -1000,14 +1000,29 @@ fn tt2012_effective_field_rises_with_pressure() {
 /// to −1.74 — further from the data. The old near-agreement was an artifact of
 /// a wrong constant.
 ///
-/// **RED — retracted 2026-07-25.** This gate was green, and it should not have
-/// been. It is left failing (and `#[ignore]`d so the suite stays green while
-/// the gap stays named) rather than re-banded to pass.
+/// **RED 2026-07-25 — GREEN 2026-07-30, and not by re-banding.** This gate was
+/// green once before on the strength of an integration artifact (below), was
+/// retracted, and spent five days `#[ignore]`d and failing rather than being
+/// widened to pass. It now passes because the model changed.
 ///
-/// Measured `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`. The
-/// default `SelfConsistentClimb` kernel gives `p^-0.095`, and sweeping the
-/// literature range of its one free constant `δ_eff ∈ [0.01, 0.05]` gives
-/// `n ∈ [0.023, 0.231]` — the measurement is **outside** the envelope.
+/// Measured `E_B ∝ p^-0.164` over 300–2000 Torr, i.e. `I_thr ∝ p^-0.329`.
+/// Sweeping the literature range of the model's one free constant,
+/// `δ_eff ∈ [0.01, 0.05]`:
+///
+/// ```text
+/// mean-trajectory closure:        n ∈ [0.023, 0.231]   measurement OUTSIDE
+/// distribution-resolved (default): n ∈ [0.183, 0.407]   measurement INSIDE
+/// ```
+///
+/// Nothing here was tuned and no tolerance moved. What changed is that the
+/// cascade no longer collapses the electron energy distribution onto its mean,
+/// so ionization is not gated by a hard `ε_∞ = U_i` bifurcation the model was
+/// sitting on top of. At the untouched literature centre the slope is 0.279
+/// against the measured 0.329. See
+/// `distribution_resolved_cascade_fixes_the_high_pressure_slope` for the
+/// before/after on both datasets, and `docs/M6A_SPEC.md` for why this is a
+/// weaker claim than a point agreement would be — it is envelope containment
+/// over a constant that is still free within a 5× literature range.
 ///
 /// **What changed, and why it matters more than the number.** The previously
 /// reported `n = 0.356` was propped up by an integration artifact, not by
@@ -1026,16 +1041,11 @@ fn tt2012_effective_field_rises_with_pressure() {
 /// (1.737 → 0.800 → 0.356 as physics was added) is partly void: the corrected
 /// numbers are 1.737 → 0.468 → 0.095.
 ///
-/// What survives on this axis is `the_two_cascade_models_bracket_the_measurement`
-/// — the two limits give 0.095 and 0.468 and the measurement sits between them —
-/// but read that narrowly: the two differ only in the cascade cutoff energy, so
-/// it is a one-parameter sensitivity rather than two independent limits, and
-/// `⟨ε⟩` ≈ 5 eV reproduces 0.329 on its own. The defensible external agreement
-/// is on the **wavelength** axis instead, where the kernel and Eq. 4 share the
-/// `λ⁻²` exponent exactly — see
-/// `tt2012_wavelength_scaling_matches_cascade_theory`.
+/// That history is why this gate is worth reading carefully now that it is
+/// green: the same test passed once for a bad reason. The difference is that
+/// the earlier pass came from an integration bound setting the answer, and this
+/// one comes from removing an idealization while every constant stayed put.
 #[test]
-#[ignore = "RED on purpose: measured n=0.329 is outside the default model's literature envelope [0.023, 0.231] (see docs/M6A_SPEC.md)"]
 fn tt2012_threshold_slope_matches_measurement() {
     let e_b = load_digitized_curve("tt2012_E_B_vs_pressure.csv");
     let high: Vec<_> = e_b
@@ -1048,8 +1058,8 @@ fn tt2012_threshold_slope_matches_measurement() {
     let measured_n = -2.0 * beamprop::validate::loglog_slope(&high).expect("E_B slope");
     // Model slopes across the LITERATURE range of the one remaining free
     // constant, δ_eff ∈ [0.01, 0.05]. ⟨ε⟩ is absent by construction here.
-    let m = beamprop::breakdown0d::AirBreakdown::air_1064nm()
-        .with_cascade_model(beamprop::breakdown0d::CascadeModel::SelfConsistentClimb);
+    // The DEFAULT closure — this gate is about what the crate ships.
+    let m = beamprop::breakdown0d::AirBreakdown::air_1064nm();
     let slope_at = |delta: f64| {
         let c = m.with_inelastic_loss(delta, 3.0).pressure_sweep(
             TT_P_LO * TORR,
@@ -1064,12 +1074,24 @@ fn tt2012_threshold_slope_matches_measurement() {
     let (env_hi, env_lo) = (slope_at(0.01), slope_at(0.05));
     let central = slope_at(0.02);
 
-    // Containment in the δ_eff literature envelope. Currently FALSE for the
-    // default model, which is why this test is #[ignore]d.
+    // Containment in the δ_eff literature envelope.
     assert!(
         env_lo <= measured_n && measured_n <= env_hi,
         "measured n = {measured_n:.3} outside the δ_eff literature envelope \
          [{env_lo:.3}, {env_hi:.3}] (central-δ_eff model gives {central:.3})"
+    );
+    // Pin the envelope itself, so "contains the measurement" cannot be
+    // satisfied later by an envelope that has quietly grown to contain
+    // everything. Measured: [0.183, 0.407] with the centre at 0.279.
+    assert!(
+        (0.17..=0.20).contains(&env_lo) && (0.39..=0.42).contains(&env_hi),
+        "the δ_eff envelope is now [{env_lo:.3}, {env_hi:.3}], expected \
+         ≈[0.183, 0.407]; containment means less if the envelope moved"
+    );
+    assert!(
+        (0.26..=0.30).contains(&central),
+        "central-δ_eff slope {central:.3}, expected ≈0.279 against a measured \
+         {measured_n:.3}"
     );
 }
 
@@ -1329,12 +1351,17 @@ fn tt2012_level_ratio_is_bounded_within_scatter() {
     let lo = ratios.iter().map(|r| r.1).fold(f64::MAX, f64::min);
     let hi = ratios.iter().map(|r| r.1).fold(0.0f64, f64::max);
 
-    // Regression pin on the drift. Not a flatness claim: the 1.48× spread is
-    // the model's residual slope error (n = 0.095 vs measured 0.329) expressed
-    // in level terms, and shrinking it means fixing the slope, not the level.
+    // Regression pin on the drift. Not a flatness claim: the spread is the
+    // model's residual SLOPE error expressed in level terms, so shrinking it
+    // means fixing the slope, not the level — and that is exactly what
+    // happened. Resolving the electron energy distribution took the slope from
+    // 0.095 to 0.279 against a measured 0.329, and the drift fell with it,
+    // 1.48× → 1.20×. The level offset itself barely moved (the model runs
+    // 3.90–4.69× high) because it is set by constants this change did not
+    // touch.
     assert!(
-        (1.3..=1.7).contains(&(hi / lo)),
-        "level-ratio drift moved: {lo:.2}×–{hi:.2}× (spread {:.2}×), expected ≈1.48×",
+        (1.10..=1.32).contains(&(hi / lo)),
+        "level-ratio drift moved: {lo:.2}×–{hi:.2}× (spread {:.2}×), expected ≈1.20×",
         hi / lo
     );
     // Contained in the inter-lab scatter the project declines to gate on level.
@@ -1345,8 +1372,8 @@ fn tt2012_level_ratio_is_bounded_within_scatter() {
     // Guard the unit convention: had E_B been read as a peak amplitude, every
     // measured intensity would halve and every ratio would double.
     assert!(
-        (5.5..=8.5).contains(&hi),
-        "top ratio is {hi:.2}×, expected ≈7.0× — check whether E_B was converted \
+        (4.0..=6.0).contains(&hi),
+        "top ratio is {hi:.2}×, expected ≈4.69× — check whether E_B was converted \
          with the RMS form I = ε₀cE² (correct) or the peak form ½ε₀cE² (wrong, \
          doubles this number)"
     );
@@ -1720,10 +1747,10 @@ fn keldysh_exponent_series_matches_direct_form() {
 ///
 /// | prefactor × ω | I_th(532)/I_th(1064) |
 /// |---|---|
-/// | 0 (cascade only) | 3.99 |
-/// | **1 (order unity)** | **3.87** |
-/// | 10³ | 1.84 |
-/// | 10⁶ | 0.48 |
+/// | 0 (cascade only) | 3.39 |
+/// | **1 (order unity)** | **2.89** |
+/// | 10³ | 2.31 |
+/// | 10⁶ | 0.68 |
 /// | measured | **0.80** |
 ///
 /// At a physically defensible prefactor the ratio moves 3 % of the way to the
@@ -1772,16 +1799,22 @@ fn keldysh_mpi_does_not_close_the_wavelength_gap() {
     const MEASURED: f64 = 0.80;
 
     assert!(
-        (3.9..=4.1).contains(&cascade_only),
-        "cascade-only ratio is {cascade_only:.3}, expected ≈3.99"
+        (3.2..=3.6).contains(&cascade_only),
+        "cascade-only ratio is {cascade_only:.3}, expected ≈3.39"
     );
-    // The substantive claim: an order-unity prefactor barely moves it.
+    // The substantive claim: an order-unity prefactor does not close the gap.
+    //
+    // The fraction it does close rose from 3 % to 18 % when the cascade closure
+    // changed, and that is an artifact of the denominator rather than a better
+    // MPI rate — the cascade baseline moved from 3.99 to 3.39, so the same
+    // absolute shift is a larger share of a smaller remaining gap. The ratio
+    // still lands at 2.89 against a measured 0.80.
     let closed = (cascade_only - order_unity) / (cascade_only - MEASURED);
     assert!(
-        order_unity > 3.5 && closed < 0.10,
+        order_unity > 2.5 && closed < 0.25,
         "Keldysh at prefactor 1 gives ratio {order_unity:.3}, closing {:.1}% of the \
          gap from {cascade_only:.3} to the measured {MEASURED}. This gate asserts \
-         that it closes almost none of it — if a corrected prefactor or a PPT rate \
+         that it does not close it — if a corrected prefactor or a PPT rate \
          changed that, this is the assertion to revisit",
         closed * 100.0
     );
@@ -1789,7 +1822,7 @@ fn keldysh_mpi_does_not_close_the_wavelength_gap() {
     // still more than double the measurement.
     assert!(
         ratio_at(1e3) > 1.5,
-        "ratio at prefactor 10³ is {:.3}; expected still ≳1.8, i.e. far from {MEASURED}",
+        "ratio at prefactor 10³ is {:.3}; expected still ≈2.31, i.e. far from {MEASURED}",
         ratio_at(1e3)
     );
 }
@@ -2031,24 +2064,39 @@ fn chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not() {
     let k_lo = modelled.iter().copied().fold(f64::MAX, f64::min);
     let k_hi = modelled.iter().copied().fold(0.0f64, f64::max);
     assert!(
-        k_hi / k_lo > 5.0,
+        k_hi / k_lo > 3.0,
         "kernel local exponents are {modelled:?} (spread {:.1}×); this gate asserts \
-         the known curvature. If a real MPI channel landed and straightened the \
-         curve, this is the assertion to revisit",
+         the known curvature. If something straightened the curve further, this is \
+         the assertion to revisit",
         k_hi / k_lo
     );
-    // And it crosses: too steep in the lowest window, too flat in the highest.
+    // The curvature is still there, but it is no longer symmetric about the
+    // data, and that asymmetry is the whole content of this gate now.
+    //
+    // The HIGH-pressure window agrees. Resolving the electron energy
+    // distribution took it from 0.172 to 0.466 against a measured 0.468 — the
+    // "2.8× too flat" half of this gate is discharged.
     assert!(
-        modelled[0] > measured[0] * 2.0,
-        "kernel is {:.3} vs measured {:.3} over 10–100 Torr; expected ≈4.6× steeper",
-        modelled[0],
-        measured[0]
-    );
-    assert!(
-        modelled[2] < measured[2] / 2.0,
-        "kernel is {:.3} vs measured {:.3} over 300–786 Torr; expected ≈2.8× flatter",
+        (modelled[2] / measured[2] - 1.0).abs() < 0.15,
+        "kernel is {:.3} vs measured {:.3} over 300–786 Torr; these agreed to \
+         better than 1 % when the distribution-resolved closure landed, and a \
+         drift here is the first sign that agreement was coincidental",
         modelled[2],
         measured[2]
+    );
+    // The LOW-pressure window does not, and is untouched by that change: this
+    // branch is set by diffusion loss D_e/Λ², not by the cascade closure. So
+    // what survives of "the kernel is not a power law" is one-sided — the model
+    // is far too steep below ~250 Torr and correct above ~300, which is a
+    // sharper statement about where the remaining defect lives than the
+    // symmetric crossing this gate used to assert.
+    assert!(
+        modelled[0] > measured[0] * 3.0,
+        "kernel is {:.3} vs measured {:.3} over 10–100 Torr; expected ≈4.6× steeper. \
+         If THIS closed, the diffusion branch has been fixed and that is the \
+         milestone's remaining open question",
+        modelled[0],
+        measured[0]
     );
 }
 
@@ -2120,9 +2168,10 @@ fn chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared() {
         / lo.threshold_intensity(6e-9, p, 400).unwrap();
 
     assert!(
-        (3.9..=4.1).contains(&predicted),
-        "kernel λ-ratio is {predicted:.3}, expected ≈3.99 (= (1064/532)² = 4); \
-         if this moved, the IB Lorentzian limit has been left"
+        (3.2..=3.6).contains(&predicted),
+        "kernel λ-ratio is {predicted:.3}, expected ≈3.39. The pure cascade gives \
+         exactly (1064/532)² = 4; the distribution-resolved closure subtracts ~15 % \
+         because D_ε ∝ ħω makes the shorter wavelength take bigger energy steps"
     );
     // The measurement is on the other side of unity from the prediction.
     assert!(
@@ -2139,9 +2188,10 @@ fn chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared() {
     // up here as a loud change rather than a quiet improvement.
     let overshoot = predicted / measured;
     assert!(
-        (4.4..=5.6).contains(&overshoot),
-        "cascade λ⁻² overpredicts the measured ratio by {overshoot:.2}×, \
-         expected ≈4.99×"
+        (3.8..=4.8).contains(&overshoot),
+        "the kernel overpredicts the measured λ-ratio by {overshoot:.2}×, expected \
+         ≈4.24× (it was 4.99× under the mean-trajectory closure — resolving the \
+         distribution moved it the right way and nowhere near far enough)"
     );
 }
 
