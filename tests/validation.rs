@@ -1353,6 +1353,234 @@ fn tt2012_level_ratio_is_bounded_within_scatter() {
 }
 
 // ---------------------------------------------------------------------------
+// Keldysh photoionization — VERIFICATION (three gates) plus one validation
+// result that is negative.
+//
+// The first three are verification in this project's sense: they check that the
+// code solves the equation written down, against closed forms the equation must
+// reduce to in its two limits. They involve no breakdown measurement at all and
+// cannot be satisfied by tuning, because there is nothing to tune — the Keldysh
+// exponent has no free constant.
+//
+// The fourth confronts the wavelength data and reports that this channel does
+// NOT close M6a's λ⁻² gap. See docs/M6A_SPEC.md § "Keldysh".
+// ---------------------------------------------------------------------------
+
+const HBAR: f64 = 1.054_571_817e-34;
+const M_ELECTRON: f64 = 9.109_383_701_5e-31;
+const Q_E: f64 = 1.602_176_634e-19;
+const U_ION_O2: f64 = 12.06 * Q_E;
+
+fn omega_of(lambda: f64) -> f64 {
+    2.0 * std::f64::consts::PI * 299_792_458.0 / lambda
+}
+
+/// **Verification.** In the multiphoton limit `γ ≫ 1` the Keldysh rate must
+/// become a power law in intensity whose exponent is `U_i/ħω` — the photon order,
+/// fixed entirely by the gas and the wavelength.
+///
+/// This is the property that makes the channel non-circular: the exponent is
+/// where all the wavelength leverage lives (10.35 at 1064 nm, 5.17 at 532 nm),
+/// and no choice of prefactor can alter it. If someone later "improves"
+/// agreement by touching the exponent, this gate fails.
+#[test]
+fn keldysh_multiphoton_limit_recovers_the_photon_order() {
+    use beamprop::breakdown0d::{keldysh_gamma, keldysh_rate};
+    for lambda in [532e-9, 1064e-9] {
+        let omega = omega_of(lambda);
+        let k_continuous = U_ION_O2 / (HBAR * omega);
+        // Sample where γ ≫ 1 holds comfortably.
+        let pts: Vec<(f64, f64)> = (0..9)
+            .map(|i| {
+                let i_si = 1e14 * 10f64.powf(i as f64 * 0.1);
+                (i_si, keldysh_rate(i_si, omega, U_ION_O2, 1.0))
+            })
+            .collect();
+        for &(i_si, _) in &pts {
+            assert!(
+                keldysh_gamma(i_si, omega, U_ION_O2) > 5.0,
+                "sample at {i_si:.1e} W/m² is not in the multiphoton branch"
+            );
+        }
+        let fitted = beamprop::validate::loglog_slope(&pts).expect("MPI slope");
+        assert!(
+            (fitted / k_continuous - 1.0).abs() < 0.01,
+            "at {:.0} nm the fitted intensity exponent is {fitted:.4}, but the \
+             theory's photon order is U_i/ħω = {k_continuous:.4}",
+            lambda * 1e9
+        );
+    }
+}
+
+/// **Verification.** In the tunnelling limit `γ ≪ 1` the same expression must
+/// reduce to the standard static-field exponent
+/// `S → 4√(2m)·U_i^{3/2}/(3ħeE)`, which is textbook and contains no
+/// wavelength at all.
+///
+/// Together with the gate above this pins both ends of the one formula, which is
+/// why the single `f(γ)` is used rather than a bare `σ_K·I^K`: a power law would
+/// pass the multiphoton gate and fail this one.
+#[test]
+fn keldysh_tunnelling_limit_matches_the_static_field_exponent() {
+    use beamprop::breakdown0d::{keldysh_gamma, keldysh_tunnel_exponent};
+    const EPS0: f64 = 8.854_187_812_8e-12;
+    const C: f64 = 299_792_458.0;
+    let omega = omega_of(10.6e-6); // CO₂: the longest wavelength in the suite
+    let mut best = f64::MAX;
+    for i_si in [1e18, 1e19, 1e20, 1e21] {
+        let gamma = keldysh_gamma(i_si, omega, U_ION_O2);
+        assert!(
+            gamma < 0.1,
+            "γ = {gamma:.3} is not in the tunnelling branch"
+        );
+        let s = 2.0 * U_ION_O2 / (HBAR * omega) * keldysh_tunnel_exponent(gamma);
+        let e_field = (2.0 * i_si / (EPS0 * C)).sqrt();
+        let closed =
+            4.0 * (2.0 * M_ELECTRON).sqrt() * U_ION_O2.powf(1.5) / (3.0 * HBAR * Q_E * e_field);
+        let err = (s / closed - 1.0).abs();
+        best = best.min(err);
+        assert!(
+            err < 1e-2,
+            "at γ = {gamma:.4} the exponent is {s:.5e} against the closed form \
+             {closed:.5e} ({err:.2e} relative)"
+        );
+    }
+    // Must actually converge, not merely stay inside a loose band.
+    assert!(
+        best < 1e-5,
+        "deepest tunnelling sample is only {best:.2e} from the closed form; the \
+         limit is not being approached"
+    );
+}
+
+/// **Verification.** `f(γ)`'s two terms each diverge as `1/(2γ)` and cancel, so
+/// the implementation switches to the series `⅔γ − γ³/15` below γ = 0.1. The
+/// join must be smooth, or a threshold sweep would show a step at whatever
+/// intensity maps to the cutover.
+#[test]
+fn keldysh_exponent_series_matches_direct_form() {
+    use beamprop::breakdown0d::keldysh_tunnel_exponent;
+    // Measure the branch mismatch at ONE γ — the cutover itself, where the
+    // public function takes the direct branch. Straddling the cutover instead
+    // would fold in the genuine slope df/dγ ≈ ⅔ and report that as a jump.
+    const CUT: f64 = 0.1;
+    let direct_branch = keldysh_tunnel_exponent(CUT);
+    let series_branch = CUT * (2.0 / 3.0 - CUT * CUT / 15.0);
+    assert!(
+        ((direct_branch - series_branch) / direct_branch).abs() < 1e-5,
+        "the two branches disagree at the γ = {CUT} cutover: direct \
+         {direct_branch:.12e} vs series {series_branch:.12e}"
+    );
+    // The public function must also be monotone across the join, with no step.
+    let mut prev = 0.0;
+    for i in 0..40 {
+        let g = 0.09 + i as f64 * 0.0005;
+        let f = keldysh_tunnel_exponent(g);
+        assert!(f > prev, "f(γ) not increasing at γ = {g}: {f} after {prev}");
+        prev = f;
+    }
+    // And the series must be the right series: compare against the direct form
+    // evaluated in f64 where it is still trustworthy.
+    for gamma in [0.1f64, 0.2, 0.5] {
+        let direct = {
+            let root = (1.0 + gamma * gamma).sqrt();
+            (1.0 + 1.0 / (2.0 * gamma * gamma)) * gamma.asinh() - root / (2.0 * gamma)
+        };
+        let series = gamma * (2.0 / 3.0 - gamma * gamma / 15.0);
+        let tol = 0.02 * gamma * gamma; // series truncation is O(γ⁵)
+        assert!(
+            (direct - series).abs() < tol.max(1e-12),
+            "at γ = {gamma} the series gives {series:.9e} and the direct form \
+             {direct:.9e}"
+        );
+    }
+}
+
+/// **Validation, and the answer is no.** Adding first-principles multiphoton
+/// ionization does **not** repair M6a's wavelength scaling.
+///
+/// The λ⁻² failure (`chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared`)
+/// has an obvious suspect: at 532 nm the photon order falls from 10.35 to 5.17,
+/// so MPI is vastly stronger exactly where the measured threshold drops. The
+/// suspect does not survive being quantified.
+///
+/// | prefactor × ω | I_th(532)/I_th(1064) |
+/// |---|---|
+/// | 0 (cascade only) | 3.99 |
+/// | **1 (order unity)** | **3.87** |
+/// | 10³ | 1.84 |
+/// | 10⁶ | 0.48 |
+/// | measured | **0.80** |
+///
+/// At a physically defensible prefactor the ratio moves 3 % of the way to the
+/// measurement. Reaching 0.80 needs a rate prefactor of `~10⁵·ω`, i.e. an
+/// ionization rate faster than the optical frequency — not a rate at all.
+///
+/// **Why the seed does not rescue it either.** The model's `n_e0 = 1/V_focal` is
+/// `1.2×10¹³ m⁻³`, about 10⁴ above the cosmic-ray background, so the focus
+/// essentially never holds a free electron and the seed *ought* to be MPI's job —
+/// which would import the photon-order asymmetry. Measured, it changes nothing
+/// (ratio 3.85 with the seed removed entirely), because the model's threshold is
+/// already 5.7–28× above measurement and MPI is copious there at both
+/// wavelengths. The unphysical seed is a real latent defect, but it is masked by
+/// the level error and cannot be the explanation. Recorded via
+/// [`AirBreakdown::with_seed_density`].
+///
+/// So the honest conclusion is that the λ gap is **not** a missing MPI channel at
+/// these intensities. Either the Keldysh prefactor for molecular O₂ is orders
+/// above unity (PPT Coulomb corrections — checkable against published `σ_K`, the
+/// open item), or the two-paper comparison carries a systematic. This gate exists
+/// so that conclusion is pinned rather than re-guessed.
+#[test]
+fn keldysh_mpi_does_not_close_the_wavelength_gap() {
+    use beamprop::breakdown0d::AirBreakdown;
+    let p = 760.0 * TORR;
+    let ratio_at = |prefactor: f64| -> f64 {
+        let mk = |nm: f64| {
+            let m = AirBreakdown::dry_air_tt2012_focus(nm * 1e-9).expect("λ in range");
+            if prefactor > 0.0 {
+                m.with_keldysh_mpi(prefactor)
+            } else {
+                m
+            }
+        };
+        let hi = mk(532.0)
+            .threshold_intensity(6.5e-9, p, 600)
+            .expect("532 nm");
+        let lo = mk(1064.0)
+            .threshold_intensity(6.0e-9, p, 600)
+            .expect("1064 nm");
+        hi / lo
+    };
+
+    let cascade_only = ratio_at(0.0);
+    let order_unity = ratio_at(1.0);
+    const MEASURED: f64 = 0.80;
+
+    assert!(
+        (3.9..=4.1).contains(&cascade_only),
+        "cascade-only ratio is {cascade_only:.3}, expected ≈3.99"
+    );
+    // The substantive claim: an order-unity prefactor barely moves it.
+    let closed = (cascade_only - order_unity) / (cascade_only - MEASURED);
+    assert!(
+        order_unity > 3.5 && closed < 0.10,
+        "Keldysh at prefactor 1 gives ratio {order_unity:.3}, closing {:.1}% of the \
+         gap from {cascade_only:.3} to the measured {MEASURED}. This gate asserts \
+         that it closes almost none of it — if a corrected prefactor or a PPT rate \
+         changed that, this is the assertion to revisit",
+        closed * 100.0
+    );
+    // And that only an unphysical prefactor would suffice: at 10³·ω the ratio is
+    // still more than double the measurement.
+    assert!(
+        ratio_at(1e3) > 1.5,
+        "ratio at prefactor 10³ is {:.3}; expected still ≳1.8, i.e. far from {MEASURED}",
+        ratio_at(1e3)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // M6a D5 gates — Chylek et al. 1990, 532 nm ns air breakdown.
 //
 // The independent anchor M6a's D5 clause owed. Different group, different

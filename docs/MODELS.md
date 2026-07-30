@@ -452,8 +452,55 @@ comes from putting every electron on the mean trajectory (at threshold it runs
 within 0.8 % of the `ε_∞ = U_i` pole at 2000 Torr, where that idealization is
 least defensible).
 
-Chylek's 532 nm data sharpens that question into a quantitative target rather
-than a direction. Any candidate MPI channel now has to do three things at once:
+**The obvious MPI candidate has been tried and it fails — 2026-07-30.** Keldysh
+photoionization is implemented (`breakdown0d::keldysh_rate`) and **verified**
+against both closed-form limits of its own exponent: the multiphoton branch
+recovers the photon order `U_i/ħω` to better than 0.2 % (10.35 at 1064 nm, 5.17
+at 532 nm) and the tunnelling branch reproduces the static-field exponent
+`4√(2m)U_i^{3/2}/(3ħeE)` to 1 part in 10⁶. There is nothing tunable in that
+exponent, which is what makes it a legitimate test rather than a fit.
+
+It does not close the wavelength gap:
+
+| prefactor × ω | `I_th(532)/I_th(1064)` |
+|---|---|
+| 0 (cascade only) | 3.99 |
+| **1 (order unity)** | **3.87** |
+| 10³ | 1.84 |
+| 10⁶ | 0.48 |
+| **measured** | **0.80** |
+
+At an order-unity prefactor MPI closes 3 % of the gap. Reaching the measurement
+needs `~10⁵·ω`, i.e. an ionization rate faster than the optical frequency, which
+is not a rate. Gated as `keldysh_mpi_does_not_close_the_wavelength_gap`.
+
+Two by-products worth keeping:
+
+- **The seed density is unphysical, and it is a latent defect.** `n_e0 = 1/V_focal
+  = 1.2×10¹³ m⁻³` is ~10⁴ above the cosmic-ray background (10⁹–10¹⁰ m⁻³), which
+  puts ~10⁻⁴ electrons in an `8.3×10⁻¹⁴ m³` focus — the focus essentially never
+  holds one. Seeding *should* therefore be MPI's job, importing the photon-order
+  asymmetry (at prefactor 1, MPI makes 295 electrons per pulse in the focus at
+  532 nm and 2×10⁻⁸ at 1064 nm — ten orders of magnitude). Removing the seed
+  changes the ratio only 3.99 → 3.85, because the model's threshold is already
+  5.7–28× too high and MPI is copious there at both wavelengths. So the defect is
+  real but masked by the level error. Exposed as
+  `AirBreakdown::with_seed_density`.
+- **An earlier claim of mine, withdrawn.** The wavelength ratio is *not*
+  prefactor-insensitive. The `x^(1/K)` suppression argument only holds once MPI
+  dominates at both wavelengths; the ratio then scales as `x^(−0.097)`, so three
+  decades of prefactor still move it 1.9×, and across the transition it runs 3.99
+  → 0.48. Any future prefactor claim has to be justified to ~2 orders, not waved
+  through.
+
+The open item is therefore narrower than "add MPI": either a PPT-corrected rate
+for molecular O₂ (Coulomb corrections can lift the prefactor by orders of
+magnitude — checkable against published `σ_K`), or a systematic in the two-paper
+comparison. It is *not* a missing channel at these intensities.
+
+Chylek's 532 nm data sharpens the remaining question into a quantitative target
+rather than a direction. Any candidate MPI channel now has to do three things at
+once:
 lift the 532 nm threshold's *ratio* to 1064 nm from 3.99 down to ≈0.80, flatten
 the low-pressure branch from 1.951 to ≈0.43, and steepen the high-pressure
 branch from 0.170 to ≈0.47 — with `K = 6` photons at 532 nm against `K = 11` at

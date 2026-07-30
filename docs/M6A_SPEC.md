@@ -739,6 +739,78 @@ at the bottom, 2.8× too flat at the top, and crosses the data near 250 Torr. Th
 300–2000 Torr and is correct only there; the defect is curvature. Gated as
 `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not`.
 
+### Keldysh photoionization — implemented, verified, and it does not fix the gap
+
+Added 2026-07-30 as the first attempt on the open MPI question, because the
+suspect was obvious: at 532 nm the photon order falls from `U_i/ħω` = 10.35 to
+5.17, so multiphoton ionization is far stronger exactly where the measured
+threshold drops.
+
+**What is verified** (`breakdown0d::keldysh_rate`, `keldysh_tunnel_exponent`).
+The rate is `W = A·ω·exp[−(2U_i/ħω)·f(γ)]` with
+`f(γ) = (1 + 1/2γ²)·asinh γ − √(1+γ²)/2γ` and `γ = ω√(2mU_i)/(eE₀)`. One
+expression carries both limits, and both are gated:
+
+| limit | closed form | agreement |
+|---|---|---|
+| `γ ≫ 1` multiphoton | `W ∝ I^(U_i/ħω)` | exponent to 0.2 % at both λ |
+| `γ ≪ 1` tunnelling | `S → 4√(2m)U_i^{3/2}/(3ħeE)` | 1 part in 10⁶ |
+| series join at γ = 0.1 | `f = ⅔γ − γ³/15` | 3×10⁻⁶ |
+
+`γ` is 16.6 at 1064 nm and 37.7 at 532 nm at the measured thresholds, so air ns
+breakdown sits deep in the multiphoton branch. **The exponent has no free
+constant**, which is the whole reason this is a test and not a fit; `E₀` is the
+field *amplitude*, not the RMS value the `E_B` gates use, and mixing them would
+be a flat `√2` in `γ`.
+
+**What it delivers: a negative result.** Only the prefactor is soft (Keldysh's
+atomic prefactor is an order-unity function whose form varies between
+re-derivations), so it is exposed explicitly and swept:
+
+| prefactor × ω | `I_th(532)/I_th(1064)` |
+|---|---|
+| 0 (cascade only) | 3.99 |
+| **1 (order unity)** | **3.87** |
+| 10³ | 1.84 |
+| 10⁶ | 0.48 |
+| **measured** | **0.80** |
+
+An order-unity prefactor closes **3 %** of the gap. Closing it needs `~10⁵·ω` — an
+ionization rate faster than the optical frequency, which is not a rate. Gated as
+`keldysh_mpi_does_not_close_the_wavelength_gap`.
+
+**A withdrawn claim of mine, recorded because it shaped the design.** I first
+argued the wavelength ratio would be prefactor-*insensitive*, since a threshold
+set by `W·τ ~ 1` with `W ∝ I^K` suppresses prefactor error as `x^(1/K)`. That is
+wrong for a *ratio* between two different `K`: once MPI dominates at both
+wavelengths the ratio scales as `x^(1/10.35 − 1/5.175) = x^(−0.097)`, so three
+decades still move it 1.9×, and across the transition it runs 3.99 → 0.48.
+Measuring it is what showed this. Any future prefactor must be justified to ~2
+orders of magnitude; it cannot be waved through.
+
+**The seed density is unphysical — a separate, latent defect.** `n_e0 = 1/V_focal`
+= `1.2×10¹³ m⁻³` is ~10⁴ above the cosmic-ray background (`10⁹–10¹⁰ m⁻³`), which
+puts ~`10⁻⁴` free electrons in the `8.3×10⁻¹⁴ m³` focus: it essentially never
+holds one. Seed *production* should therefore be MPI's job, and that step carries
+enormous wavelength leverage — at prefactor 1, MPI makes 295 electrons per pulse
+in the focus at 532 nm against `2×10⁻⁸` at 1064 nm, ten orders of magnitude.
+Measured, removing the seed moves the ratio only 3.99 → 3.85, because the
+threshold is already 5.7–28× above measurement and MPI is abundant there at both
+wavelengths. So the defect is masked by the level error and cannot be the
+explanation — but it would matter the moment the level is fixed, and it is
+therefore recorded rather than left implicit. Exposed as
+`AirBreakdown::with_seed_density`; both the Keldysh source and the old
+T&T-calibrated `σ_K` remain **off by default**, so every pre-existing gate keeps
+its published numbers.
+
+**Where this leaves the open question.** Narrower than "add MPI". Either a
+PPT-corrected rate for molecular O₂ (Coulomb corrections can lift the prefactor
+by orders of magnitude, and that is checkable against published `σ_K` rather than
+against the threshold data), or a systematic in the two-paper comparison. It is
+*not* a missing channel at these intensities, and the curvature defect
+(`chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not`) is untouched by
+any of this — that one points at the mean-energy closure, not at MPI.
+
 **Consequence.** The `λ⁻²` gate stays — it is a true statement about the kernel's
 internal structure and fails loudly if the IB Lorentzian limit is left. It may no
 longer be described as external agreement with measurement, and it is no longer

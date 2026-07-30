@@ -86,6 +86,10 @@ const P_REF: f64 = 101_325.0;
 /// above ~709. See [`AirBreakdown::advance`].
 const MAX_EXPONENT: f64 = 700.0;
 
+/// Below this `γ` the direct form of [`keldysh_tunnel_exponent`] loses precision
+/// to cancellation, and the small-`γ` series is used instead.
+const KELDYSH_SERIES_CUTOVER: f64 = 0.1;
+
 /// Bisection bracket for [`AirBreakdown::threshold_intensity`] (W/m²).
 const I_BRACKET_LO: f64 = 1e12;
 const I_BRACKET_HI: f64 = 1e22;
@@ -151,6 +155,97 @@ pub enum CascadeModel {
     SelfConsistentClimb,
 }
 
+/// Keldysh adiabaticity parameter `γ = ω√(2 m U_i)/(e E₀)`, from intensity.
+///
+/// `E₀` is the field **amplitude**, `I = ½ε₀cE₀²` — Keldysh's field is the
+/// amplitude of `E₀cos ωt`, not the RMS value the T&T gates use for `E_B`.
+/// Mixing the two here would be a flat `√2` in `γ`, which the `λ⁻²`-scale
+/// conclusions would not survive.
+///
+/// `γ ≫ 1` is the multiphoton regime, `γ ≪ 1` the tunnelling regime. For
+/// ns-pulse air breakdown at these intensities `γ ≈ 17` at 1064 nm and ≈ 34 at
+/// 532 nm, so both wavelengths sit deep in the multiphoton branch.
+pub fn keldysh_gamma(intensity: f64, omega: f64, u_ion: f64) -> f64 {
+    let e_field = (2.0 * intensity / (EPS0 * C_LIGHT)).sqrt();
+    omega * (2.0 * M_E * u_ion).sqrt() / (E_CHARGE * e_field)
+}
+
+/// The `γ`-dependent factor in Keldysh's ionization exponent,
+///
+/// ```text
+/// f(γ) = (1 + 1/(2γ²))·asinh(γ) − √(1+γ²)/(2γ)
+/// ```
+///
+/// so that `W ∝ exp[−(2U_i/ħω)·f(γ)]`. This single expression carries **both**
+/// limits, which is what makes it worth using instead of a bare `σ_K I^K`:
+///
+/// - `γ → ∞`: `f → ln(2γ) − ½`, giving `W ∝ I^(U_i/ħω)` — a multiphoton power
+///   law whose exponent is fixed by the gas and the wavelength, with nothing to
+///   tune.
+/// - `γ → 0`: `f → ⅔γ`, giving the standard tunnelling exponent
+///   `exp[−4√(2m)·U_i^{3/2}/(3ħeE)]`.
+///
+/// Both limits are gated in `tests/validation.rs`.
+///
+/// The two terms each diverge as `1/(2γ)` when `γ → 0` and cancel, so below
+/// [`KELDYSH_SERIES_CUTOVER`] the series `f = ⅔γ − γ³/15 + O(γ⁵)` is used
+/// instead; `keldysh_exponent_series_matches_direct_form` pins the join.
+pub fn keldysh_tunnel_exponent(gamma: f64) -> f64 {
+    if gamma <= 0.0 || !gamma.is_finite() {
+        return f64::NAN;
+    }
+    if gamma < KELDYSH_SERIES_CUTOVER {
+        return gamma * (2.0 / 3.0 - gamma * gamma / 15.0);
+    }
+    let root = (1.0 + gamma * gamma).sqrt();
+    (1.0 + 1.0 / (2.0 * gamma * gamma)) * gamma.asinh() - root / (2.0 * gamma)
+}
+
+/// Per-neutral Keldysh photoionization rate (s⁻¹).
+///
+/// ```text
+/// W = prefactor · ω · exp[−(2U_i/ħω)·f(γ)]
+/// ```
+///
+/// **On the prefactor, and how far it can be trusted.** Keldysh's exponent is
+/// derived and carries no adjustable content. His *prefactor* is an order-unity
+/// function of `γ` and `U_i/ħω` whose form differs between the atomic and
+/// solid-state versions of the theory and between later re-derivations (PPT adds
+/// Coulomb corrections that can move it by orders of magnitude), so it is
+/// exposed here as an explicit multiplier rather than faked to a precise value.
+///
+/// A threshold is set by `W·τ ~ 1` with `W ∝ I^K`, `K = U_i/ħω = 5.2–10.3`, so a
+/// prefactor wrong by `x` moves the threshold by only `x^(1/K)`. That suppression
+/// is real but it is **not** enough to make the wavelength *ratio*
+/// prefactor-free, because `K` differs between the two wavelengths: once MPI
+/// dominates at both, the ratio scales as `x^(1/10.35 − 1/5.175) = x^(−0.097)`,
+/// so three decades of prefactor still move it 1.9×.
+///
+/// *(An earlier revision of this comment claimed the ratio was
+/// prefactor-insensitive and that the `K`-th root "crushed" the uncertainty.
+/// That was wrong, and measuring it is what showed so — the ratio runs 3.99 →
+/// 0.48 across a prefactor sweep of 10¹⁵. The `1/K` argument only applies once
+/// MPI dominates at both wavelengths, which is not the regime the transition
+/// happens in.)*
+///
+/// This is *not* an MPI cross-section from a table, and it is not the
+/// T&T-calibrated `σ_K` of [`AirBreakdown::with_tt2012_mpi`], which is anchored
+/// to a number 37× below the same paper's own measurement. It is a
+/// first-principles rate with one soft multiplier — and the finding it delivers
+/// is negative: see
+/// `keldysh_mpi_does_not_close_the_wavelength_gap`.
+pub fn keldysh_rate(intensity: f64, omega: f64, u_ion: f64, prefactor: f64) -> f64 {
+    if intensity <= 0.0 || prefactor <= 0.0 {
+        return 0.0;
+    }
+    let gamma = keldysh_gamma(intensity, omega, u_ion);
+    let s = 2.0 * u_ion / (HBAR * omega) * keldysh_tunnel_exponent(gamma);
+    if !s.is_finite() {
+        return 0.0;
+    }
+    prefactor * omega * (-s.min(MAX_EXPONENT)).exp()
+}
+
 /// A dry-air optical-breakdown point model at one wavelength.
 ///
 /// Construct with [`AirBreakdown::air_1064nm`] for the pinned M6a case, or
@@ -194,6 +289,10 @@ pub struct AirBreakdown {
     mpi_i_ref: f64,
     /// Number of photons `K` for multiphoton ionization.
     k_photons: i32,
+    /// Prefactor for the Keldysh photoionization source; zero disables it.
+    /// Mutually exclusive in practice with [`Self::mpi_rate_ref`] — both are
+    /// multiphoton sources, and enabling both double-counts the same channel.
+    keldysh_prefactor: f64,
     /// Breakdown criterion density `n_bd` (m⁻³).
     n_bd: f64,
     /// Neutral-density-per-pressure `N/p` at reference temperature (m⁻³·Pa⁻¹),
@@ -268,6 +367,10 @@ impl AirBreakdown {
             mpi_rate_ref: 0.0,
             mpi_i_ref: 1.0,
             k_photons,
+            // Keldysh photoionization also off by default, so every pre-existing
+            // gate keeps its published numbers. Enable with
+            // `with_keldysh_mpi`.
+            keldysh_prefactor: 0.0,
             n_bd: 1.0e23,
             n_over_p: 1.0 / (K_B * temperature),
             n_seed: 1.0 / focal_volume,
@@ -354,6 +457,41 @@ impl AirBreakdown {
         self.k_photons = 14;
         self.mpi_i_ref = I_B_MPI;
         self.mpi_rate_ref = self.n_bd / (self.n_over_p * pressure * fwhm);
+        self
+    }
+
+    /// Enable Keldysh photoionization as the multiphoton source, with an
+    /// explicit order-unity `prefactor` (see [`keldysh_rate`] for why the
+    /// prefactor does not carry the conclusions).
+    ///
+    /// This is the channel M6a's open question names. Unlike
+    /// [`Self::with_tt2012_mpi`], nothing here is anchored to a measured
+    /// threshold: the rate's intensity dependence and its wavelength dependence
+    /// both come out of the theory, which is the only way a multiphoton term can
+    /// be added without making the `λ` comparison circular.
+    pub fn with_keldysh_mpi(mut self, prefactor: f64) -> Self {
+        self.keldysh_prefactor = prefactor;
+        // The two multiphoton paths model the same physics; keep one live.
+        self.mpi_rate_ref = 0.0;
+        self
+    }
+
+    /// Override the initial electron density `n_e0` (m⁻³).
+    ///
+    /// The default is one electron in the focal volume, `1/V_focal`, which for
+    /// T&T's geometry is `1.2×10¹³ m⁻³`. **That is not a physical background
+    /// density**: cosmic-ray ionization maintains ~`10⁹–10¹⁰ m⁻³` in the lower
+    /// atmosphere, so an `8.3×10⁻¹⁴ m³` focus contains ~`10⁻⁴` free electrons —
+    /// it essentially never has one. Assuming a seed is present is a ~10⁴
+    /// overestimate, and it is not a harmless one: handing the cascade a free
+    /// electron removes the *seed-production* step, which is where almost all of
+    /// the wavelength dependence of real breakdown lives.
+    ///
+    /// Set this small and enable [`Self::with_keldysh_mpi`] to let multiphoton
+    /// ionization create the seed instead, which is the physically ordered
+    /// calculation. See `docs/M6A_SPEC.md` § "Seeding".
+    pub fn with_seed_density(mut self, n_seed: f64) -> Self {
+        self.n_seed = n_seed;
         self
     }
 
@@ -496,10 +634,14 @@ impl AirBreakdown {
     /// `I > 10²²`), while `σ_K` itself underflows to ~`10⁻¹⁸⁶`. The ratio form
     /// keeps every intermediate in range.
     pub fn mpi_source(&self, intensity: f64, pressure: f64) -> f64 {
+        let n_neutral = self.n_over_p * pressure;
+        if self.keldysh_prefactor > 0.0 {
+            return n_neutral
+                * keldysh_rate(intensity, self.omega, self.u_ion, self.keldysh_prefactor);
+        }
         if self.mpi_rate_ref == 0.0 {
             return 0.0;
         }
-        let n_neutral = self.n_over_p * pressure;
         n_neutral * self.mpi_rate_ref * (intensity / self.mpi_i_ref).powi(self.k_photons)
     }
 
