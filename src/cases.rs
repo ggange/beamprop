@@ -1243,9 +1243,18 @@ pub struct IgnitionRun {
 /// is plotted (`docs/M6A2_SPEC.md` § "What this rung can and cannot claim").
 ///
 /// That offset is not a limitation of this driver and cannot be fixed here: it
-/// is the open D5 debt recorded in `docs/M6A_SPEC.md` § Fallback, which needs an
+/// was the D5 debt recorded in `docs/M6A_SPEC.md` § Fallback, which needed an
 /// independent threshold dataset to close. Named at the call site so the
 /// dependency is visible from the code that inherits it.
+///
+/// **That debt is now discharged (2026-07-30) and the news is bad.** The anchor
+/// (Chylek et al. 1990, clean air at 532 nm) falsifies the kernel's `λ⁻²`
+/// wavelength scaling by ~5× and in sign, and shows the pressure-dependence
+/// error is *curvature* — the kernel crosses the measurement near 250 Torr
+/// rather than sitting a bounded distance from it. So the threshold this driver
+/// consumes is not merely offset by an ungated constant inside inter-lab
+/// scatter; it is wrong in shape on two axes. Read `p_ignite` accordingly: the
+/// shape of `P_ig(cn2)` is this rung's result, its position is not.
 ///
 /// Everything upstream of that one boolean *is* independent of M6a and is
 /// gated: the pupil phase statistics against Noll, the focal-intensity

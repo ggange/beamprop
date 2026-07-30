@@ -352,6 +352,17 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   `U_i` = 12.06 eV), so the bracket is a *one-parameter sensitivity*, not two
   independent limits, and not a bound — `⟨ε⟩` ≈ 5 eV gives `n` = 0.346 on its
   own, and `⟨ε⟩ = U_i` gives 0.192, inside the interval.
+- **"Too flat" is window-specific — the real error is CURVATURE.** The
+  `n = 0.095` above is fitted over 300–2000 Torr. Chylek's 532 nm curve extends
+  the comparison two decades lower and shows the kernel is not a power law at
+  all: local exponents **1.951** (10–100 Torr), **1.047** (100–300), **0.170**
+  (300–786), against a measurement that holds **0.41–0.47** throughout on 1.5–6 %
+  scatter. The kernel is 4.6× too steep at the bottom, 2.8× too flat at the top,
+  and crosses the data near 250 Torr — an 11.5× swing where the measurement
+  varies by 1.13×. Same behaviour at 1064 nm, so this is shape, not level or
+  wavelength. Gated as
+  `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not`. Any statement
+  that the kernel is simply "too flat" holds only above ~250 Torr.
 - **Cascade theory (T&T Eq. 4) — PASSES, and is the apples-to-apples
   reference.** `I_B(CC) = 1.44×10⁶(p_atm² + 2.2×10⁵λ_µm⁻²)` W/cm², implemented
   as `validate::tt2012_cascade_threshold`. Flat at 1064 nm (`n = −0.00002`)
@@ -393,18 +404,44 @@ focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitt
   states), not a rate anchor. A real `σ_K` from multiphoton cross-section data
   is the open item.
 
-**Open debt M6a hands forward (D5 fallback, half-discharged).** With the slope
-gate red, the plan's fallback clause requires an anchor independent of the
-kernel's own coefficients. Eq. 4 supplies that for the **exponent** (`λ⁻²` is
-untouched by any coefficient choice) but not for the **level**: it is the same
-paper, and its `λ⁻²` coefficient implies the same `δ_eff·⟨ε⟩ = 0.060 eV` the
-kernel already assumes, so the 1.01× agreement is intra-lineage consistency, not
-corroboration. Closing it needs a second published threshold dataset from a
-different group — ideally at a different wavelength, so `λ⁻²` is tested against
-measurement rather than against theory. M6a's honest status until then: one
-clean shape gate against accepted cascade theory, no external agreement with
-measurement. Does not block M6c (gated separately on Chapman–Jouguet velocity).
-See `docs/M6A_SPEC.md` § Fallback.
+**D5 debt — DISCHARGED 2026-07-30, in the negative.** With the slope gate red,
+the plan's fallback clause required an anchor independent of the kernel's own
+coefficients. Eq. 4 supplied that for the **exponent** (`λ⁻²` is untouched by
+any coefficient choice) but not for the **level**: it is the same paper, and its
+`λ⁻²` coefficient implies the same `δ_eff·⟨ε⟩ = 0.060 eV` the kernel already
+assumes, so the 1.01× agreement is intra-lineage consistency, not corroboration.
+
+The second dataset the clause asked for is now in the suite — **Chylek et al.
+1990, clean air at 532 nm** (`tests/data/chylek1990_air_threshold_vs_pressure.csv`,
+digitized programmatically by `scripts/digitize_chylek1990.py`). It is the anchor
+D5 specified: different group, different apparatus, and a different wavelength —
+exactly half T&T's 1064 nm, at a nearly identical pulse length (6.5 vs 6 ± 1 ns)
+and focal radius (16.5 vs 20 µm). That last point is what makes it usable: the
+paper's own Sec. II names pulse duration and focal spot as the reason literature
+values of `α` contradict one another, and here they are matched, so the 532/1064
+comparison measures the *wavelength* scaling rather than two different benches.
+
+It does not corroborate the model — it falsifies the `λ⁻²` prediction against
+measurement:
+
+```text
+cascade / kernel:  I_th(532)/I_th(1064) = 3.99   (= λ⁻²; shorter λ costs more)
+measured:          I_th(532)/I_th(1064) ≈ 0.80   (532 nm breaks down EASIER)
+```
+
+Wrong by ~5×, and wrong in **sign**. At 532 nm the multiphoton order falls from
+`K = ⌈12.06/1.166⌉ = 11` photons to `⌈12.06/2.33⌉ = 6`, so the MPI channel the
+kernel leaves OFF is enormously stronger exactly where the measurement drops —
+the same missing channel the pressure-slope gates indict, seen on a second axis.
+Gated as `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared`.
+
+**Consequence for how M6a is described.** `λ⁻²` remains a correct statement about
+the kernel's internal structure and its gate stays — it fails loudly if the IB
+Lorentzian limit is ever left. It may **not** be called external agreement with
+measurement, and it is no longer M6a's headline. M6a's honest status: verified
+against cascade theory, falsified against air on both the pressure axis and the
+wavelength axis. Does not block M6c (gated separately on Chapman–Jouguet
+velocity). See `docs/M6A_SPEC.md` § Fallback.
 
 Open question M6a hands forward: the measured `n` = 0.329 is unreachable by any
 cascade-only model, since accepted cascade theory is flat at this wavelength.
@@ -414,6 +451,15 @@ distribution-resolved cascade rate, since the default variant's near-flatness
 comes from putting every electron on the mean trajectory (at threshold it runs
 within 0.8 % of the `ε_∞ = U_i` pole at 2000 Torr, where that idealization is
 least defensible).
+
+Chylek's 532 nm data sharpens that question into a quantitative target rather
+than a direction. Any candidate MPI channel now has to do three things at once:
+lift the 532 nm threshold's *ratio* to 1064 nm from 3.99 down to ≈0.80, flatten
+the low-pressure branch from 1.951 to ≈0.43, and steepen the high-pressure
+branch from 0.170 to ≈0.47 — with `K = 6` photons at 532 nm against `K = 11` at
+1064 nm supplying most of the wavelength leverage for free. The three
+`chylek1990_*` gates pin all three numbers, so a channel that fixes one while
+breaking another cannot land quietly.
 
 Full model and constants: `docs/M6A_SPEC.md`.
 
@@ -429,6 +475,13 @@ References:
   — the external anchor: `E_B` and `E_eff` curves digitized into
   `tests/data/tt2012_*.csv`, focal geometry from their Eq. 5, and the cascade
   closed form from their Eq. 4.
+- P. Chylek, M. A. Jarzembski, V. Srivastava, R. G. Pinnick, *Pressure dependence
+  of the laser-induced breakdown thresholds of gases and droplets*, Appl. Opt.
+  **29**, 2303 (1990) — the independent D5 anchor: the clean-air threshold at
+  532 nm (their Fig. 3, `α = 0.45 ± 0.01`), digitized into
+  `tests/data/chylek1990_air_threshold_vs_pressure.csv` by
+  `scripts/digitize_chylek1990.py`. Second group, second apparatus, second
+  wavelength, matched pulse and focus.
 
 ## M6a.2 — Aperture optics and pupil phase statistics
 

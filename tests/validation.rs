@@ -864,7 +864,7 @@ fn monte_carlo_reproducible_across_thread_counts() {
 /// M6a's external anchors read them. A skip would report the suite green while
 /// gating nothing, which is the one failure mode this suite exists to prevent.
 /// `b3_smith1977_curve_quantitative` in `tests/blooming.rs` sets the precedent.
-fn load_tt_curve(name: &str) -> Vec<(f64, f64)> {
+fn load_digitized_curve(name: &str) -> Vec<(f64, f64)> {
     let path = format!("{}/tests/data/{}", env!("CARGO_MANIFEST_DIR"), name);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!("digitized anchor {path} is unreadable ({e}); it is committed data, so this is a broken checkout, not a missing option")
@@ -923,8 +923,8 @@ const TT_P_HI: f64 = 2000.0;
 /// amplitude — read as a peak it would miss by a flat √2.
 #[test]
 fn tt2012_collision_frequency_matches_literature() {
-    let e_b = load_tt_curve("tt2012_E_B_vs_pressure.csv");
-    let e_eff = load_tt_curve("tt2012_E_eff_vs_pressure.csv");
+    let e_b = load_digitized_curve("tt2012_E_B_vs_pressure.csv");
+    let e_eff = load_digitized_curve("tt2012_E_eff_vs_pressure.csv");
     // The kernel's constant, and the wavelength it is used at.
     const K_M: f64 = 3.9e7; // s⁻¹·Pa⁻¹
     let omega = 2.0 * std::f64::consts::PI * 299_792_458.0 / 1064e-9;
@@ -977,7 +977,7 @@ fn tt2012_collision_frequency_matches_literature() {
 /// falls. In the opposite (`ν_m ≫ ω`) limit it would fall.
 #[test]
 fn tt2012_effective_field_rises_with_pressure() {
-    let e_eff = load_tt_curve("tt2012_E_eff_vs_pressure.csv");
+    let e_eff = load_digitized_curve("tt2012_E_eff_vs_pressure.csv");
     let slope = beamprop::validate::loglog_slope(&e_eff).expect("E_eff slope");
     assert!(
         (0.55..=0.85).contains(&slope),
@@ -1037,7 +1037,7 @@ fn tt2012_effective_field_rises_with_pressure() {
 #[test]
 #[ignore = "RED on purpose: measured n=0.329 is outside the default model's literature envelope [0.023, 0.231] (see docs/M6A_SPEC.md)"]
 fn tt2012_threshold_slope_matches_measurement() {
-    let e_b = load_tt_curve("tt2012_E_B_vs_pressure.csv");
+    let e_b = load_digitized_curve("tt2012_E_B_vs_pressure.csv");
     let high: Vec<_> = e_b
         .iter()
         .copied()
@@ -1307,7 +1307,7 @@ fn tt2012_wavelength_scaling_matches_cascade_theory() {
 /// deliberately not a level agreement, and no longer a flatness claim.
 #[test]
 fn tt2012_level_ratio_is_bounded_within_scatter() {
-    let e_b = load_tt_curve("tt2012_E_B_vs_pressure.csv");
+    let e_b = load_digitized_curve("tt2012_E_B_vs_pressure.csv");
     const EPS0: f64 = 8.854_187_812_8e-12;
     const C: f64 = 299_792_458.0;
     let m = beamprop::breakdown0d::AirBreakdown::air_1064nm();
@@ -1349,6 +1349,263 @@ fn tt2012_level_ratio_is_bounded_within_scatter() {
         "top ratio is {hi:.2}×, expected ≈7.0× — check whether E_B was converted \
          with the RMS form I = ε₀cE² (correct) or the peak form ½ε₀cE² (wrong, \
          doubles this number)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M6a D5 gates — Chylek et al. 1990, 532 nm ns air breakdown.
+//
+// The independent anchor M6a's D5 clause owed. Different group, different
+// apparatus, and — the point — a different wavelength: 532 nm against T&T's
+// 1064 nm, at a nearly identical pulse length (6.5 vs 6 ± 1 ns) and focal
+// radius (16.5 vs 20 µm). Chylek's own Sec. II names pulse duration and focal
+// spot as the reason literature values of α contradict each other; here they
+// are matched, so the 532/1064 comparison measures the *wavelength* scaling
+// rather than the difference between two benches.
+//
+// Both gates below are agreement gates that the kernel **fails**, and both
+// assert the failure so it is pinned rather than quietly re-litigated. See
+// docs/M6A_SPEC.md § Fallback.
+// ---------------------------------------------------------------------------
+
+/// Torr window for the two-paper comparison: above 100 Torr both digitizations
+/// are at their most reliable (T&T's own `E_B` trace is noisiest below ~40 Torr)
+/// and the cascade branch dominates in both experiments.
+const CHYLEK_P_LO: f64 = 100.0;
+
+/// Chylek's clean-air threshold curve, as `(Torr, W/m²)` — the CSV is in the
+/// paper's own `W/cm²`, converted here exactly as the T&T gates convert `E_B`.
+fn chylek_air_threshold() -> Vec<(f64, f64)> {
+    load_digitized_curve("chylek1990_air_threshold_vs_pressure.csv")
+        .into_iter()
+        .map(|(p_torr, i_w_cm2)| (p_torr, i_w_cm2 * 1e4))
+        .collect()
+}
+
+/// **The digitization's own check, run in CI.**
+///
+/// `tests/data/chylek1990_air_threshold_vs_pressure.csv` was traced
+/// programmatically (`scripts/digitize_chylek1990.py`), and its header claims
+/// the trace reproduces the `α = 0.45 ± 0.01` slope printed in the paper's
+/// Fig. 3 caption. That claim is checked here rather than merely asserted in a
+/// comment, so a bad re-trace cannot land silently: this is the one gate in the
+/// file whose subject is the *data*, not the model.
+#[test]
+fn chylek1990_digitization_reproduces_the_published_slope() {
+    let curve = chylek_air_threshold();
+    assert!(
+        curve.len() >= 45,
+        "expected ~49 digitized markers, got {}",
+        curve.len()
+    );
+    let alpha = -beamprop::validate::loglog_slope(&curve).expect("Chylek slope");
+    assert!(
+        (0.43..=0.46).contains(&alpha),
+        "digitized slope α = {alpha:.4}, but the paper's Fig. 3 caption prints \
+         0.45 ± 0.01 — the trace in scripts/digitize_chylek1990.py has drifted"
+    );
+    // Span: the fit must not be resting on a handful of points at one end.
+    let (lo, hi) = (curve[0].0, curve[curve.len() - 1].0);
+    assert!(
+        lo < 5.0 && hi > 700.0,
+        "digitized range {lo:.1}–{hi:.1} Torr is short of the paper's 1–800"
+    );
+}
+
+/// **External gate (failing, asserted).** Chylek's air threshold is a clean
+/// power law in pressure over 2.3 decades. The kernel's is not a power law at
+/// all, and it *crosses* the measurement rather than sitting to one side.
+///
+/// Local exponents, fitted over identical sub-windows:
+///
+/// | Torr | measured (532 nm) | kernel (532 nm) | |
+/// |---|---|---|---|
+/// | 10–100 | 0.428 | **1.951** | 4.6× too steep |
+/// | 100–300 | 0.413 | **1.047** | 2.5× too steep |
+/// | 300–786 | 0.468 | **0.170** | 2.8× too flat |
+///
+/// The measurement holds 0.41–0.47 throughout (1.13× spread, on 1.5–6 %
+/// scatter); the kernel swings 11.5× and passes through the data somewhere near
+/// 250 Torr. Both the low-pressure diffusion branch and the high-pressure
+/// plateau are wrong, in opposite directions, and they are wrong the same way at
+/// 1064 nm — so this is curvature, not a level or a wavelength artifact.
+///
+/// **This corrects how M6a's slope disagreement has been described.** The
+/// existing red gate `tt2012_threshold_slope_matches_measurement` compares over
+/// 300–2000 Torr and concludes the kernel is *too flat* (0.095 vs 0.329), and
+/// `tt2012_level_ratio_is_bounded_within_scatter` reads the resulting drift as
+/// "the model is too flat, so it runs increasingly high as pressure rises".
+/// Both statements are true **in that window only**. Below ~250 Torr the kernel
+/// is far too steep. A single exponent was hiding the shape of the error, and a
+/// second dataset spanning two more decades of pressure is what exposed it.
+///
+/// Kept green by asserting the gap, in the pattern of
+/// `tt2012_mpi_calibration_undershoots_the_data`: the honest status of M6a is
+/// that this gap exists, and pinning it means a change to it has to be argued
+/// for. Closing it means the MPI channel the open question names, plus a
+/// distribution-resolved cascade rate — not a re-tuned constant.
+#[test]
+fn chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not() {
+    use beamprop::breakdown0d::AirBreakdown;
+    /// Sub-windows spanning Chylek's range, each with enough points to fit.
+    const WINDOWS: [(f64, f64); 3] = [(10.0, 100.0), (100.0, 300.0), (300.0, 786.0)];
+    let curve = chylek_air_threshold();
+
+    let mut measured = Vec::new();
+    let mut modelled = Vec::new();
+    for (lo, hi) in WINDOWS {
+        let pts: Vec<(f64, f64)> = curve
+            .iter()
+            .copied()
+            .filter(|(p, _)| (lo..=hi).contains(p))
+            .collect();
+        assert!(
+            pts.len() >= 8,
+            "{lo}–{hi} Torr has only {} points",
+            pts.len()
+        );
+        measured.push(-beamprop::validate::loglog_slope(&pts).expect("measured slope"));
+
+        // The kernel at Chylek's own wavelength and pulse, at the measured
+        // abscissae, so the two fits have identical support.
+        let m = AirBreakdown::dry_air_tt2012_focus(532e-9).expect("λ in range");
+        let mp: Vec<(f64, f64)> = pts
+            .iter()
+            .map(|&(p_torr, _)| {
+                (
+                    p_torr,
+                    m.threshold_intensity(6.5e-9, p_torr * TORR, 400)
+                        .expect("threshold in bracket"),
+                )
+            })
+            .collect();
+        modelled.push(-beamprop::validate::loglog_slope(&mp).expect("model slope"));
+    }
+
+    // The measurement is a power law: one exponent describes all three windows.
+    let m_lo = measured.iter().copied().fold(f64::MAX, f64::min);
+    let m_hi = measured.iter().copied().fold(0.0f64, f64::max);
+    assert!(
+        m_hi / m_lo < 1.25 && (0.38..=0.50).contains(&m_lo) && (0.38..=0.50).contains(&m_hi),
+        "Chylek's local exponents are {measured:?} — expected ≈0.41–0.47 throughout; \
+         if this spread grew, re-check the digitization before the model"
+    );
+
+    // The kernel is not, and by a margin far outside the measurement's spread.
+    let k_lo = modelled.iter().copied().fold(f64::MAX, f64::min);
+    let k_hi = modelled.iter().copied().fold(0.0f64, f64::max);
+    assert!(
+        k_hi / k_lo > 5.0,
+        "kernel local exponents are {modelled:?} (spread {:.1}×); this gate asserts \
+         the known curvature. If a real MPI channel landed and straightened the \
+         curve, this is the assertion to revisit",
+        k_hi / k_lo
+    );
+    // And it crosses: too steep in the lowest window, too flat in the highest.
+    assert!(
+        modelled[0] > measured[0] * 2.0,
+        "kernel is {:.3} vs measured {:.3} over 10–100 Torr; expected ≈4.6× steeper",
+        modelled[0],
+        measured[0]
+    );
+    assert!(
+        modelled[2] < measured[2] / 2.0,
+        "kernel is {:.3} vs measured {:.3} over 300–786 Torr; expected ≈2.8× flatter",
+        modelled[2],
+        measured[2]
+    );
+}
+
+/// **External gate (failing, asserted) — the one D5 actually asked for.**
+///
+/// `tt2012_wavelength_scaling_matches_cascade_theory` is M6a's cleanest gate:
+/// the kernel reproduces `λ⁻²` to −2.000 over a 20× span, on an axis where
+/// nothing is tunable. But its reference is T&T's own Eq. 4 — the same paper,
+/// the same coefficient lineage — so it establishes agreement with *cascade
+/// theory*, not with air. D5 exists precisely to force that distinction.
+///
+/// Two measurements now bracket the same axis at a matched pulse and focus:
+///
+/// ```text
+/// cascade / kernel:  I_th(532) / I_th(1064) = 3.99   (= λ⁻², shorter λ costs more)
+/// measured:          I_th(532) / I_th(1064) ≈ 0.80   (532 nm breaks down EASIER)
+/// ```
+///
+/// So `λ⁻²` is wrong here by ~5×, and wrong in **sign**: cascade theory demands
+/// the 532 nm threshold sit 4× above the 1064 nm one, and the experiments put it
+/// ~20 % below. The mechanism is not mysterious — at 532 nm the multiphoton
+/// order falls from `K = ⌈12.06/1.166⌉ = 11` photons to `⌈12.06/2.33⌉ = 6`, so
+/// the MPI channel the kernel leaves OFF is enormously stronger exactly where
+/// the measurement drops. It is the same missing channel the pressure-slope
+/// gates indict, seen on a second axis.
+///
+/// **What this changes about M6a's status.** The `λ⁻²` gate stays — it is a
+/// valid statement about the kernel's internal structure and fails loudly if
+/// the IB Lorentzian limit is ever left. It may no longer be described as
+/// external agreement with measurement. That is the whole content of the D5
+/// clause, and this gate is what discharges it: with a real second dataset, in
+/// the negative.
+#[test]
+fn chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared() {
+    use beamprop::breakdown0d::AirBreakdown;
+    const EPS0: f64 = 8.854_187_812_8e-12;
+    const C: f64 = 299_792_458.0;
+
+    // Measured 1064 nm thresholds, from T&T's E_B exactly as the level gate
+    // converts it (RMS form; see tt2012_level_ratio_is_bounded_within_scatter).
+    let tt: Vec<(f64, f64)> = load_digitized_curve("tt2012_E_B_vs_pressure.csv")
+        .into_iter()
+        .map(|(p_torr, e_mv)| {
+            let e_rms = e_mv * 1e6 * 100.0;
+            (p_torr, EPS0 * C * e_rms * e_rms)
+        })
+        .collect();
+
+    let mut ratios = Vec::new();
+    for (p_torr, i_532) in chylek_air_threshold() {
+        if p_torr < CHYLEK_P_LO {
+            continue;
+        }
+        if let Some(i_1064) = interp_log(&tt, p_torr) {
+            ratios.push(i_532 / i_1064);
+        }
+    }
+    assert!(ratios.len() >= 15, "too few overlapping: {}", ratios.len());
+    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let measured = ratios[ratios.len() / 2];
+
+    // The kernel's own ratio. dry_air_tt2012_focus holds the geometry fixed
+    // across λ by construction, so this ratio is geometry-free — it is the
+    // λ⁻² prediction and nothing else.
+    let p = 760.0 * TORR;
+    let hi = AirBreakdown::dry_air_tt2012_focus(532e-9).unwrap();
+    let lo = AirBreakdown::dry_air_tt2012_focus(1064e-9).unwrap();
+    let predicted = hi.threshold_intensity(6e-9, p, 400).unwrap()
+        / lo.threshold_intensity(6e-9, p, 400).unwrap();
+
+    assert!(
+        (3.9..=4.1).contains(&predicted),
+        "kernel λ-ratio is {predicted:.3}, expected ≈3.99 (= (1064/532)² = 4); \
+         if this moved, the IB Lorentzian limit has been left"
+    );
+    // The measurement is on the other side of unity from the prediction.
+    assert!(
+        measured < 1.0,
+        "measured I_th(532)/I_th(1064) is {measured:.3}; both papers put the \
+         532 nm threshold BELOW the 1064 nm one, which is the finding"
+    );
+    assert!(
+        (0.70..=0.90).contains(&measured),
+        "measured λ-ratio is {measured:.3}, expected ≈0.80 across \
+         {CHYLEK_P_LO}–786 Torr"
+    );
+    // Pin the size of the failure, so an MPI channel that fixed it would show
+    // up here as a loud change rather than a quiet improvement.
+    let overshoot = predicted / measured;
+    assert!(
+        (4.4..=5.6).contains(&overshoot),
+        "cascade λ⁻² overpredicts the measured ratio by {overshoot:.2}×, \
+         expected ≈4.99×"
     );
 }
 
@@ -1622,7 +1879,7 @@ struct PlasmaSample {
 /// Load the off-grid reference samples.
 ///
 /// **Panics if the file is missing**, for the reason given on
-/// [`load_tt_curve`]: it is committed data, and G6 reporting green because its
+/// [`load_digitized_curve`]: it is committed data, and G6 reporting green because its
 /// reference vanished is worse than G6 failing.
 fn load_plasma_samples() -> Vec<PlasmaSample> {
     let path = format!(

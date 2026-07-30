@@ -1,0 +1,93 @@
+# Digitized from P. Chylek, M. A. Jarzembski, V. Srivastava, R. G. Pinnick,
+# "Pressure dependence of the laser-induced breakdown thresholds of gases and
+# droplets", Appl. Opt. 29, 2303-2306 (1990) -- the CLEAN AIR breakdown
+# threshold intensity curve (filled diamonds), I_TH against pressure.
+# Figure: Fig. 3, pinned at digitization time -- required so the digitization
+#   is reproducible against the paper, not just describable.
+#
+# Method: the 400 dpi bilevel page raster was extracted from the PDF with
+# pdfimages; the two axes were calibrated by least squares on the log-decade
+# MINOR ticks (24 ticks in x, residual 0.51% of a decade; 17 in y, residual
+# 0.38%); the filled-diamond markers were located by normalised cross-
+# correlation against a 19x15 rhombus template and refined to the dark-pixel
+# centroid of a local window. Open diamonds (the water-droplet series) score
+# low on that template because their centre is hollow. This is a programmatic
+# trace, NOT a hand trace -- it is reproducible from the PDF, which a
+# WebPlotDigitizer session is not.
+#
+# Two independent checks on the digitization, neither used to fit it:
+#   1. The BULK WATER rule was held out of the y calibration; it lands at
+#      4.61e10 W/cm^2 against the 4.7e10 the paper's Sec. V states -- 2.0%.
+#   2. These 49 points give a log-log slope alpha = 0.4450 +/- 0.0049 against
+#      the alpha = 0.45 +/- 0.01 the paper's own Fig. 3 caption prints -- 1.0%.
+# Scatter about that fit is 5.2%, i.e. the paper's own measurement scatter, so
+# the marker detection is not contributing meaningful noise.
+#
+# Setup (paper): Nd:YAG SECOND HARMONIC, lambda = 0.532 um, 6.5 ns pulse,
+# focused by a 10 cm plano-convex lens to a ~33 um focal DIAMETER (16.5 um
+# radius) inside a gas chamber, clean air, 1-800 Torr.
+#
+# Why this file exists: it is the independent anchor M6a's D5 clause owes.
+# Different group, different apparatus, and -- the point -- a different
+# wavelength, exactly half T&T's 1064 nm, at a nearly identical pulse length
+# (6.5 vs 6 +/- 1 ns) and focal radius (16.5 vs 20 um). Those are the two
+# confounds this paper's own Sec. II blames for contradictory literature
+# values of alpha, and here they are matched, so the 532/1064 ratio is a
+# measurement of the wavelength scaling rather than of the two setups.
+#
+# Regenerate with:
+#   python3 scripts/digitize_chylek1990.py <chylek1990.pdf>
+# (the PDF is copyrighted and deliberately not committed; supply your own).
+# Run with --verify to re-run the two checks above without emitting data.
+#
+# columns: pressure_torr, I_th_W_per_cm2
+pressure_torr,I_th_W_per_cm2
+3.7024,1.54930e+12
+5.3006,1.34505e+12
+6.3339,1.15506e+12
+7.5231,1.21269e+12
+8.5400,1.18097e+12
+9.5616,1.08822e+12
+11.9483,1.07733e+12
+12.6929,1.04153e+12
+14.9358,9.88852e+11
+16.0413,9.65988e+11
+16.7366,9.64218e+11
+19.0893,9.39008e+11
+21.3919,8.37267e+11
+23.8129,7.45952e+11
+26.7932,7.43170e+11
+29.1332,7.28963e+11
+31.6079,7.19757e+11
+34.6450,6.82505e+11
+36.3763,6.16736e+11
+38.7355,6.25541e+11
+41.9077,5.82347e+11
+46.9869,5.40518e+11
+52.7972,5.15817e+11
+56.9306,5.09501e+11
+63.9914,4.85947e+11
+70.0945,4.59047e+11
+75.5675,4.45099e+11
+84.8481,4.23044e+11
+96.4323,3.89794e+11
+114.6044,3.63465e+11
+127.9575,3.46946e+11
+142.0920,3.43209e+11
+147.6428,3.21071e+11
+167.5063,3.01912e+11
+187.5573,2.83962e+11
+212.5090,2.76793e+11
+234.4421,2.76074e+11
+254.1525,2.62110e+11
+292.1620,2.46862e+11
+336.2657,2.36383e+11
+379.9440,2.17797e+11
+416.7998,2.09133e+11
+467.9641,2.00453e+11
+496.5795,1.96281e+11
+543.7849,1.92195e+11
+586.7834,1.76661e+11
+606.6541,1.81243e+11
+699.1062,1.65533e+11
+785.6672,1.56000e+11

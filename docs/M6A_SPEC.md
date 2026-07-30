@@ -683,6 +683,70 @@ which gates independently on Chapman–Jouguet velocity and consumes only the
 threshold trigger — but it must not be allowed to go implicit as the ladder
 climbs.
 
+### D5 discharged — 2026-07-30, in the negative
+
+The dataset above now exists in the suite: **Chylek, Jarzembski, Srivastava &
+Pinnick, Appl. Opt. 29, 2303 (1990)**, clean air at **532 nm**, digitized from
+their Fig. 3 into `tests/data/chylek1990_air_threshold_vs_pressure.csv`.
+
+It meets every condition the clause set, including the one that looked hardest:
+
+| condition | status |
+|---|---|
+| different group | Oklahoma / UAH / USRA / Army ASL White Sands |
+| different apparatus | own pressure chamber, 10 cm lens, 1–800 Torr |
+| different wavelength | **532 nm**, exactly half T&T's 1064 nm |
+| not Raizer-lineage | `α` is an empirical fit to their own data; their Sec. II uses only the bracketing `α = 1` (cascade) and `α = 1/k` (MPI) limits. No `K_m`, `δ_eff` or `⟨ε⟩` shared with the kernel |
+
+The confound that usually makes cross-paper threshold comparisons worthless is
+absent here by luck: Chylek's pulse is **6.5 ns** into a **16.5 µm** focal radius
+against T&T's **6 ± 1 ns** into **20 µm** — it is the second harmonic of the same
+laser family. Chylek's own Sec. II names pulse duration and focal spot as the
+reason published `α` values contradict one another; with both matched, the
+532/1064 comparison is a measurement of the wavelength scaling.
+
+**Digitization provenance.** Traced programmatically, not by hand, by
+`scripts/digitize_chylek1990.py`: axes calibrated by least squares on the
+log-decade minor ticks (24 in `x`, residual 0.51 % of a decade; 17 in `y`,
+0.38 %), markers located by normalised cross-correlation against a rhombus
+template. Two checks, neither used to fit anything — the BULK WATER rule was held
+out of the `y` calibration and lands at 4.61×10¹⁰ against the 4.7×10¹⁰ the paper
+states (2.0 %), and the 49 recovered points give `α = 0.4450 ± 0.0049` against
+the `0.45 ± 0.01` the paper's own caption prints (1.0 %). The first is gated as
+`chylek1990_digitization_reproduces_the_published_slope`, so a bad re-trace
+cannot land silently. Unlike the T&T curves, this trace is reproducible from the
+PDF.
+
+**The finding: it falsifies `λ⁻²` against measurement.**
+
+```text
+cascade / kernel:  I_th(532)/I_th(1064) = 3.99   (= λ⁻²; shorter λ costs more)
+measured:          I_th(532)/I_th(1064) ≈ 0.80   (532 nm breaks down EASIER)
+```
+
+Wrong by ~5× and wrong in **sign**: cascade theory demands the 532 nm threshold
+sit 4× above the 1064 nm one; the two experiments put it ~20 % below. At 532 nm
+the multiphoton order falls from `K = 11` to `K = 6`, so the MPI channel the
+kernel leaves OFF is strongest exactly where the measurement drops. Gated as
+`chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared`.
+
+**Second finding: "too flat" was window-specific.** Extending the pressure
+comparison two decades below T&T's range shows the kernel is not a power law at
+all — local exponents 1.951 (10–100 Torr), 1.047 (100–300), 0.170 (300–786),
+against a measurement holding 0.41–0.47 throughout. The kernel is 4.6× too steep
+at the bottom, 2.8× too flat at the top, and crosses the data near 250 Torr. The
+`n = 0.095` vs `0.329` framing elsewhere in this document is fitted over
+300–2000 Torr and is correct only there; the defect is curvature. Gated as
+`chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not`.
+
+**Consequence.** The `λ⁻²` gate stays — it is a true statement about the kernel's
+internal structure and fails loudly if the IB Lorentzian limit is left. It may no
+longer be described as external agreement with measurement, and it is no longer
+M6a's headline. M6a's status, stated plainly: **verified against cascade theory,
+falsified against air on both the pressure and the wavelength axis.** The debt is
+closed in the sense D5 cares about — an independent anchor exists and has been
+confronted — not in the sense of the model having been vindicated.
+
 ## NOT in scope (M6a)
 
 - Any propagator coupling.

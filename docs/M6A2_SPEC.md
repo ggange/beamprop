@@ -74,11 +74,21 @@ inherits that offset. The curve's location on the `Cn²` axis is therefore **a
 statement about the model, not about the world**, and must be labelled so
 wherever it is plotted or quoted.
 
-**What would change that** is the open D5 debt in `docs/M6A_SPEC.md` § Fallback:
-an independent threshold dataset anchoring the *level*. Named here because that
-spec warns the debt "must not be allowed to go implicit as the ladder climbs",
-and this rung is the second milestone to inherit it. Until it is discharged, no
-amount of work inside M6a.2 can make the position of this curve a claim.
+**What would change that** was the D5 debt in `docs/M6A_SPEC.md` § Fallback: an
+independent threshold dataset anchoring the *level*. Named here because that spec
+warns the debt "must not be allowed to go implicit as the ladder climbs", and
+this rung is the second milestone to inherit it.
+
+**Update (2026-07-30): that debt is now discharged, and the answer is worse for
+this curve, not better.** The anchor — Chylek et al. 1990 at 532 nm — does not
+corroborate M6a's level; it falsifies the kernel's `λ⁻²` wavelength scaling by
+~5× and in sign, and shows the pressure error is curvature rather than a uniform
+offset (the kernel crosses the data near 250 Torr). So the caveat above stands
+and hardens: `P_ig(Cn²)`'s position on the `Cn²` axis rides a threshold now known
+to be wrong in shape on two axes, not merely offset by an ungated constant inside
+inter-lab scatter. Nothing inside M6a.2 can repair that, and the shape gates
+(N1/N2, E2, W1) remain what this rung is judged on. See
+`docs/M6A_SPEC.md` § "D5 discharged".
 
 **Gateable, and genuinely independent of M6a:** everything upstream of the
 kernel call. The aperture phase statistics, the focal-intensity estimator, and
