@@ -950,6 +950,99 @@ diameter but not the beam diameter, so the divergence-limited depth of focus —
 and with it `Λ` and the focal volume — cannot be reconstructed the way T&T's Eq. 5
 was. Both are recorded as debts rather than filled with plausible numbers.
 
+### Distribution-resolved cascade — 2026-07-30, and it splits the failures in two
+
+`SelfConsistentClimb` puts every electron on the **mean** energy trajectory, so
+ionization switches on discontinuously at `ε_∞ = U_i`. That bifurcation *is* the
+threshold plateau, and the model is evaluated sitting on top of it — `ε_∞/U_i` is
+1.032 at 760 Torr and 1.011 at 1500, i.e. the answer is set by a logarithm a hair
+from its pole. A real energy distribution has no bifurcation; it has a tail that
+ionizes while the mean is still short.
+
+**The formulation.** An electron does not climb smoothly — it absorbs
+inverse-bremsstrahlung quanta of size `ħω`, so its energy is a random walk *with*
+drift, an Ornstein–Uhlenbeck process in energy space:
+
+```text
+dε = δ_eff·ν_m·(ε_∞ − ε)·dt + √(2·D_ε)·dW,     D_ε = ½·P_heat·ħω
+```
+
+The drift is exactly the old variant's `dε/dt`. The diffusion is photon shot
+noise — events of size `ħω` at rate `P_heat/ħω` — and it adds **no new
+constant**: `P_heat` is already in the model and `ħω` is the laser. Ionization
+becomes first passage to `U_i` with a reflecting wall at 0, evaluated by
+Siegert's formula (`breakdown0d::first_passage_ionization_rate`). A quadrature,
+not a PDE solve: no time grid, no stability condition, and an exact analytic
+limit to check against.
+
+**Landed as a variant, not the default.** Every published number is unchanged and
+the `breakdown` case is bit-identical. Promotion is a separate decision.
+
+**Verified** — `first_passage_reduces_to_the_mean_energy_climb` (as `D_ε → 0` the
+rate returns the old closed form, ratio 0.821 → 0.990 as `ħω` falls from 1.166 to
+0.05 eV), `first_passage_quadrature_is_converged` (2nd order; the shipped
+N = 512 within 2e-4 at both physical photon energies),
+`distribution_resolved_has_no_bifurcation`, and
+`first_passage_rate_depends_only_on_two_dimensionless_groups` (the rate is a
+function of `ε_∞/U_i` and `ħω/U_i` alone — the arithmetic proof that no constant
+was added, and it preserves `ν_i ∝ p`).
+
+**The result, and it is sharply split.**
+
+*The high-pressure branch is essentially fixed* (T11-P1). At the untouched
+literature centre `δ_eff` = 0.02:
+
+| window | mean-trajectory | distribution-resolved | measured |
+|---|---|---|---|
+| T&T 300–2000 Torr, 1064 nm | 0.0951 | **0.2793** | 0.329 |
+| Chylek 300–786 Torr, 532 nm | 0.1717 | **0.4665** | 0.468 |
+
+The more careful statement is the envelope over the single free constant
+(`δ_eff` ∈ 0.01–0.05): `[0.023, 0.231]` **excludes** the measured 0.329 and
+becomes `[0.183, 0.407]`, which **contains** it; on Chylek's window `[0.039,
+0.414]` excluding 0.468 becomes `[0.307, 0.657]` containing it. The measurement
+moves from outside the model's literature envelope to inside it with nothing
+tuned. (This is *not* compared against `FixedMeanEnergy`, whose envelope already
+contains 0.329 — but with **two** free constants, which is why that was never a
+strong claim. Here the count of free constants is held at one and only the
+closure changes.)
+
+*The low-pressure branch is untouched* (T11-P2): 1.952 → 1.954 against a measured
+0.428. That is the useful half. It **localises the two failures to two different
+mechanisms** — the high-pressure branch was the cascade cutoff, the low-pressure
+branch is diffusion loss `ν_diff = D_e/Λ²`, which no cascade closure can reach.
+Combined with `d_e_sensitivity_is_pinned_across_the_kinetic_band` (the whole
+defensible `D_e` band supplies 0.101 of slope against a 0.234 shortfall), the
+remaining low-pressure curvature is now attributable to neither the mean-energy
+idealization nor `D_e`.
+
+*The wavelength gap does not close* (T11-P3), but the sign is finally right.
+`D_ε ∝ ħω`, so a shorter wavelength takes bigger energy steps and reaches `U_i`
+more easily — the opposite sign to the cascade's `λ⁻²`. The ratio moves
+4.00 → 3.39 against a measured ≈0.80: a 15 % move against a 5× gap. Two
+mechanisms with the correct sign have now been tried on this axis — Keldysh MPI
+and photon shot noise — and neither is within an order of magnitude.
+
+*The hard plateau floor is gone* (T11-P4), which changes how the noble-gas result
+may be read. `cascade_plateau_intensity` is a hard lower bound **for the
+mean-trajectory closure only**; with the distribution resolved the threshold
+slides underneath it — 1.09× the floor at 300 Torr, 0.75 at 760, 0.63 at 2000. So
+"He has only 1.85× of headroom above a floor it cannot cross" no longer holds:
+it can cross it. What survives from
+`chylek1990_noble_gas_plateau_floors_are_unequally_tight` is the **spacing**
+failure (He/Ar predicted 15.6 against a measured ≈2.5), which is a statement
+about `δ·U_i` and is untouched. Whether the noble-gas thresholds are actually
+reproduced still needs the unsourced per-gas `K_m` and `D_e`.
+
+**Two implementation notes worth keeping**, because both were caught by gates
+rather than by reading. The obvious `O(N)` evaluation of the Siegert integral —
+accumulate `∫e^{−φ}` and multiply by `e^{+φ}` — splits a bounded product into
+factors reaching `10^±274`, and loses every digit before it overflows; the sum is
+carried as a recurrence in the *differences* instead. And the reduction gate must
+refine its own grid: at the shipped N it returned a rate 3 % on the **wrong side**
+of the limit it was meant to approach, so a fixed-grid reduction gate measures
+its own resolution. Both failures looked like physics and were not.
+
 ## NOT in scope (M6a)
 
 - Any propagator coupling.

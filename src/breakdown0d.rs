@@ -169,6 +169,150 @@ pub enum CascadeModel {
     /// near-hard cutoff, and the parsimony argument for this default should be
     /// read against it. Nothing currently gates that margin.
     SelfConsistentClimb,
+    /// The climb resolved as a **distribution** rather than a trajectory.
+    ///
+    /// [`Self::SelfConsistentClimb`]'s defect is that it puts every electron on
+    /// the mean path, so ionization switches on discontinuously at `ε_∞ = U_i`.
+    /// That bifurcation *is* the model's threshold plateau — and the model is
+    /// evaluated on top of it (`ε_∞/U_i` = 1.032 at 760 Torr, 1.011 at 1500).
+    ///
+    /// An electron does not climb smoothly. It absorbs inverse-bremsstrahlung
+    /// quanta of size `ħω`, so its energy performs a random walk *with* drift —
+    /// an Ornstein–Uhlenbeck process in energy space:
+    ///
+    /// ```text
+    /// dε = δ_eff·ν_m·(ε_∞ − ε)·dt + √(2·D_ε)·dW,    D_ε = ½·P_heat·ħω
+    /// ```
+    ///
+    /// The drift is exactly the other variant's `dε/dt`. The diffusion is photon
+    /// shot noise — absorption events of size `ħω` arriving at rate `P_heat/ħω`
+    /// — and it introduces **no new constant**: `P_heat` is
+    /// [`AirBreakdown::heating_power`] and `ħω` is the laser. This variant is
+    /// therefore not an extra knob, it is the removal of an idealization.
+    ///
+    /// Ionization becomes a first-passage problem, evaluated in closed form by
+    /// [`first_passage_ionization_rate`]. Three consequences, all gated:
+    ///
+    /// - **The bifurcation is gone.** `ν_i > 0` below `ε_∞ = U_i` and continuous
+    ///   through it: the tail ionizes while the mean is still short.
+    /// - **It reduces exactly.** As `D_ε → 0` the rate returns
+    ///   `SelfConsistentClimb`'s closed form, which is what makes this a
+    ///   generalization rather than a different model.
+    /// - **It carries a wavelength dependence with the opposite sign to the
+    ///   cascade's `λ⁻²`.** `D_ε ∝ ħω`, so a shorter wavelength takes bigger
+    ///   energy steps and reaches `U_i` more easily — the direction the measured
+    ///   532/1064 ratio of ≈0.80 demands and the cascade gets backwards.
+    ///
+    /// **Not the default.** It lands as a variant so every published M6a number
+    /// stays put and what it does to them is measured, not asserted; see
+    /// `docs/M6A_SPEC.md` § Distribution-resolved cascade for the outcome.
+    DistributionResolved,
+}
+
+/// Quadrature points for [`first_passage_ionization_rate`].
+///
+/// The scheme is 2nd order and the integrand is smooth, so the error falls by 4×
+/// per doubling: 1.2e-4 relative at this value, 3e-5 at 1024. Pinned here rather
+/// than exposed, and checked by `first_passage_quadrature_is_converged`. It is
+/// **not** free to raise: this runs inside the threshold bisection's inner loop.
+const FIRST_PASSAGE_STEPS: usize = 512;
+
+/// Mean first-passage rate for the energy random walk to reach `u_ion` (s⁻¹).
+///
+/// The electron's energy obeys the Ornstein–Uhlenbeck process
+/// `dε = ν_relax·(ε_∞ − ε)dt + √(2 D_ε)dW` with `ν_relax = δ_eff·ν_m` and
+/// `D_ε = ½·ν_relax·ε_∞·ħω` (photon shot noise; see
+/// [`CascadeModel::DistributionResolved`]). With a reflecting boundary at
+/// `ε = 0` and an absorbing one at `U_i`, Siegert's formula gives the mean
+/// first-passage time in closed form:
+///
+/// ```text
+/// T = (1/D_ε)·∫₀^{U_i} dy e^{+φ(y)} ∫₀^y dz e^{−φ(z)},    φ(ε) ≡ Φ(ε)/D_ε
+/// φ(ε) = (ε² − 2·ε_∞·ε)/(ε_∞·ħω)
+/// ```
+///
+/// and `ν_i = 1/T`. A quadrature, not a PDE solve: no grid in time, no stability
+/// condition, and an exact analytic limit to check against.
+///
+/// **Conditioning — the part that has to be got right.** The double integrand
+/// `e^{φ(y)−φ(z)}` is bounded and well behaved, but the obvious `O(N)`
+/// evaluation — accumulate `∫e^{−φ}` and multiply by `e^{+φ}` — splits that
+/// bounded product into two factors that individually reach `10^±274` for a
+/// small `ħω`. It loses every significant digit long before it overflows. (It
+/// was written that way first, and the `D_ε → 0` reduction gate is what caught
+/// it: the rate came back 3 % *above* the deterministic limit it must approach
+/// from below.)
+///
+/// So the sum is carried as a recurrence in the **differences** instead. Writing
+/// `S_k = e^{φ(y_k)}·∫₀^{y_k} e^{−φ}dz` and `r_k = e^{φ(y_k)−φ(y_{k−1})}`,
+///
+/// ```text
+/// S_k = r_k·S_{k−1} + ½·h·(r_k + 1)
+/// ```
+///
+/// which is algebraically identical, still `O(N)` and one `exp` per point, and
+/// never forms an unbounded intermediate: the exponent of `r_k` is one step of
+/// `dφ/dε`, bounded by `2·U_i/(N·ħω)` ≈ 2.4 in the worst case this model
+/// reaches.
+///
+/// One genuine divergence survives, and it is physics rather than arithmetic:
+/// for `ε_∞ < U_i` the passage time grows as `exp[(U_i − ε_∞)²/(ε_∞·ħω)]` and
+/// runs away as `ε_∞ → 0`. That is checked up front from the closed form and
+/// saturated to `ν_i = 0`.
+pub fn first_passage_ionization_rate(
+    nu_relax: f64,
+    eps_inf: f64,
+    u_ion: f64,
+    photon_energy: f64,
+) -> f64 {
+    if !(nu_relax > 0.0 && eps_inf > 0.0 && u_ion > 0.0 && photon_energy > 0.0) {
+        return 0.0;
+    }
+    if !(nu_relax.is_finite() && eps_inf.is_finite() && u_ion.is_finite()) {
+        return 0.0;
+    }
+    let scale = eps_inf * photon_energy;
+    let phi = |e: f64| (e * e - 2.0 * eps_inf * e) / scale;
+    // The only real divergence: `φ` is a parabola with its minimum at `ε_∞`, so
+    // when that minimum falls inside [0, U_i] the barrier is genuinely uphill.
+    if phi(u_ion) - phi(eps_inf.min(u_ion)) > MAX_EXPONENT {
+        return 0.0;
+    }
+
+    let total = first_passage_integral(eps_inf, u_ion, photon_energy, FIRST_PASSAGE_STEPS);
+    let d_eps = 0.5 * nu_relax * eps_inf * photon_energy;
+    let t = total / d_eps;
+    if t > 0.0 && t.is_finite() {
+        1.0 / t
+    } else {
+        0.0
+    }
+}
+
+/// The Siegert double integral `∫₀^{U_i} dy e^{φ(y)} ∫₀^y dz e^{−φ(z)}` on `n`
+/// intervals, by the difference recurrence described on
+/// [`first_passage_ionization_rate`]. Split out so the convergence gate can
+/// refine `n` against the code path the model actually runs.
+fn first_passage_integral(eps_inf: f64, u_ion: f64, photon_energy: f64, n: usize) -> f64 {
+    let scale = eps_inf * photon_energy;
+    let phi = |e: f64| (e * e - 2.0 * eps_inf * e) / scale;
+    let h = u_ion / n as f64;
+    let mut s = 0.0; // S_k = e^{φ(y_k)}·∫₀^{y_k} e^{−φ} dz
+    let mut total = 0.0; // outer trapezoid over S
+    let mut prev_phi = phi(0.0);
+    for k in 1..=n {
+        let cur_phi = phi(k as f64 * h);
+        let r = (cur_phi - prev_phi).exp();
+        prev_phi = cur_phi;
+        s = r * s + 0.5 * h * (r + 1.0);
+        // S_0 = 0, so the k = 0 endpoint contributes nothing.
+        let w = if k == n { 0.5 } else { 1.0 };
+        total += s * w * h;
+        if !total.is_finite() {
+            return f64::INFINITY;
+        }
+    }
+    total
 }
 
 /// Keldysh adiabaticity parameter `γ = ω√(2 m U_i)/(e E₀)`, from intensity.
@@ -881,7 +1025,24 @@ impl AirBreakdown {
                 let nu_relax = self.gas.delta_eff * self.gas.k_m * pressure;
                 nu_relax / (eps_inf / (eps_inf - self.gas.u_ion)).ln()
             }
+            CascadeModel::DistributionResolved => {
+                // The same drift, plus the photon shot noise the mean trajectory
+                // discards. No cutoff: the tail ionizes below ε_∞ = U_i.
+                let nu_relax = self.gas.delta_eff * self.gas.k_m * pressure;
+                let eps_inf = self.equilibrium_energy(intensity, pressure);
+                first_passage_ionization_rate(
+                    nu_relax,
+                    eps_inf,
+                    self.gas.u_ion,
+                    self.photon_energy(),
+                )
+            }
         }
+    }
+
+    /// Photon energy `ħω` (J) at this model's wavelength.
+    pub fn photon_energy(&self) -> f64 {
+        HBAR * self.omega
     }
 
     /// Total loss frequency `ν_att + ν_diff` (s⁻¹).
@@ -1699,6 +1860,213 @@ mod tests {
         // 0.01 Torr: enormous diffusion loss.
         let r = m.threshold_intensity(fwhm, 0.01 * TORR, 400);
         assert!(r.is_err());
+    }
+
+    // --- T11: the distribution-resolved cascade -----------------------------
+
+    #[test]
+    fn first_passage_reduces_to_the_mean_energy_climb() {
+        // T11-V1, THE gate that makes DistributionResolved a generalization
+        // rather than a different model, plus the reason the generalization
+        // matters. The first-passage rate is the same drift as
+        // SelfConsistentClimb plus photon shot noise D_eps = 1/2 P_heat hbar_w.
+        // Shrink hbar_w and the noise must vanish, returning the closed form
+        // nu_i = delta_eff*nu_m/ln(e_inf/(e_inf - U_i)).
+        //
+        // Every point is GRID-CONVERGED before it is used. As hbar_w falls the
+        // integrand sharpens (exponent ~ 2 U_i/hbar_w), so a reduction gate on a
+        // fixed grid measures its own resolution rather than the limit: at the
+        // shipped N = 512 this sweep returns 1.031 at hbar_w = 0.02 eV -- 3 % on
+        // the WRONG side of the limit it is meant to approach. That happened
+        // here, twice, which is why the self-check below is not optional. The
+        // shipped N is gated separately, at the photon energies that occur.
+        const FINE: usize = 1 << 17;
+        let u_ion = 12.06 * E_CHARGE;
+        let nu_relax = 7.9e10; // delta_eff*nu_m at 1 atm; any positive value works
+        let rate = |eps_inf: f64, hw: f64| {
+            let coarse = first_passage_integral(eps_inf, u_ion, hw, FINE / 2);
+            let fine = first_passage_integral(eps_inf, u_ion, hw, FINE);
+            assert!(
+                (coarse / fine - 1.0).abs() < 1e-4,
+                "the reduction sweep is not grid-converged at hbar_w = {:.4} eV \
+                 ({:.3e} vs {:.3e}); raise FINE or stop the sweep higher",
+                hw / E_CHARGE,
+                coarse,
+                fine
+            );
+            0.5 * nu_relax * eps_inf * hw / fine
+        };
+
+        // Away from the cutoff the limit must actually be reached.
+        for x in [1.24_f64, 2.0, 5.0] {
+            let eps_inf = x * u_ion;
+            let deterministic = nu_relax / (eps_inf / (eps_inf - u_ion)).ln();
+            let mut prev = 0.0;
+            for hw_ev in [1.166_f64, 0.5, 0.2, 0.05, 0.02] {
+                let ratio = deterministic / rate(eps_inf, hw_ev * E_CHARGE);
+                assert!(
+                    ratio < 1.0,
+                    "at eps_inf/U_i = {x}, hbar_w = {hw_ev} eV the diffusive rate is \
+                     SLOWER than the deterministic climb (ratio {ratio:.4}) -- noise \
+                     should only ever help an electron over the barrier"
+                );
+                assert!(
+                    ratio > prev,
+                    "convergence is not monotone at eps_inf/U_i = {x}: {prev:.5} then {ratio:.5}"
+                );
+                prev = ratio;
+            }
+            assert!(
+                prev > 0.99,
+                "at eps_inf/U_i = {x} the rate is still {:.4}x off the closed form at \
+                 hbar_w = 0.02 eV; the D_eps -> 0 limit is not being recovered",
+                1.0 / prev
+            );
+        }
+
+        // NEAR the cutoff it must NOT, and that is the physical content rather
+        // than a shortfall of the gate. As eps_inf -> U_i the deterministic
+        // climb time diverges logarithmically, so noise dominates it for any
+        // finite photon energy and the ratio stays well below 1 however far
+        // hbar_w is reduced. That divergence is precisely the bifurcation this
+        // variant exists to remove -- and the model sits on top of it, at
+        // eps_inf/U_i = 1.032 at 760 Torr.
+        let near = 1.02 * u_ion;
+        let det_near = nu_relax / (near / (near - u_ion)).ln();
+        let r_coarse = det_near / rate(near, 1.166 * E_CHARGE);
+        let r_fine = det_near / rate(near, 0.02 * E_CHARGE);
+        assert!(
+            r_fine > r_coarse && r_fine < 0.95,
+            "near the cutoff (eps_inf/U_i = 1.02) the ratio runs {r_coarse:.4} -> \
+             {r_fine:.4} over a 58x reduction in hbar_w; it is supposed to rise but \
+             stay far short of 1, because the deterministic limit it is approaching \
+             is itself divergent there"
+        );
+    }
+
+    #[test]
+    fn first_passage_quadrature_is_converged() {
+        // T11-V2. The scheme is 2nd order on a smooth integrand, so the error
+        // falls 4x per doubling. This pins both the order and the adequacy of
+        // the shipped FIRST_PASSAGE_STEPS, which is NOT free to raise: it runs
+        // inside the threshold bisection's inner loop.
+        let u_ion = 12.06 * E_CHARGE;
+        let hw = 1.166 * E_CHARGE;
+        let eps_inf = 1.24 * u_ion;
+        let at = |n: usize| first_passage_integral(eps_inf, u_ion, hw, n);
+        let reference = at(32_768);
+        let e_coarse = (at(128) / reference - 1.0).abs();
+        let e_fine = (at(256) / reference - 1.0).abs();
+        let order = crate::validate::observed_order(e_coarse, e_fine);
+        assert!(
+            (1.8..=2.2).contains(&order),
+            "first-passage quadrature observed order {order:.3}, expected ~2 \
+             (errors {e_coarse:.3e} then {e_fine:.3e})"
+        );
+        // The shipped N, at BOTH photon energies this model is ever run at and
+        // across the ε_∞/U_i range the threshold bisection sweeps through. V1
+        // relies on this: it refines the grid for the deep D_ε → 0 limit on the
+        // grounds that the shipped N is adequate where the physics actually is,
+        // and this is where that is checked rather than assumed.
+        for hw_ev in [1.166_f64, 2.331] {
+            for x in [1.02_f64, 1.05, 1.24, 2.0, 10.0] {
+                let ei = x * u_ion;
+                let hw_j = hw_ev * E_CHARGE;
+                let reference = first_passage_integral(ei, u_ion, hw_j, 32_768);
+                let shipped = (first_passage_integral(ei, u_ion, hw_j, FIRST_PASSAGE_STEPS)
+                    / reference
+                    - 1.0)
+                    .abs();
+                assert!(
+                    shipped < 2e-4,
+                    "at the shipped N = {FIRST_PASSAGE_STEPS} the quadrature is \
+                     {shipped:.2e} from converged at ħω = {hw_ev} eV, ε_∞/U_i = {x}; \
+                     the threshold bisection resolves to 1e-6"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn distribution_resolved_has_no_bifurcation() {
+        // T11-V3 — the defect this variant exists to remove, in one test.
+        //
+        // SelfConsistentClimb switches ionization on discontinuously at
+        // ε_∞ = U_i, and the model is evaluated on top of that step
+        // (ε_∞/U_i = 1.032 at 760 Torr). A real distribution has a tail that
+        // ionizes while the mean is still short of U_i, so the rate must be
+        // positive below the old cutoff and continuous through it.
+        let m = model().with_cascade_model(CascadeModel::DistributionResolved);
+        let old = model().with_cascade_model(CascadeModel::SelfConsistentClimb);
+        let p = 760.0 * TORR;
+        let u_ion = m.gas.u_ion;
+
+        // Intensity that puts ε_∞ exactly at U_i, then either side of it.
+        let i_at_cut = u_ion / m.equilibrium_energy(1.0, p);
+        assert!(
+            old.cascade_rate(i_at_cut * 0.99, p) == 0.0
+                && old.cascade_rate(i_at_cut * 1.01, p) > 0.0,
+            "the old model no longer has the step this gate is contrasted against"
+        );
+
+        // Below the old cutoff the new rate is positive and rising.
+        let mut prev = 0.0;
+        for f in [0.5, 0.7, 0.9, 0.99] {
+            let r = m.cascade_rate(i_at_cut * f, p);
+            assert!(
+                r > 0.0,
+                "no ionization at ε_∞ = {f}·U_i — the bifurcation is still there"
+            );
+            assert!(r > prev, "rate not monotone in intensity below the cutoff");
+            prev = r;
+        }
+
+        // And continuous across it: the old model jumps from 0, the new one does
+        // not. Compare a tight bracket around the cut.
+        let lo = m.cascade_rate(i_at_cut * 0.999, p);
+        let hi = m.cascade_rate(i_at_cut * 1.001, p);
+        assert!(
+            (hi / lo - 1.0).abs() < 0.02,
+            "rate jumps {:.3}× across ε_∞ = U_i ({lo:.4e} → {hi:.4e}); it should be \
+             smooth there now",
+            hi / lo
+        );
+    }
+
+    #[test]
+    fn first_passage_rate_depends_only_on_two_dimensionless_groups() {
+        // T11-V4 — no new constant entered. Non-dimensionalising the OU process
+        // by τ = δ_eff·ν_m·t leaves ν_i/(δ_eff·ν_m) a function of ε_∞/U_i and
+        // ħω/U_i alone. So the rate must be blind to k_m and D_e at fixed groups,
+        // and must scale exactly linearly in ν_relax — which is what keeps the
+        // ν_i ∝ p scaling the external E_eff gate confirms.
+        let u_ion = 12.06 * E_CHARGE;
+        let hw = 1.166 * E_CHARGE;
+        let eps_inf = 1.3 * u_ion;
+        let base = first_passage_ionization_rate(1.0, eps_inf, u_ion, hw);
+        for k in [1e-3, 1.0, 7.9e10, 1e14] {
+            let r = first_passage_ionization_rate(k, eps_inf, u_ion, hw);
+            assert!(
+                (r / (k * base) - 1.0).abs() < 1e-12,
+                "rate is not linear in ν_relax at k = {k:e}: {r:e} vs {:e}",
+                k * base
+            );
+        }
+        // Same groups, different absolute energies: identical dimensionless rate.
+        let scaled = first_passage_ionization_rate(1.0, 2.0 * eps_inf, 2.0 * u_ion, 2.0 * hw);
+        assert!(
+            (scaled / base - 1.0).abs() < 1e-12,
+            "the rate is not a function of the dimensionless groups alone: \
+             {scaled:e} vs {base:e}"
+        );
+        // ν_i ∝ p survives, through the model rather than the free function.
+        let m = model().with_cascade_model(CascadeModel::DistributionResolved);
+        let (p, i) = (500.0 * TORR, 2e16);
+        let ratio = m.cascade_rate(i, 2.0 * p) / m.cascade_rate(i, p);
+        assert!(
+            (ratio - 2.0).abs() < 1e-3,
+            "distribution-resolved ν_i is no longer ∝ p: {ratio:.6}"
+        );
     }
 
     #[test]

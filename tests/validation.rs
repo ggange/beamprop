@@ -3506,6 +3506,17 @@ fn cascade_plateau_floor_is_independent_of_the_transport_constants() {
 /// first. The gate asserts the ordering of the margins so that a
 /// distribution-resolved cascade — which is what would actually compute the
 /// correction — shows up here as a loud change.
+///
+/// **Amended 2026-07-30, and the headroom reading is now weaker than it was.**
+/// The floor is a hard bound **for the mean-trajectory closure only**. With
+/// `CascadeModel::DistributionResolved` the tail ionizes below the mean-energy
+/// cutoff and the threshold slides underneath the floor — 0.75× of it at
+/// 760 Torr, 0.63× at 2000 (`distribution_resolved_softens_the_plateau_floor`).
+/// So "He has only 1.85× of room and cannot cross the floor" no longer holds:
+/// it can cross it. What is unaffected is the **spacing** failure below —
+/// He/Ar predicted 15.6 against a measured ≈2.5 — because that is a statement
+/// about `δ·U_i`, not about the closure. Whether the noble-gas thresholds are
+/// actually reproduced needs the per-gas `K_m` and `D_e` that remain unsourced.
 #[test]
 fn chylek1990_noble_gas_plateau_floors_are_unequally_tight() {
     use beamprop::breakdown0d::{MonatomicGas, cascade_plateau_intensity};
@@ -3628,5 +3639,351 @@ fn chylek1990_noble_gas_plateau_floors_are_unequally_tight() {
          too, and He has the least room to absorb the correction",
         headroom[0],
         headroom[2]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T11 — what the distribution-resolved cascade does to M6a's four pinned gaps.
+//
+// `CascadeModel::SelfConsistentClimb` puts every electron on the mean energy
+// trajectory, so ionization switches on discontinuously at `ε_∞ = U_i` — and the
+// model is evaluated on top of that step (`ε_∞/U_i` = 1.032 at 760 Torr). The
+// bifurcation IS the threshold plateau. `DistributionResolved` replaces the
+// trajectory with an Ornstein–Uhlenbeck process in energy space, the photon shot
+// noise the mean throws away, and introduces no new constant.
+//
+// The result is sharply split, and the split is the finding: it essentially
+// fixes the high-pressure branch and does nothing for the other two failures.
+// Each gate below asserts what was measured, improvement or shortfall alike.
+// ---------------------------------------------------------------------------
+
+/// **T11-P1 — external gate, and the one that improves.** The high-pressure
+/// threshold slope, against both measured datasets.
+///
+/// At the **literature centre** of the one free constant (`δ_eff` = 0.02, never
+/// tuned, unchanged from what the kernel already shipped):
+///
+/// | window | mean-trajectory | distribution-resolved | measured |
+/// |---|---|---|---|
+/// | T&T 300–2000 Torr, 1064 nm | 0.0951 | **0.2793** | 0.329 |
+/// | Chylek 300–786 Torr, 532 nm | 0.1717 | **0.4665** | 0.468 |
+///
+/// From 3.5× too flat to 15 % too flat on T&T, and to within 0.3 % on Chylek.
+/// The Chylek agreement at the centre value is closer than the inputs deserve
+/// and should not be read as a precision result — the point is the size and
+/// direction of the move, which is what the pinned gates were holding.
+///
+/// **The envelope statement, which is the more careful one.** `δ_eff` is
+/// literature-bounded to 0.01–0.05, so the honest comparison is the range it
+/// spans. With that same single free constant:
+///
+/// ```text
+/// mean-trajectory:        n ∈ [0.023, 0.231]   excludes the measured 0.329
+/// distribution-resolved:  n ∈ [0.183, 0.407]   contains it
+/// ```
+///
+/// and on Chylek's window, `[0.039, 0.414]` excluding 0.468 becomes
+/// `[0.307, 0.657]` containing it. The measurement moves from *outside* the
+/// model's literature envelope to *inside* it, without touching a constant.
+///
+/// This is deliberately **not** compared against `FixedMeanEnergy`, whose
+/// envelope already contains 0.329 (`inelastic_loss_envelope_brackets_the_slope`)
+/// — but it does so with **two** free constants, `δ_eff` and `⟨ε⟩`, which is why
+/// that has never been a strong claim. The comparison here holds the number of
+/// free constants fixed at one and changes only the closure.
+#[test]
+fn distribution_resolved_cascade_fixes_the_high_pressure_slope() {
+    use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
+
+    let slope_over = |m: CascadeModel, delta: f64, lambda: f64, lo: f64, hi: f64, fwhm: f64| {
+        let model = AirBreakdown::dry_air_tt2012_focus(lambda)
+            .expect("λ in range")
+            .with_cascade_model(m)
+            .with_inelastic_loss(delta, 3.0);
+        let c = model.pressure_sweep(lo * TORR, hi * TORR, 8, fwhm, 400);
+        assert_eq!(c.len(), 8, "sweep lost points at δ_eff = {delta}");
+        -beamprop::validate::loglog_slope(&c).expect("slope")
+    };
+
+    // --- Point comparison at the untouched literature centre. ---
+    const CENTRE: f64 = 0.02;
+    let tt_old = slope_over(
+        CascadeModel::SelfConsistentClimb,
+        CENTRE,
+        1064e-9,
+        300.0,
+        2000.0,
+        6e-9,
+    );
+    let tt_new = slope_over(
+        CascadeModel::DistributionResolved,
+        CENTRE,
+        1064e-9,
+        300.0,
+        2000.0,
+        6e-9,
+    );
+    let ch_old = slope_over(
+        CascadeModel::SelfConsistentClimb,
+        CENTRE,
+        532e-9,
+        300.0,
+        786.0,
+        6.5e-9,
+    );
+    let ch_new = slope_over(
+        CascadeModel::DistributionResolved,
+        CENTRE,
+        532e-9,
+        300.0,
+        786.0,
+        6.5e-9,
+    );
+
+    assert!(
+        (0.09..=0.10).contains(&tt_old) && (0.16..=0.18).contains(&ch_old),
+        "the mean-trajectory baseline moved: T&T {tt_old:.4} (expected ≈0.095), \
+         Chylek {ch_old:.4} (expected ≈0.172)"
+    );
+    assert!(
+        (0.26..=0.30).contains(&tt_new),
+        "distribution-resolved T&T slope {tt_new:.4}, expected ≈0.279 against a \
+         measured 0.329"
+    );
+    assert!(
+        (0.44..=0.49).contains(&ch_new),
+        "distribution-resolved Chylek slope {ch_new:.4}, expected ≈0.467 against a \
+         measured 0.468"
+    );
+    // The direction and size of the move is the claim.
+    const TT_MEASURED: f64 = 0.329;
+    const CH_MEASURED: f64 = 0.468;
+    assert!(
+        (tt_new - TT_MEASURED).abs() < (tt_old - TT_MEASURED).abs() / 2.0
+            && (ch_new - CH_MEASURED).abs() < (ch_old - CH_MEASURED).abs() / 2.0,
+        "resolving the distribution no longer at least halves the slope gap: \
+         T&T {tt_old:.4}→{tt_new:.4}, Chylek {ch_old:.4}→{ch_new:.4}"
+    );
+
+    // --- Envelope over the literature range of the single free constant. ---
+    for (lambda, lo, hi, fwhm, measured, tag) in [
+        (1064e-9, 300.0, 2000.0, 6e-9, TT_MEASURED, "T&T"),
+        (532e-9, 300.0, 786.0, 6.5e-9, CH_MEASURED, "Chylek"),
+    ] {
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for delta in [0.01, 0.015, 0.02, 0.03, 0.05] {
+            old.push(slope_over(
+                CascadeModel::SelfConsistentClimb,
+                delta,
+                lambda,
+                lo,
+                hi,
+                fwhm,
+            ));
+            new.push(slope_over(
+                CascadeModel::DistributionResolved,
+                delta,
+                lambda,
+                lo,
+                hi,
+                fwhm,
+            ));
+        }
+        let span = |v: &[f64]| {
+            (
+                v.iter().copied().fold(f64::MAX, f64::min),
+                v.iter().copied().fold(0.0f64, f64::max),
+            )
+        };
+        let (o_lo, o_hi) = span(&old);
+        let (n_lo, n_hi) = span(&new);
+        assert!(
+            measured > o_hi,
+            "{tag}: the mean-trajectory envelope [{o_lo:.3}, {o_hi:.3}] now reaches the \
+             measured {measured} — the contrast this gate rests on has gone"
+        );
+        assert!(
+            n_lo < measured && measured < n_hi,
+            "{tag}: the distribution-resolved envelope [{n_lo:.3}, {n_hi:.3}] no longer \
+             contains the measured {measured}"
+        );
+    }
+}
+
+/// **T11-P2 — pinned. It does not fix the low-pressure branch, and that is
+/// informative.**
+///
+/// Chylek's air threshold is a clean power law, `α` = 0.41–0.47 across 2.3
+/// decades. Below ~250 Torr the kernel is far too steep, and resolving the
+/// energy distribution changes that **not at all**: 1.952 → 1.954 over
+/// 10–100 Torr, against a measured 0.428.
+///
+/// That is a result rather than a disappointment. It localises the two failures
+/// to two different mechanisms. The high-pressure branch is set by the cascade
+/// cutoff, which is what T11-P1 fixes; the low-pressure branch is set by
+/// **diffusion loss** `ν_diff = D_e/Λ²`, which no cascade closure can touch. So
+/// the remaining curvature in `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not`
+/// is now a statement about the loss term, not about the mean-energy
+/// idealization — and `d_e_sensitivity_is_pinned_across_the_kinetic_band` has
+/// already shown that `D_e`'s whole defensible band cannot supply 0.234 of slope.
+/// The next candidate is therefore neither of those two.
+#[test]
+fn distribution_resolved_does_not_fix_the_low_pressure_branch() {
+    use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
+
+    let slope_of = |m: CascadeModel| {
+        let model = AirBreakdown::dry_air_tt2012_focus(532e-9)
+            .expect("λ in range")
+            .with_cascade_model(m);
+        let c = model.pressure_sweep(10.0 * TORR, 100.0 * TORR, 8, 6.5e-9, 400);
+        assert_eq!(c.len(), 8, "low-pressure sweep lost points");
+        -beamprop::validate::loglog_slope(&c).expect("slope")
+    };
+    let old = slope_of(CascadeModel::SelfConsistentClimb);
+    let new = slope_of(CascadeModel::DistributionResolved);
+    const MEASURED: f64 = 0.428;
+
+    assert!(
+        (1.90..=2.00).contains(&old) && (1.90..=2.00).contains(&new),
+        "low-pressure slopes are {old:.4} → {new:.4}, expected both ≈1.95"
+    );
+    assert!(
+        (new / old - 1.0).abs() < 0.02,
+        "resolving the distribution now moves the low-pressure branch \
+         ({old:.4} → {new:.4}); it is supposed to be diffusion-limited and \
+         untouched by the cascade closure"
+    );
+    assert!(
+        new > MEASURED * 3.0,
+        "the low-pressure branch is no longer far above the measured {MEASURED} \
+         ({new:.4}); if something closed this, it is a real result"
+    );
+}
+
+/// **T11-P3 — pinned. It moves the wavelength ratio the right way and nowhere
+/// near far enough.**
+///
+/// `D_ε = ½·P_heat·ħω`, so a shorter wavelength takes **bigger energy steps** and
+/// reaches `U_i` more easily. That is a wavelength dependence with the opposite
+/// sign to the cascade's `λ⁻²`, and it is the first thing in this kernel to push
+/// the 532/1064 ratio in the direction the measurement demands:
+///
+/// ```text
+/// mean-trajectory:        I_th(532)/I_th(1064) = 4.00
+/// distribution-resolved:                         3.39
+/// measured:                                      ≈0.80
+/// ```
+///
+/// A 15 % move against a gap of 5×. So the photon-shot-noise term is real,
+/// correctly signed, and far too small to be the explanation — the same verdict
+/// `keldysh_mpi_does_not_close_the_wavelength_gap` reached for the other
+/// candidate, reached independently. Two mechanisms with the right sign have now
+/// been tried on this axis and neither is within an order of magnitude.
+#[test]
+fn distribution_resolved_does_not_close_the_wavelength_gap() {
+    use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
+
+    let ratio_of = |m: CascadeModel| {
+        let p = 760.0 * TORR;
+        let hi = AirBreakdown::dry_air_tt2012_focus(532e-9)
+            .unwrap()
+            .with_cascade_model(m);
+        let lo = AirBreakdown::dry_air_tt2012_focus(1064e-9)
+            .unwrap()
+            .with_cascade_model(m);
+        hi.threshold_intensity(6e-9, p, 400).unwrap()
+            / lo.threshold_intensity(6e-9, p, 400).unwrap()
+    };
+    let old = ratio_of(CascadeModel::SelfConsistentClimb);
+    let new = ratio_of(CascadeModel::DistributionResolved);
+    const MEASURED: f64 = 0.80;
+
+    assert!(
+        (3.9..=4.1).contains(&old),
+        "the cascade λ⁻² baseline moved: {old:.4}, expected ≈4.00"
+    );
+    // Right direction...
+    assert!(
+        new < old,
+        "photon shot noise no longer lowers the 532 nm threshold relative to \
+         1064 nm ({old:.4} → {new:.4}); D_ε ∝ ħω says it must"
+    );
+    assert!(
+        (3.2..=3.6).contains(&new),
+        "distribution-resolved λ-ratio {new:.4}, expected ≈3.39"
+    );
+    // ...and nowhere near far enough.
+    assert!(
+        new > MEASURED * 3.0,
+        "the λ gap has closed to {new:.4} against a measured {MEASURED}; that would be \
+         a real result and docs/M6A_SPEC.md needs it"
+    );
+}
+
+/// **T11-P4 — verification. The hard plateau floor is gone, so the noble-gas
+/// gate's bound must be re-read.**
+///
+/// `cascade_plateau_intensity` is the intensity below which the *mean-trajectory*
+/// cascade cannot ionize at any pressure. It is parameter-free, and
+/// `chylek1990_noble_gas_plateau_floors_are_unequally_tight` uses it as a hard
+/// lower bound on any cascade-only threshold — which it is, **for that closure**.
+///
+/// With the distribution resolved it is not a bound at all. The tail ionizes
+/// below the mean-energy cutoff, so the threshold slides underneath the floor as
+/// pressure rises:
+///
+/// | Torr | `I_thr`/floor |
+/// |---|---|
+/// | 100 | 3.69 |
+/// | 300 | 1.09 |
+/// | 760 | **0.75** |
+/// | 2000 | **0.63** |
+///
+/// This gate exists so that the noble-gas result is not read more strongly than
+/// it can now bear. What survives there is the *spacing* failure (He/Ar predicted
+/// 15.6 against a measured ≈2.5), which is a statement about `δ·U_i` and is
+/// unaffected. What does **not** survive is "He has only 1.85× of headroom above
+/// a floor it cannot cross" — it can cross it. Settling whether the noble-gas
+/// thresholds are actually reproduced needs the per-gas `K_m` and `D_e` that
+/// remain unsourced, and is still open.
+#[test]
+fn distribution_resolved_softens_the_plateau_floor() {
+    use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
+
+    let m = AirBreakdown::air_1064nm().with_cascade_model(CascadeModel::DistributionResolved);
+    let old = AirBreakdown::air_1064nm().with_cascade_model(CascadeModel::SelfConsistentClimb);
+    let floor = m.plateau_intensity();
+
+    // The floor is a property of the closed form, so both variants report it.
+    assert!(
+        (m.plateau_intensity() / old.plateau_intensity() - 1.0).abs() < 1e-12,
+        "the plateau formula is not closure-independent"
+    );
+
+    // The mean-trajectory threshold can never go under it.
+    for p_torr in [300.0, 760.0, 2000.0] {
+        let i = old.threshold_intensity(6e-9, p_torr * TORR, 400).unwrap();
+        assert!(
+            i > floor,
+            "the mean-trajectory threshold {i:.4e} fell below its own hard floor \
+             {floor:.4e} at {p_torr} Torr — that is impossible for that closure"
+        );
+    }
+
+    // The distribution-resolved one does, and increasingly so with pressure.
+    let ratios: Vec<f64> = [300.0, 760.0, 2000.0]
+        .iter()
+        .map(|&p| m.threshold_intensity(6e-9, p * TORR, 400).unwrap() / floor)
+        .collect();
+    assert!(
+        ratios[0] > 1.0 && ratios[1] < 1.0 && ratios[2] < ratios[1],
+        "expected the threshold to cross under the floor between 300 and 760 Torr \
+         and keep falling; got {ratios:?} (expected ≈[1.09, 0.75, 0.63])"
+    );
+    assert!(
+        (0.60..=0.66).contains(&ratios[2]),
+        "at 2000 Torr the threshold is {:.3}× the hard floor, expected ≈0.63",
+        ratios[2]
     );
 }

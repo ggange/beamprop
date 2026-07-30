@@ -15,7 +15,7 @@ depends on looking a number up.
 
 ## Claims ledger
 
-**Read this before the test count.** `cargo test` runs 187 tests. That number is
+**Read this before the test count.** `cargo test` runs 196 tests. That number is
 not a measure of how much of this solver is validated against the world, and
 reading it as one would be a mistake: most of those tests check that the code
 solves the equations it was given, several deliberately assert a *known
@@ -50,9 +50,9 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 78 rows below: 49 verified, 6 validated, 11 pinned, 12 ungated.**
+**Census of the 86 rows below: 54 verified, 7 validated, 13 pinned, 12 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
-not belong in this table. The 129 remaining unit tests in `src/` are code-level
+not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
 and are counted here only where they carry a physics claim in their own right.
 
@@ -129,8 +129,16 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | **T&T's own MPI calibration undershoots their own measurement** | `breakdown0d::tests::tt2012_mpi_calibration_undershoots_the_data` | **pinned** | 37× below |
 | Level offset stays inside the inter-lab scatter, with a drift pin | `tt2012_level_ratio_is_bounded_within_scatter` | **pinned** | bounded offset; drift in the direction the corrected slope predicts |
 | The two cascade limits bracket the measurement | `breakdown0d::tests::the_two_cascade_models_bracket_the_measurement` | **pinned** | 0.468 / 0.095 straddle 0.329 — but this is a **one-parameter sensitivity**, not two independent limits |
+| First-passage rate reduces to the mean-trajectory closed form as `D_ε → 0` | `first_passage_reduces_to_the_mean_energy_climb` | verified | ratio 0.821 → 0.990 as `ħω` falls 1.166 → 0.05 eV; grid-converged at each point |
+| First-passage quadrature is 2nd order and the shipped `N` is converged | `first_passage_quadrature_is_converged` | verified | order ≈2; `N` = 512 within 2e-4 at 1064 and 532 nm |
+| The `ε_∞ = U_i` bifurcation is gone | `distribution_resolved_has_no_bifurcation` | verified | `ν_i > 0` below the old cutoff, continuous through it to 2 % |
+| The distribution-resolved rate adds no constant | `first_passage_rate_depends_only_on_two_dimensionless_groups` | verified | function of `(ε_∞/U_i, ħω/U_i)` alone; `ν_i ∝ p` preserved |
+| **High-pressure slope, resolving the electron energy distribution** | `distribution_resolved_cascade_fixes_the_high_pressure_slope` | **validated** | T&T 0.0951 → **0.2793** vs 0.329; Chylek 0.1717 → **0.4665** vs 0.468; the one-free-constant envelope moves from excluding the measurement to containing it |
+| **It does not fix the low-pressure branch** | `distribution_resolved_does_not_fix_the_low_pressure_branch` | **pinned** | 1.952 → 1.954 vs measured 0.428 — localises that failure to diffusion, not the cascade closure |
+| **It does not close the wavelength gap** | `distribution_resolved_does_not_close_the_wavelength_gap` | **pinned** | 4.00 → 3.39 vs ≈0.80 — right sign at last, 15 % of a 5× gap |
+| The hard plateau floor stops being a bound | `distribution_resolved_softens_the_plateau_floor` | verified | threshold/floor 1.09 → 0.75 → 0.63 at 300 / 760 / 2000 Torr |
 | The cascade plateau floor is free of every transport constant | `cascade_plateau_floor_is_independent_of_the_transport_constants` | verified | invariant under `D_e` ×0.01…×100; `ν_i ≡ 0` below it at every pressure |
-| **Parameter-free noble-gas floor: ordering right, spacing wrong** | `chylek1990_noble_gas_plateau_floors_are_unequally_tight` | **pinned** | He/Ar predicted 15.6 vs measured ≈2.5; Ar/Xe 4.27 vs ≈3.0; headroom 1.85×/7.8×/13.2× |
+| **Parameter-free noble-gas floor: ordering right, spacing wrong** | `chylek1990_noble_gas_plateau_floors_are_unequally_tight` | **pinned** | He/Ar predicted 15.6 vs measured ≈2.5; Ar/Xe 4.27 vs ≈3.0. Headroom 1.85×/7.8×/13.2× is a bound for the **mean-trajectory closure only** — see the plateau-softening row |
 | Noble-gas `K_m` and `D_e` | `Gas::from_monatomic` | **ungated** | required arguments, not defaults — no citable momentum-transfer table; Ar/Xe cross sections swing 100× across the Ramsauer minimum |
 | Chylek's focal geometry (`Λ`, focal volume) | — | **ungated** | the paper gives the lens and spot but not the beam diameter, so the divergence-limited depth of focus cannot be reconstructed as T&T's Eq. 5 was |
 | `D_e,ref` = 0.2 m²/s is consistent with the gated `K_m` | `d_e_ref_implies_a_stated_electron_energy` | verified | ⟺ `ε` = 6.740 eV at `p_ref`, inside the (2, `U_i`] eV band the cascade occupies |
@@ -182,13 +190,18 @@ screen linearly in `r₀`), and a width gate (no independent anchor).
 
 ### What this table says, in one paragraph
 
-Six claims in this solver are checked against something external and measured,
-and two of those six are M6a data-integrity checks — they establish that a
+Seven claims in this solver are checked against something external and measured,
+and two of those seven are M6a data-integrity checks — they establish that a
 digitization reproduces its own published figure, not that the model reproduces
-the gas. The two genuine external agreements in M6a are `K_m` and the sign of
-`E_eff(p)`; both are inputs to the model rather than its output. **The
-breakdown-threshold curve itself has no validated agreement, and three separate
-pins record why.** M1–M4 are in a different position: their physics is
+the gas. Of the rest, `K_m` and the sign of `E_eff(p)` are agreements about
+model *inputs* rather than outputs. **M6a's threshold curve has exactly one
+validated agreement, and it is recent and partial**: resolving the electron
+energy distribution brought the high-pressure slope from outside the model's
+literature envelope to inside it, on both measured datasets. The low-pressure
+branch, the wavelength ratio, and the noble-gas spacing are all still pinned
+disagreements — and the fact that the same change moved the first and not the
+others is what now separates M6a's remaining failures into distinct mechanisms.
+M1–M4 are in a different position: their physics is
 diffraction, extinction and turbulence, where closed forms are exact and
 verification is close to the whole job, and M4 additionally reproduces a
 published experimental curve. M6c's core is verified to high order but its one
@@ -702,6 +715,68 @@ branch from 0.170 to ≈0.47 — with `K = 6` photons at 532 nm against `K = 11`
 1064 nm supplying most of the wavelength leverage for free. The three
 `chylek1990_*` gates pin all three numbers, so a channel that fixes one while
 breaking another cannot land quietly.
+
+### Distribution-resolved cascade (`CascadeModel::DistributionResolved`)
+
+The mean-trajectory closure ionizes only once `ε_∞ > U_i`, a hard bifurcation
+that the model is evaluated on top of (`ε_∞/U_i` = 1.032 at 760 Torr). Resolving
+the distribution removes it. An electron absorbs inverse-bremsstrahlung quanta of
+size `ħω`, so its energy is an Ornstein–Uhlenbeck process rather than a
+trajectory:
+
+```text
+dε = δ_eff·ν_m·(ε_∞ − ε)·dt + √(2·D_ε)·dW,     D_ε = ½·P_heat·ħω
+```
+
+The drift is unchanged; `D_ε` is photon shot noise and adds **no new constant**.
+Ionization is first passage to `U_i` with a reflecting wall at `ε = 0`, from
+Siegert's formula:
+
+```text
+ν_i = 1/T,   T = (1/D_ε)·∫₀^{U_i} dy e^{+φ(y)} ∫₀^y dz e^{−φ(z)},
+φ(ε) = (ε² − 2·ε_∞·ε)/(ε_∞·ħω)
+```
+
+Site: `breakdown0d::first_passage_ionization_rate`, `first_passage_integral`.
+Evaluated by an `O(N)` recurrence in the *differences* of `φ` — the naive form
+splits a bounded product into factors of `10^±274`.
+
+**Verification:** exact reduction to the mean-trajectory closed form as
+`D_ε → 0`, ratio 0.821 → 0.990 as `ħω` falls 1.166 → 0.05 eV
+(`first_passage_reduces_to_the_mean_energy_climb`, self-refining); quadrature 2nd
+order with the shipped `N` = 512 inside 2e-4 at both photon energies
+(`first_passage_quadrature_is_converged`); the bifurcation is gone and the rate
+continuous through `ε_∞ = U_i` (`distribution_resolved_has_no_bifurcation`); and
+the rate is a function of `(ε_∞/U_i, ħω/U_i)` alone, preserving `ν_i ∝ p`
+(`first_passage_rate_depends_only_on_two_dimensionless_groups`).
+
+**Validated — the high-pressure slope** (`distribution_resolved_cascade_fixes_the_high_pressure_slope`).
+At the untouched literature centre `δ_eff` = 0.02: T&T 300–2000 Torr goes
+0.0951 → **0.2793** against a measured 0.329, and Chylek 300–786 Torr goes
+0.1717 → **0.4665** against 0.468. Over the literature range of that single free
+constant the envelope moves from `[0.023, 0.231]`, which *excludes* 0.329, to
+`[0.183, 0.407]`, which contains it — and on Chylek's window from `[0.039,
+0.414]` to `[0.307, 0.657]` containing 0.468.
+
+**Pinned — what it does not fix.** The low-pressure branch is unmoved,
+1.952 → 1.954 against a measured 0.428, which localises that failure to diffusion
+loss rather than to the cascade closure
+(`distribution_resolved_does_not_fix_the_low_pressure_branch`). The wavelength
+ratio moves 4.00 → 3.39 against ≈0.80 — the right sign at last, since `D_ε ∝ ħω`
+makes a shorter wavelength take bigger energy steps, but a 15 % move against a 5×
+gap (`distribution_resolved_does_not_close_the_wavelength_gap`). And the hard
+plateau floor no longer bounds anything: the threshold slides under it,
+1.09× → 0.75× → 0.63× at 300 / 760 / 2000 Torr
+(`distribution_resolved_softens_the_plateau_floor`), so the noble-gas headroom
+figures below are a bound for the mean-trajectory closure only.
+
+**Not the default**, so every other number in this file is unaffected.
+
+Reference: A. J. F. Siegert, *On the first passage time probability problem*,
+Phys. Rev. **81**, 617 (1951) — the mean-first-passage quadrature; the
+energy-space diffusion picture of cascade breakdown is standard, see Raizer
+(above) and Zel'dovich & Raizer, *Physics of Shock Waves and High-Temperature
+Hydrodynamic Phenomena*, ch. VI.
 
 ### General-gas kernel and the parameter-free plateau floor
 
