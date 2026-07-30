@@ -1086,6 +1086,82 @@ refine its own grid: at the shipped N it returned a rate 3 % on the **wrong side
 of the limit it was meant to approach, so a fixed-grid reduction gate measures
 its own resolution. Both failures looked like physics and were not.
 
+### Free-molecular escape — 2026-07-30, and the low-pressure branch half-fixed
+
+After the distribution-resolved closure landed, the low-pressure branch was the
+milestone's one remaining structural failure, and it was well cornered: 4.6× too
+steep against Chylek's clean power law, shown immune to the cascade closure
+(`distribution_resolved_does_not_fix_the_low_pressure_branch`, 1.952 → 1.954) and
+unreachable by any defensible `D_e` (`d_e_sensitivity_is_pinned_across_the_kinetic_band`,
+the whole 6.0× band buys 0.078 of slope). Neither of the two obvious knobs.
+
+**The defect was the loss term's validity, not its value.** `ν = D_e/Λ²` is a
+continuum random-walk result: it assumes the electron collides many times while
+crossing the focus. The Knudsen number `Kn = λ_mfp/ℓ` says it does not —
+
+| Torr | 760 | 300 | 100 | 10 |
+|---|---|---|---|---|
+| `Kn` | 0.013 | 0.034 | 0.10 | **0.96** |
+
+— and against the *diffusion length* `Λ`, which is 4× smaller than the escape
+distance, the mean free path at 10 Torr is **3.8×** it. The kernel was applying a
+continuum formula deep in the collisionless regime, across the entire window
+where it was worst, and because the overstatement is pressure-dependent it was
+manufacturing slope.
+
+**The correction.** An electron cannot cross the region faster than it can travel
+across it, so the escape *time* is the diffusive time plus the ballistic transit
+time:
+
+```text
+ν_esc = 1/(τ_diff + τ_ballistic),   τ_diff = Λ²/D_e,   τ_ballistic = ℓ/v̄
+```
+
+`Kn ≪ 1` recovers `D_e/Λ²` exactly; `Kn ≫ 1` saturates at `v̄/ℓ`, independent of
+pressure, which is the physics — a collisionless electron's escape time does not
+care how thin the gas is.
+
+**It introduces no constant.** `v̄` is not supplied: `D_e = v̄²/(3ν_m)` with
+`ν_m = K_m·p` already fixes it and the pressure cancels, giving
+`v̄ = √(3·D_e,ref·p_ref·K_m)` = 1.540e6 m/s — an electron of **6.740 eV**, the
+same energy `d_e_ref_implies_a_stated_electron_energy` reads out of `D_e`. Both
+inputs are already gated. The correction is forced, not chosen.
+
+**A modelling error caught on the way, worth recording.** The first cut used `Λ`
+as the ballistic transit distance. That is dimensionally fine and physically
+wrong: `Λ` is a diffusion *eigenvalue* (`ν = D_e/Λ²`), not a distance. The
+free-molecular escape distance is the **Cauchy mean chord** `ℓ = 4V/S` — the mean
+straight-line path of an isotropically-directed particle leaving a convex body, a
+theorem rather than a model choice. For T&T's focal cylinder that is **30.72 µm
+against `Λ` = 7.74 µm, a factor 4.0**, so the first version understated the
+correction fourfold (low-pressure slope 1.636 instead of 1.293). The three
+lengths — `Λ`, `ℓ`, `V` — now come from one geometry via `breakdown0d::Focus`,
+so they cannot drift apart, and `focus_geometry_separates_its_three_length_scales`
+pins all three.
+
+**Result — about half the error, and the rest is stated plainly.**
+
+```text
+10–100 Torr    before  1.954      after  1.293      measured  0.428
+```
+
+The correction is **mandatory** — the old formula was being used outside its
+domain of validity — but it is **not sufficient**, and
+`free_molecular_escape_flattens_the_low_pressure_branch` asserts the residual
+2.6× as loudly as the improvement. What remains is very likely the multiphoton
+channel: both source papers state MPI *dominates* below 100 Torr (T&T quote 88 %
+cascade / 12 % MPI at 760 Torr), and a cascade-plus-loss model has no mechanism
+left that could flatten this branch further. That is now M6a's sharpest open
+question, and it is the same channel the wavelength axis has been pointing at
+since D5.
+
+**It is not purely a low-pressure correction**, which is why the high-pressure
+numbers moved a few percent when it landed: the loss rate is still 6.3 % below
+the continuum value at 760 Torr and 2.4 % at 2000. Chylek's 300–786 Torr window
+went 0.4665 → 0.4313 against a measured 0.468, and the T&T window 0.2793 →
+0.2636 against 0.329 — both still inside the `δ_eff` literature envelope, so the
+red gate stays green (envelope now `[0.174, 0.382]`, centre 0.264).
+
 ## NOT in scope (M6a)
 
 - Any propagator coupling.

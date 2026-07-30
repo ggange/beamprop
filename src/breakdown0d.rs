@@ -693,11 +693,99 @@ impl Gas {
         2.0 * energy / (3.0 * M_E * self.k_m * pressure)
     }
 
+    /// Mean electron speed `v̄` (m/s), from the two constants that already fix
+    /// it: `D_e = v̄²/(3·ν_m)` with `ν_m = k_m·p` gives
+    /// `v̄ = √(3·D_e,ref·p_ref·k_m)`, and the pressure cancels exactly.
+    ///
+    /// For dry air this is 1.540e6 m/s — an electron of 6.740 eV, the same
+    /// energy `d_e_ref_implies_a_stated_electron_energy` reads out of `D_e`.
+    /// Nothing new is asserted here; it is a rearrangement of constants the
+    /// model already carries, which is what lets [`AirBreakdown::escape_rate`]
+    /// fix the collisionless limit without adding a parameter.
+    pub fn mean_speed(&self) -> f64 {
+        (3.0 * self.d_e_ref * P_REF * self.k_m).sqrt()
+    }
+
     /// The electron energy (J) that a given `d_e` at `pressure` implies, i.e.
     /// [`kinetic_diffusion_coefficient`](Self::kinetic_diffusion_coefficient)
     /// solved for `ε`.
     pub fn diffusion_implied_energy(&self, pressure: f64, d_e: f64) -> f64 {
         1.5 * M_E * self.k_m * pressure * d_e
+    }
+}
+
+/// The focal region's length scales — all three derived from **one** geometry.
+///
+/// The kernel needs three different lengths from the same little volume, and
+/// they are genuinely different quantities rather than one number reused:
+///
+/// - **`Λ`**, the diffusion length. Not a distance — it is the eigenvalue of the
+///   lowest diffusion mode, `ν = D_e/Λ²`, and for T&T's focus it is 7.74 µm.
+/// - **`ℓ`**, the Cauchy mean chord `4V/S`. This *is* a distance: the mean
+///   straight-line path an isotropically-directed particle travels before
+///   leaving a convex body. It is a theorem, not a model choice, and for the
+///   same focus it is **30.7 µm — 4.0× `Λ`**. It sets the collisionless escape
+///   time `ℓ/v̄`.
+/// - **`V`**, the volume, for the single-electron seed density.
+///
+/// Bundling them prevents the mistake this type was introduced to fix: `Λ` had
+/// been doing duty as the ballistic transit distance in
+/// [`AirBreakdown::escape_rate`], which is dimensionally fine and physically
+/// wrong, and understated the free-molecular correction by 4×.
+///
+/// Both constructors take the geometry, never the derived lengths, so the three
+/// cannot drift apart.
+#[derive(Debug, Clone, Copy)]
+pub struct Focus {
+    lambda_diff: f64,
+    mean_chord: f64,
+    volume: f64,
+}
+
+impl Focus {
+    /// A cylindrical focus of radius `r` and length `l`.
+    ///
+    /// `Λ` is T&T's Eq. 5, `(1/Λ)² = (π/l)² + (2.405/r)²` — the 2.405 is the
+    /// first zero of `J₀`, i.e. the radial diffusion eigenvalue. The mean chord
+    /// is `4V/S` with `V = πr²l` and `S = 2πr² + 2πrl`.
+    pub fn cylinder(r: f64, l: f64) -> Self {
+        let volume = PI * r * r * l;
+        let surface = 2.0 * PI * r * r + 2.0 * PI * r * l;
+        Self {
+            lambda_diff: 1.0 / ((PI / l).powi(2) + (2.405 / r).powi(2)).sqrt(),
+            mean_chord: 4.0 * volume / surface,
+            volume,
+        }
+    }
+
+    /// A spherical focus of radius `r`: `Λ = r/π`, mean chord `4V/S = 4r/3`.
+    pub fn sphere(r: f64) -> Self {
+        Self {
+            lambda_diff: r / PI,
+            mean_chord: 4.0 * r / 3.0,
+            volume: 4.0 / 3.0 * PI * r * r * r,
+        }
+    }
+
+    /// Diffusion length `Λ` (m).
+    pub fn diffusion_length(&self) -> f64 {
+        self.lambda_diff
+    }
+
+    /// Cauchy mean chord `4V/S` (m) — the free-molecular escape distance.
+    pub fn mean_chord(&self) -> f64 {
+        self.mean_chord
+    }
+
+    /// Focal volume (m³).
+    pub fn volume(&self) -> f64 {
+        self.volume
+    }
+
+    fn is_finite_positive(&self) -> bool {
+        [self.lambda_diff, self.mean_chord, self.volume]
+            .iter()
+            .all(|x| *x > 0.0 && x.is_finite())
     }
 }
 
@@ -723,8 +811,8 @@ pub struct AirBreakdown {
     /// Pulse-integration half-window, in FWHMs. A converged model must give a
     /// threshold independent of this; see [`AirBreakdown::peak_ne`].
     window_half_widths: f64,
-    /// Diffusion length `Λ` (m), from the focal geometry — **pinned, not fit**.
-    lambda_diff: f64,
+    /// The focal geometry — **pinned, not fit**.
+    focus: Focus,
     /// Per-neutral multiphoton ionization rate at [`Self::mpi_i_ref`] (s⁻¹).
     /// Zero disables the MPI source entirely (the default).
     mpi_rate_ref: f64,
@@ -750,24 +838,15 @@ impl AirBreakdown {
     /// diffusion length (m, from geometry), `temperature` (K) for the neutral
     /// density, `focal_volume` (m³) for the single-electron seed.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        wavelength: f64,
-        gas: Gas,
-        lambda_diff: f64,
-        temperature: f64,
-        focal_volume: f64,
-    ) -> Result<Self> {
+    pub fn new(wavelength: f64, gas: Gas, focus: Focus, temperature: f64) -> Result<Self> {
         if !(wavelength > 0.0 && wavelength.is_finite()) {
             bail!("wavelength must be positive and finite, got {wavelength}");
         }
-        if !(lambda_diff > 0.0 && lambda_diff.is_finite()) {
-            bail!("diffusion length must be positive and finite, got {lambda_diff}");
+        if !focus.is_finite_positive() {
+            bail!("focal geometry must be positive and finite, got {focus:?}");
         }
         if !(temperature > 0.0 && temperature.is_finite()) {
             bail!("temperature must be positive and finite, got {temperature}");
-        }
-        if !(focal_volume > 0.0 && focal_volume.is_finite()) {
-            bail!("focal volume must be positive and finite, got {focal_volume}");
         }
         if !(gas.u_ion > 0.0 && gas.u_ion.is_finite()) {
             bail!(
@@ -785,7 +864,7 @@ impl AirBreakdown {
             gas,
             cascade_model: CascadeModel::DistributionResolved,
             window_half_widths: 2.0,
-            lambda_diff,
+            focus,
             // MPI source off by default: the seed electron (n_e0 = 1/V_focal)
             // is the initial condition, and the avalanche multiplies it. The
             // continuous multiphoton source is the swappable term (docs Open
@@ -799,7 +878,7 @@ impl AirBreakdown {
             keldysh_prefactor: 0.0,
             n_bd: 1.0e23,
             n_over_p: 1.0 / (K_B * temperature),
-            n_seed: 1.0 / focal_volume,
+            n_seed: 1.0 / focus.volume(),
         })
     }
 
@@ -841,9 +920,12 @@ impl AirBreakdown {
     pub fn dry_air_tt2012_focus(wavelength: f64) -> Result<Self> {
         let r_focus = 20e-6_f64; // f·α/2, f = 4 cm, α = 1 mrad
         let l_axial = 0.414 * (1e-3 / 1e-2) * 0.04_f64.powi(2); // = 66.2 µm
-        let lambda_diff = 1.0 / ((PI / l_axial).powi(2) + (2.405 / r_focus).powi(2)).sqrt();
-        let focal_volume = PI * r_focus * r_focus * l_axial;
-        Self::new(wavelength, Gas::dry_air(), lambda_diff, 288.0, focal_volume)
+        Self::new(
+            wavelength,
+            Gas::dry_air(),
+            Focus::cylinder(r_focus, l_axial),
+            288.0,
+        )
     }
 
     /// The gas this model is running.
@@ -1080,7 +1162,7 @@ impl AirBreakdown {
         let n_neutral = self.n_over_p * pressure;
         let n_o2 = self.gas.f_att * n_neutral;
         let nu_att = self.gas.k_att_2body * n_o2 + self.gas.k_att_3body * n_o2 * n_neutral;
-        let nu_diff = self.diffusion_coefficient(pressure) / (self.lambda_diff * self.lambda_diff);
+        let nu_diff = self.escape_rate(pressure);
         nu_att + nu_diff
     }
 
@@ -1096,7 +1178,58 @@ impl AirBreakdown {
 
     /// Diffusion length `Λ` (m) — from the focal geometry, **pinned, not fit**.
     pub fn diffusion_length(&self) -> f64 {
-        self.lambda_diff
+        self.focus.lambda_diff
+    }
+
+    /// The focal geometry: `Λ`, the Cauchy mean chord, and the volume.
+    pub fn focus(&self) -> Focus {
+        self.focus
+    }
+
+    /// Knudsen number `Kn = λ_mfp/Λ` — the ratio of the electron mean free path
+    /// to the focal region it has to escape.
+    ///
+    /// **This is the validity test for the diffusion loss, and the model used to
+    /// fail it badly.** `ν_diff = D_e/Λ²` is a continuum random-walk result: it
+    /// assumes an electron collides many times while crossing the region, i.e.
+    /// `Kn ≪ 1`. In T&T's focus that holds at atmospheric pressure (`Kn` = 0.05
+    /// at 760 Torr) and fails completely at the bottom of Chylek's range —
+    /// **`Kn` = 3.83 at 10 Torr**, where the mean free path is nearly four times
+    /// the diffusion length and the electron simply flies out without colliding
+    /// at all. Applying `D_e/Λ²` there overstates the loss by 2.3×, and because
+    /// the overstatement is pressure-dependent it manufactures slope. See
+    /// [`Self::escape_rate`].
+    pub fn knudsen_number(&self, pressure: f64) -> f64 {
+        self.gas.mean_speed() / (self.gas.k_m * pressure * self.focus.mean_chord)
+    }
+
+    /// Free-electron escape rate from the focal volume (s⁻¹), valid at **any**
+    /// Knudsen number.
+    ///
+    /// An electron leaves by random walk, but it cannot cross the region faster
+    /// than it can physically travel across it. So the escape *time* is the
+    /// diffusive time plus the ballistic transit time, and the rate is their
+    /// harmonic sum:
+    ///
+    /// ```text
+    /// ν_esc = 1/(τ_diff + τ_ballistic),   τ_diff = Λ²/D_e,   τ_ballistic = Λ/v̄
+    /// ```
+    ///
+    /// - `Kn ≪ 1`: `τ_diff` dominates and this is exactly the old `D_e/Λ²`.
+    /// - `Kn ≫ 1`: `τ_ballistic` dominates and the loss **saturates** at `v̄/Λ`,
+    ///   independent of pressure — which is the physics, because a collisionless
+    ///   electron's escape time does not care how thin the gas is.
+    ///
+    /// **No new constant.** `v̄` is not supplied: `D_e = v̄²/(3ν_m)` already ties
+    /// it to two quantities the model has, so
+    /// `v̄ = √(3·D_e,ref·p_ref·K_m)` = 1.540e6 m/s — which is 6.740 eV, the same
+    /// energy `d_e_ref_implies_a_stated_electron_energy` reads out of `D_e`. The
+    /// correction is therefore forced by constants already gated, not chosen.
+    pub fn escape_rate(&self, pressure: f64) -> f64 {
+        let d_e = self.diffusion_coefficient(pressure);
+        let tau_diff = self.focus.lambda_diff * self.focus.lambda_diff / d_e;
+        let tau_ballistic = self.focus.mean_chord / self.gas.mean_speed();
+        1.0 / (tau_diff + tau_ballistic)
     }
 
     /// This model's cascade plateau floor (W/m²) — see
@@ -1579,8 +1712,8 @@ mod tests {
         let lo = ns.iter().cloned().fold(f64::MAX, f64::min);
         let hi = ns.iter().cloned().fold(0.0f64, f64::max);
         assert!(
-            (0.17..=0.21).contains(&lo) && (0.76..=0.81).contains(&hi),
-            "literature envelope moved: n ∈ [{lo:.3}, {hi:.3}], expected ≈[0.187, 0.785]"
+            (0.16..=0.20).contains(&lo) && (0.71..=0.78).contains(&hi),
+            "literature envelope moved: n ∈ [{lo:.3}, {hi:.3}], expected ≈[0.176, 0.745]"
         );
         // The whole envelope must sit below the no-inelastic-loss floor of 1.74
         // — that improvement is the point of the term.
@@ -1644,12 +1777,12 @@ mod tests {
         let selfc = slope_of(CascadeModel::SelfConsistentClimb);
         const MEASURED: f64 = 0.329;
         assert!(
-            (0.45..=0.49).contains(&fixed),
-            "FixedMeanEnergy slope moved: {fixed:.3}, expected ≈0.468"
+            (0.42..=0.46).contains(&fixed),
+            "FixedMeanEnergy slope moved: {fixed:.3}, expected ≈0.440"
         );
         assert!(
-            (0.08..=0.11).contains(&selfc),
-            "SelfConsistentClimb slope moved: {selfc:.3}, expected ≈0.095"
+            (0.075..=0.098).contains(&selfc),
+            "SelfConsistentClimb slope moved: {selfc:.3}, expected ≈0.086"
         );
         assert!(
             selfc < MEASURED && MEASURED < fixed,
@@ -1727,7 +1860,7 @@ mod tests {
         let n = m.n_over_p * p;
         let n_o2 = m.gas.f_att * n;
         let nu_att = m.gas.k_att_2body * n_o2 + m.gas.k_att_3body * n_o2 * n;
-        let nu_diff = m.gas.d_e_ref * (P_REF / p) / (m.lambda_diff * m.lambda_diff);
+        let nu_diff = m.escape_rate(p);
         assert!(
             nu_att < 0.05 * nu_diff,
             "attachment {nu_att:e} is not negligible against diffusion {nu_diff:e}"
@@ -2077,6 +2210,156 @@ mod tests {
             (ratio - 2.0).abs() < 1e-3,
             "distribution-resolved ν_i is no longer ∝ p: {ratio:.6}"
         );
+    }
+
+    // --- Free-molecular escape (the Knudsen correction) ---------------------
+
+    #[test]
+    fn the_diffusion_approximation_is_invalid_at_low_pressure() {
+        // THE DIAGNOSTIC, and the reason escape_rate exists. `ν = D_e/Λ²` is a
+        // continuum random-walk result: it assumes the electron collides many
+        // times while crossing the region. Measured Knudsen numbers
+        // `Kn = λ_mfp/ℓ` in T&T's focus, against Chylek's pressure range:
+        //
+        //     760 Torr  Kn = 0.013     100 Torr  Kn = 0.10
+        //     300 Torr  Kn = 0.034      10 Torr  Kn = 0.96
+        //
+        // At the bottom of the range the mean free path is comparable to the
+        // whole escape distance — and against the DIFFUSION length Λ, which is
+        // 4× smaller, it is 3.8×. The old kernel applied `D_e/Λ²` there anyway.
+        // That is not a small error and it is not a symmetric one: it overstates
+        // the loss more at lower pressure, so it manufactures slope, which is
+        // exactly where the model was worst.
+        let m = model();
+        let hi = m.knudsen_number(760.0 * TORR);
+        let lo = m.knudsen_number(10.0 * TORR);
+        assert!(
+            hi < 0.05,
+            "Kn = {hi:.4} at 760 Torr; the continuum limit is supposed to be safe here"
+        );
+        assert!(
+            lo > 0.5,
+            "Kn = {lo:.4} at 10 Torr; this gate exists because the diffusion \
+             approximation FAILS there — if it no longer does, escape_rate's \
+             justification has gone"
+        );
+        // Kn ∝ 1/p exactly.
+        assert!(
+            (lo / hi / 76.0 - 1.0).abs() < 1e-9,
+            "Kn is not ∝ 1/p: {lo:.4} at 10 Torr vs {hi:.4} at 760"
+        );
+    }
+
+    #[test]
+    fn escape_rate_recovers_both_limits() {
+        // The correction must change nothing where the old formula was valid,
+        // and must saturate where it was not.
+        let m = model();
+        let l_chord = m.focus().mean_chord();
+        let v_bar = m.gas.mean_speed();
+
+        // Continuum limit: at high pressure this converges to D_e/Λ².
+        //
+        // It converges from below, and not as fast as one might assume — the
+        // correction is still 6.3 % at 760 Torr and 2.4 % at 2000, which is why
+        // landing it moved the high-pressure gate numbers by a few percent
+        // rather than not at all. It is a genuine correction everywhere; it is
+        // merely *dominant* only at low pressure.
+        let mut prev = 0.0;
+        for (p_torr, want) in [(760.0, 0.9375), (2000.0, 0.9757), (10_000.0, 0.9951)] {
+            let p = p_torr * TORR;
+            let continuum =
+                m.diffusion_coefficient(p) / (m.diffusion_length() * m.diffusion_length());
+            let ratio = m.escape_rate(p) / continuum;
+            assert!(
+                ratio < 1.0 && (ratio - want).abs() < 0.01,
+                "at {p_torr} Torr escape_rate is {ratio:.4}× the continuum D_e/Λ², \
+                 expected ≈{want}"
+            );
+            assert!(
+                ratio > prev,
+                "convergence to the continuum limit is not monotone"
+            );
+            prev = ratio;
+        }
+
+        // Free-molecular limit: the rate saturates at v̄/ℓ and stops caring
+        // about pressure. This is the physics — a collisionless electron's
+        // escape time does not depend on how thin the gas is.
+        let ceiling = v_bar / l_chord;
+        let very_low = m.escape_rate(0.001 * TORR);
+        assert!(
+            (very_low / ceiling - 1.0).abs() < 1e-3,
+            "escape rate at 0.001 Torr is {very_low:.4e}, expected the ballistic \
+             ceiling v̄/ℓ = {ceiling:.4e}"
+        );
+        // And it is monotone, never exceeding the ceiling anywhere.
+        let mut prev = f64::MAX;
+        for p_torr in [0.1, 1.0, 10.0, 100.0, 760.0] {
+            let r = m.escape_rate(p_torr * TORR);
+            assert!(r <= ceiling * (1.0 + 1e-12), "escape rate exceeded v̄/ℓ");
+            assert!(r < prev, "escape rate is not monotone in 1/p");
+            prev = r;
+        }
+    }
+
+    #[test]
+    fn the_escape_correction_adds_no_constant() {
+        // v̄ is not supplied. D_e = v̄²/(3ν_m) with ν_m = k_m·p already fixes it,
+        // and the pressure cancels: v̄ = √(3·D_e,ref·p_ref·k_m). So the
+        // correction is forced by two constants that are already gated —
+        // K_m externally (tt2012_collision_frequency_matches_literature) and
+        // D_e for consistency (d_e_ref_implies_a_stated_electron_energy).
+        let gas = model().gas();
+        let v_bar = gas.mean_speed();
+
+        // The round trip: v̄ must reproduce D_e at any pressure.
+        for p_torr in [10.0, 760.0] {
+            let p = p_torr * TORR;
+            let d_from_v = v_bar * v_bar / (3.0 * gas.k_m * p);
+            let d_direct = gas.d_e_ref * (P_REF / p);
+            assert!(
+                (d_from_v / d_direct - 1.0).abs() < 1e-12,
+                "v̄ does not reproduce D_e at {p_torr} Torr: {d_from_v:e} vs {d_direct:e}"
+            );
+        }
+        // And it is the SAME electron energy the D_e gate reads out: 6.740 eV.
+        let ev = 0.5 * M_E * v_bar * v_bar / E_CHARGE;
+        assert!(
+            (ev - 6.740).abs() < 0.01,
+            "the escape correction's v̄ is {ev:.3} eV; \
+             d_e_ref_implies_a_stated_electron_energy reads 6.740 eV out of the \
+             same constant, and these must not drift apart"
+        );
+    }
+
+    #[test]
+    fn focus_geometry_separates_its_three_length_scales() {
+        // Λ is a diffusion EIGENVALUE, the Cauchy chord 4V/S is a DISTANCE, and
+        // they differ by 4× for T&T's focus. Using Λ as the ballistic transit
+        // distance — which the first cut of escape_rate did — is dimensionally
+        // fine and physically wrong, and understates the correction fourfold.
+        let f = model().focus();
+        assert!(
+            (f.diffusion_length() * 1e6 - 7.74).abs() < 0.01,
+            "Λ = {:.3} µm, expected 7.74 (T&T Eq. 5)",
+            f.diffusion_length() * 1e6
+        );
+        assert!(
+            (f.mean_chord() * 1e6 - 30.72).abs() < 0.05,
+            "Cauchy mean chord = {:.3} µm, expected 30.72 (4V/S for the focal cylinder)",
+            f.mean_chord() * 1e6
+        );
+        assert!(
+            (f.mean_chord() / f.diffusion_length() - 3.97).abs() < 0.02,
+            "chord/Λ = {:.3}, expected 3.97 — if these converged, one of the two \
+             is no longer being computed from the geometry",
+            f.mean_chord() / f.diffusion_length()
+        );
+        // A sphere, checked against its own closed forms: Λ = r/π, 4V/S = 4r/3.
+        let sph = Focus::sphere(3e-5);
+        assert!((sph.diffusion_length() - 3e-5 / PI).abs() < 1e-18);
+        assert!((sph.mean_chord() - 4.0 * 3e-5 / 3.0).abs() < 1e-18);
     }
 
     #[test]

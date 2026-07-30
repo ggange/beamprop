@@ -15,7 +15,7 @@ depends on looking a number up.
 
 ## Claims ledger
 
-**Read this before the test count.** `cargo test` runs 196 tests. That number is
+**Read this before the test count.** `cargo test` runs 201 tests. That number is
 not a measure of how much of this solver is validated against the world, and
 reading it as one would be a mistake: most of those tests check that the code
 solves the equations it was given, several deliberately assert a *known
@@ -50,7 +50,7 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 86 rows below: 54 verified, 8 validated, 12 pinned, 12 ungated.**
+**Census of the 91 rows below: 58 verified, 8 validated, 13 pinned, 12 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
 not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
@@ -122,19 +122,24 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | The high-pressure slope lies between the model's analytic limits | `breakdown0d::tests::high_pressure_threshold_slope_lies_between_analytic_limits` | verified | 0.095 … 0.468 |
 | The literature-range inelastic envelope brackets the slope | `breakdown0d::tests::inelastic_loss_envelope_brackets_the_slope` | verified | over `δ_eff` 0.01–0.05, `⟨ε⟩` 2–5 eV |
 | Per-slice integrator is exact and step-size independent | `breakdown0d::tests::{pure_cascade_is_exponential_growth, pure_loss_is_exponential_decay, mpi_only_seeding_is_linear, balance_point_is_linear_from_seed, slice_refinement_is_consistent}` | verified | 1e-9 relative |
-| **Measured `I_thr(p)` slope, against the `δ_eff` literature envelope** | `tt2012_threshold_slope_matches_measurement` | **validated** | measured 0.329 inside `[0.183, 0.407]`; centre 0.279. Red and `#[ignore]`d 2026-07-25 → 2026-07-30, retired by the closure change, not by re-banding |
-| **Chylek's low-pressure branch: the kernel is still far too steep** | `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | **pinned** | 10–100 Torr: kernel 1.954 vs measured 0.428. The high-pressure window now *agrees* (0.466 vs 0.468), so the failure is one-sided and localised to diffusion |
+| **Measured `I_thr(p)` slope, against the `δ_eff` literature envelope** | `tt2012_threshold_slope_matches_measurement` | **validated** | measured 0.329 inside `[0.174, 0.382]`; centre 0.264. Red and `#[ignore]`d 2026-07-25 → 2026-07-30, retired by the closure change, not by re-banding |
+| **Chylek's low-pressure branch: the kernel is still far too steep** | `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | **pinned** | 10–100 Torr: kernel 1.293 vs measured 0.428, down from 1.954 once the free-molecular escape landed. The high-pressure window *agrees* (0.431 vs 0.468), so the failure is one-sided |
 | **The wavelength ratio is falsified against measurement, in sign** | `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared` | **pinned** | kernel 3.39 vs measured ≈ 0.80; overshoot ≈ 4.24× (was 3.99 / 4.99× before the closure change) |
 | **Keldysh MPI does not close the wavelength gap** | `keldysh_mpi_does_not_close_the_wavelength_gap` | **pinned** | order-unity prefactor lands at 2.89 vs measured 0.80; the 18 % of the gap it closes is a smaller denominator, not a better rate |
 | **T&T's own MPI calibration undershoots their own measurement** | `breakdown0d::tests::tt2012_mpi_calibration_undershoots_the_data` | **pinned** | 37× below |
 | Level offset stays inside the inter-lab scatter, with a drift pin | `tt2012_level_ratio_is_bounded_within_scatter` | **pinned** | 3.90–4.69× high; drift 1.48× → 1.20× as the slope error shrank |
 | The two cascade limits bracket the measurement | `breakdown0d::tests::the_two_cascade_models_bracket_the_measurement` | **pinned** | 0.468 / 0.095 straddle 0.329 — but this is a **one-parameter sensitivity**, not two independent limits |
+| **The continuum diffusion loss is invalid at low pressure** | `the_diffusion_approximation_is_invalid_at_low_pressure` | verified | `Kn` = 0.013 at 760 Torr → **0.96 at 10 Torr**; `Kn ∝ 1/p` exactly |
+| Escape rate recovers the continuum and free-molecular limits | `escape_rate_recovers_both_limits` | verified | 0.9375 / 0.9757 / 0.9951 of `D_e/Λ²` at 760 / 2000 / 10⁴ Torr; saturates at `v̄/ℓ` |
+| The escape correction adds no constant | `the_escape_correction_adds_no_constant` | verified | `v̄` reproduces `D_e` to 1e-12; 6.740 eV, the same energy `D_e` implies |
+| `Λ`, the Cauchy chord and `V` are separate scales from one geometry | `focus_geometry_separates_its_three_length_scales` | verified | `Λ` = 7.74 µm, `ℓ = 4V/S` = 30.72 µm, ratio 3.97 |
+| **Free-molecular escape halves the low-pressure slope error, and no more** | `free_molecular_escape_flattens_the_low_pressure_branch` | **pinned** | 10–100 Torr: 1.954 → **1.293** vs measured 0.428 — still 2.6× steep; the high-pressure window is undisturbed (0.431 vs 0.468) |
 | First-passage rate reduces to the mean-trajectory closed form as `D_ε → 0` | `first_passage_reduces_to_the_mean_energy_climb` | verified | ratio 0.821 → 0.990 as `ħω` falls 1.166 → 0.05 eV; grid-converged at each point |
 | First-passage quadrature is 2nd order and the shipped `N` is converged | `first_passage_quadrature_is_converged` | verified | order ≈2; `N` = 512 within 2e-4 at 1064 and 532 nm |
 | The `ε_∞ = U_i` bifurcation is gone | `distribution_resolved_has_no_bifurcation` | verified | `ν_i > 0` below the old cutoff, continuous through it to 2 % |
 | The distribution-resolved rate adds no constant | `first_passage_rate_depends_only_on_two_dimensionless_groups` | verified | function of `(ε_∞/U_i, ħω/U_i)` alone; `ν_i ∝ p` preserved |
-| **High-pressure slope, resolving the electron energy distribution** | `distribution_resolved_cascade_fixes_the_high_pressure_slope` | **validated** | T&T 0.0951 → **0.2793** vs 0.329; Chylek 0.1717 → **0.4665** vs 0.468; the one-free-constant envelope moves from excluding the measurement to containing it |
-| **It does not fix the low-pressure branch** | `distribution_resolved_does_not_fix_the_low_pressure_branch` | **pinned** | 1.952 → 1.954 vs measured 0.428 — localises that failure to diffusion, not the cascade closure |
+| **High-pressure slope, resolving the electron energy distribution** | `distribution_resolved_cascade_fixes_the_high_pressure_slope` | **validated** | T&T 0.0859 → **0.2636** vs 0.329; Chylek 0.1509 → **0.4313** vs 0.468; the one-free-constant envelope moves from excluding the measurement to containing it |
+| **It does not fix the low-pressure branch** | `distribution_resolved_does_not_fix_the_low_pressure_branch` | **pinned** | 1.289 → 1.293 vs measured 0.428 — localises that failure to the loss term, not the cascade closure |
 | **It does not close the wavelength gap** | `distribution_resolved_does_not_close_the_wavelength_gap` | **pinned** | 4.00 → 3.39 vs ≈0.80 — right sign at last, 15 % of a 5× gap |
 | The hard plateau floor stops being a bound | `distribution_resolved_softens_the_plateau_floor` | verified | threshold/floor 1.09 → 0.75 → 0.63 at 300 / 760 / 2000 Torr |
 | The cascade plateau floor is free of every transport constant | `cascade_plateau_floor_is_independent_of_the_transport_constants` | verified | invariant under `D_e` ×0.01…×100; `ν_i ≡ 0` below it at every pressure |
@@ -143,14 +148,14 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | Chylek's focal geometry (`Λ`, focal volume) | — | **ungated** | the paper gives the lens and spot but not the beam diameter, so the divergence-limited depth of focus cannot be reconstructed as T&T's Eq. 5 was |
 | `D_e,ref` = 0.2 m²/s is consistent with the gated `K_m` | `d_e_ref_implies_a_stated_electron_energy` | verified | ⟺ `ε` = 6.740 eV at `p_ref`, inside the (2, `U_i`] eV band the cascade occupies |
 | **Diffusion and inelastic loss assume different electron energies** | `d_e_ref_implies_a_stated_electron_energy` | **pinned** | 6.74 eV vs `⟨ε⟩` = 3 eV — **2.25×**, same population, two terms of one balance |
-| **`D_e` cannot explain the slope gap** | `d_e_sensitivity_is_pinned_across_the_kinetic_band` | **pinned** | a 6.0× band in `D_e` moves `n` by 0.101 (0.0532 → 0.1545) against a 0.234 shortfall to the measured 0.329 |
+| **`D_e` cannot explain the slope gap** | `d_e_sensitivity_is_pinned_across_the_kinetic_band` | **pinned** | a 6.0× band in `D_e` moves `n` by 0.078 (0.0523 → 0.1305) against a 0.243 shortfall to the measured 0.329 |
 | Absolute threshold **level** | — | **ungated** | published thresholds scatter 3–10× across labs |
 | `D_e,ref` against a **measurement** | — | **ungated** | swarm data sits at 0.1–2 eV and reaches 6.7 eV only through the same formula, so it would re-validate `K_m`, not `D_e`; needs a measurement at the cascade's own energy |
 | `δ_eff` = 0.02 | `AirBreakdown::new` | **ungated** | free within ≈0.01–0.05; sets the plateau level |
 | `⟨ε⟩` = 3 eV (`FixedMeanEnergy` only) | `AirBreakdown::new` | **ungated** | free within ≈2–5 eV |
 | `n_bd` = 10²³ m⁻³ | `AirBreakdown::new` | **ungated** | asserted; audit says the slope is insensitive to ×0.1/×10 |
 | Seed density `n_e0 = 1/V_focal` | `AirBreakdown::with_seed_density` | **ungated** | known **~10⁴ unphysical** — cosmic-ray background gives ~10⁻⁴ electrons in this focus |
-| `Λ` = 7.74 µm | `dry_air_tt2012_focus` | **ungated** | pinned from T&T's Eq. 5 geometry, never fit; matches the 8 µm the paper states |
+| `Λ` = 7.74 µm and `ℓ` = 30.72 µm | `Focus::cylinder` | **ungated** | both pinned from T&T's Eq. 5 geometry, never fit; `Λ` matches the 8 µm the paper states |
 | The `ε_∞ → U_i` margin at threshold | — | **ungated** | `ε_∞/U_i` = 1.032 at 760 Torr, 1.011 at 1500 — the model sits at the bifurcation that *is* its plateau |
 
 ### M6a.2 — Aperture optics and ignition statistics
@@ -478,8 +483,33 @@ The loss terms are attachment from measured rate coefficients (dissociative
 `k₂·n_O₂ ∝ p` plus three-body `k₃·n_O₂·n ∝ p²`; the two-body channel leads at
 1 atm, `5.4×10⁷` against `1.4×10⁷ s⁻¹`, with three-body overtaking it only above
 `n = k₂/k₃ = 10²⁶ m⁻³` ≈ 4 atm) and free-electron diffusion,
-`ν_diff = D_e(p)/Λ²` with `D_e ∝ 1/p`. Attachment is negligible against
-diffusion throughout the gate window — `6.7×10⁷` vs `3.3×10⁹ s⁻¹` at 1 atm.
+free-electron **escape** from the focal volume. Attachment is negligible against
+escape throughout the gate window — `6.7×10⁷` vs `3.3×10⁹ s⁻¹` at 1 atm.
+
+Escape is *not* `D_e/Λ²`. That is a continuum random-walk result and assumes the
+electron collides many times while crossing the focus, which fails badly at low
+pressure: the Knudsen number `Kn = λ_mfp/ℓ` runs 0.013 at 760 Torr to **0.96 at
+10 Torr** (3.8× against the diffusion length `Λ`), so at the bottom of Chylek's
+range the electron leaves ballistically without colliding. An electron cannot
+cross the region faster than it can travel across it, so the escape *time* is the
+diffusive time plus the ballistic transit time:
+
+```text
+ν_esc = 1/(τ_diff + τ_ballistic),   τ_diff = Λ²/D_e,   τ_ballistic = ℓ/v̄
+```
+
+reducing to `D_e/Λ²` for `Kn ≪ 1` and saturating at `v̄/ℓ` — pressure-independent
+— for `Kn ≫ 1`. Site: `breakdown0d::AirBreakdown::escape_rate`,
+`knudsen_number`. **No new constant**: `v̄ = √(3·D_e,ref·p_ref·K_m)` follows from
+`D_e = v̄²/(3ν_m)` with the pressure cancelling, giving 1.540e6 m/s — the same
+6.740 eV that `d_e_ref_implies_a_stated_electron_energy` reads out of `D_e`.
+
+The three focal length scales are distinct and now come from one geometry
+(`breakdown0d::Focus`): `Λ` = 7.74 µm is a diffusion **eigenvalue**, the Cauchy
+mean chord `ℓ = 4V/S` = **30.7 µm** is a **distance** (the mean free path of an
+isotropically-directed particle leaving a convex body — a theorem, not a model
+choice), and `V` sets the seed density. Using `Λ` as the ballistic transit
+distance understates the correction by 4.0×.
 
 `D_e,ref` used to be M6a's largest ungated number. It is no longer free: kinetic
 theory ties it to the externally-gated `K_m` by `D_e = 2ε/(3 m_e K_m p)`, so

@@ -15,7 +15,7 @@ use ndarray::{Array2, Array3, s};
 use crate::airprops::AirTable;
 use crate::aperture::Aperture;
 use crate::blooming::ThermalBlooming;
-use crate::breakdown0d::{AirBreakdown, Gas};
+use crate::breakdown0d::{AirBreakdown, Focus, Gas};
 use crate::euler1d::{IdealGas, Primitive};
 use crate::field::{Field, IntensityScale};
 use crate::grid::Grid;
@@ -408,13 +408,7 @@ pub fn run_breakdown(p: &BreakdownParams) -> Result<BreakdownRun> {
     } else {
         // Same focal geometry as the pinned T&T case, retuned to λ.
         let r_focus = 20e-6;
-        AirBreakdown::new(
-            p.wavelength,
-            Gas::dry_air(),
-            r_focus / std::f64::consts::PI,
-            288.0,
-            4.0 / 3.0 * std::f64::consts::PI * r_focus.powi(3),
-        )?
+        AirBreakdown::new(p.wavelength, Gas::dry_air(), Focus::sphere(r_focus), 288.0)?
     };
 
     let curve = |m: &AirBreakdown| -> Result<Vec<(f64, f64)>> {

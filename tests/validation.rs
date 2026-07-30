@@ -1084,13 +1084,13 @@ fn tt2012_threshold_slope_matches_measurement() {
     // satisfied later by an envelope that has quietly grown to contain
     // everything. Measured: [0.183, 0.407] with the centre at 0.279.
     assert!(
-        (0.17..=0.20).contains(&env_lo) && (0.39..=0.42).contains(&env_hi),
+        (0.16..=0.19).contains(&env_lo) && (0.36..=0.40).contains(&env_hi),
         "the δ_eff envelope is now [{env_lo:.3}, {env_hi:.3}], expected \
-         ≈[0.183, 0.407]; containment means less if the envelope moved"
+         ≈[0.174, 0.382]; containment means less if the envelope moved"
     );
     assert!(
-        (0.26..=0.30).contains(&central),
-        "central-δ_eff slope {central:.3}, expected ≈0.279 against a measured \
+        (0.25..=0.28).contains(&central),
+        "central-δ_eff slope {central:.3}, expected ≈0.264 against a measured \
          {measured_n:.3}"
     );
 }
@@ -1590,11 +1590,11 @@ fn d_e_sensitivity_is_pinned_across_the_kinetic_band() {
          the low-pressure branch is supposed to be diffusion-driven"
     );
     // And the pin: how much freedom the constant actually buys.
-    // Measured: n = 0.0532 at ε = 2 eV, 0.0951 at the default 6.74 eV, 0.1545
-    // at ε = U_i. A 6.0× range in D_e, and the slope moves 0.101.
+    // Measured: n = 0.0523 at ε = 2 eV, 0.0859 at the shipped 6.74 eV, 0.1305
+    // at ε = U_i. A 6.0× range in D_e, and the slope moves 0.078.
     let span = n_hi - n_lo;
     assert!(
-        (0.09..=0.115).contains(&span),
+        (0.065..=0.092).contains(&span),
         "D_e's kinetic band moves the fitted slope by {span:.4} \
          (n = {n_lo:.4} at ε = 2 eV → {n_hi:.4} at ε = U_i, default {n_mid:.4}); \
          the audit called this 'large' and this gate is where that number lives"
@@ -2091,8 +2091,8 @@ fn chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not() {
     // sharper statement about where the remaining defect lives than the
     // symmetric crossing this gate used to assert.
     assert!(
-        modelled[0] > measured[0] * 3.0,
-        "kernel is {:.3} vs measured {:.3} over 10–100 Torr; expected ≈4.6× steeper. \
+        modelled[0] > measured[0] * 2.0,
+        "kernel is {:.3} vs measured {:.3} over 10–100 Torr; expected ≈2.6× steeper. \
          If THIS closed, the diffusion branch has been fixed and that is the \
          milestone's remaining open question",
         modelled[0],
@@ -3799,18 +3799,18 @@ fn distribution_resolved_cascade_fixes_the_high_pressure_slope() {
     );
 
     assert!(
-        (0.09..=0.10).contains(&tt_old) && (0.16..=0.18).contains(&ch_old),
-        "the mean-trajectory baseline moved: T&T {tt_old:.4} (expected ≈0.095), \
-         Chylek {ch_old:.4} (expected ≈0.172)"
+        (0.078..=0.095).contains(&tt_old) && (0.14..=0.16).contains(&ch_old),
+        "the mean-trajectory baseline moved: T&T {tt_old:.4} (expected ≈0.086), \
+         Chylek {ch_old:.4} (expected ≈0.151)"
     );
     assert!(
-        (0.26..=0.30).contains(&tt_new),
-        "distribution-resolved T&T slope {tt_new:.4}, expected ≈0.279 against a \
+        (0.25..=0.28).contains(&tt_new),
+        "distribution-resolved T&T slope {tt_new:.4}, expected ≈0.264 against a \
          measured 0.329"
     );
     assert!(
-        (0.44..=0.49).contains(&ch_new),
-        "distribution-resolved Chylek slope {ch_new:.4}, expected ≈0.467 against a \
+        (0.41..=0.46).contains(&ch_new),
+        "distribution-resolved Chylek slope {ch_new:.4}, expected ≈0.431 against a \
          measured 0.468"
     );
     // The direction and size of the move is the claim.
@@ -3903,8 +3903,8 @@ fn distribution_resolved_does_not_fix_the_low_pressure_branch() {
     const MEASURED: f64 = 0.428;
 
     assert!(
-        (1.90..=2.00).contains(&old) && (1.90..=2.00).contains(&new),
-        "low-pressure slopes are {old:.4} → {new:.4}, expected both ≈1.95"
+        (1.24..=1.34).contains(&old) && (1.24..=1.34).contains(&new),
+        "low-pressure slopes are {old:.4} → {new:.4}, expected both ≈1.29"
     );
     assert!(
         (new / old - 1.0).abs() < 0.02,
@@ -3913,7 +3913,7 @@ fn distribution_resolved_does_not_fix_the_low_pressure_branch() {
          untouched by the cascade closure"
     );
     assert!(
-        new > MEASURED * 3.0,
+        new > MEASURED * 2.2,
         "the low-pressure branch is no longer far above the measured {MEASURED} \
          ({new:.4}); if something closed this, it is a real result"
     );
@@ -4043,5 +4043,99 @@ fn distribution_resolved_softens_the_plateau_floor() {
         (0.60..=0.66).contains(&ratios[2]),
         "at 2000 Torr the threshold is {:.3}× the hard floor, expected ≈0.63",
         ratios[2]
+    );
+}
+
+/// **Free-molecular escape — external gate, and a partial fix.**
+///
+/// The low-pressure branch was the milestone's remaining structural failure:
+/// 4.6× too steep against Chylek's clean power law, and shown by
+/// `distribution_resolved_does_not_fix_the_low_pressure_branch` to be immune to
+/// the cascade closure, and by `d_e_sensitivity_is_pinned_across_the_kinetic_band`
+/// to be unreachable by any defensible `D_e`. Neither of the two obvious knobs.
+///
+/// **The defect was the loss term's validity, not its value.** `ν = D_e/Λ²` is a
+/// continuum random-walk result and assumes the electron collides many times
+/// while crossing the focus. Measured Knudsen numbers say it does not:
+///
+/// ```text
+/// 760 Torr  Kn = 0.013      100 Torr  Kn = 0.10
+/// 300 Torr  Kn = 0.034       10 Torr  Kn = 0.96
+/// ```
+///
+/// At 10 Torr the mean free path is comparable to the whole escape distance —
+/// and 3.8× the diffusion length `Λ`. The kernel was applying a continuum
+/// formula in the collisionless regime, over the entire window where it was
+/// worst. Replacing it with `ν_esc = 1/(Λ²/D_e + ℓ/v̄)` — escape time is the
+/// diffusive time *plus* the ballistic transit time, since an electron cannot
+/// cross the region faster than it can travel across it — introduces **no new
+/// constant**: `v̄ = √(3·D_e,ref·p_ref·K_m)` comes from two constants already in
+/// the model, and `ℓ = 4V/S` is the Cauchy mean chord of the pinned focal
+/// geometry.
+///
+/// **Result: it closes about half the gap, in slope terms.**
+///
+/// ```text
+/// 10–100 Torr    before  1.954      after  1.293      measured  0.428
+/// ```
+///
+/// Honest accounting of what remains: still 2.6× too steep. The correction is
+/// mandatory — the old formula was being used outside its domain of validity —
+/// but it is not sufficient, and this gate asserts the shortfall as well as the
+/// improvement. What is left is very likely the multiphoton channel: both source
+/// papers state MPI *dominates* below 100 Torr (T&T quote 88 % cascade / 12 %
+/// MPI at 760 Torr and MPI-dominant below 100), and a cascade-plus-loss model
+/// has no mechanism that could flatten this branch further.
+#[test]
+fn free_molecular_escape_flattens_the_low_pressure_branch() {
+    use beamprop::breakdown0d::AirBreakdown;
+
+    let m = AirBreakdown::dry_air_tt2012_focus(532e-9).expect("λ in range");
+
+    // The correction is required, not optional: the continuum formula is being
+    // asked to work where its own assumption fails.
+    assert!(
+        m.knudsen_number(10.0 * TORR) > 0.5,
+        "Kn = {:.3} at 10 Torr — this gate's premise is that the continuum \
+         diffusion limit FAILS there",
+        m.knudsen_number(10.0 * TORR)
+    );
+
+    let slope_over = |lo: f64, hi: f64| {
+        let c = m.pressure_sweep(lo * TORR, hi * TORR, 8, 6.5e-9, 400);
+        assert_eq!(c.len(), 8, "sweep lost points over {lo}–{hi} Torr");
+        -beamprop::validate::loglog_slope(&c).expect("slope")
+    };
+    let low = slope_over(10.0, 100.0);
+    const MEASURED_LOW: f64 = 0.428;
+    const BEFORE: f64 = 1.954;
+
+    // The improvement.
+    assert!(
+        (1.24..=1.34).contains(&low),
+        "low-pressure slope is {low:.4}, expected ≈1.293 (it was {BEFORE} with the \
+         continuum loss)"
+    );
+    assert!(
+        low < BEFORE * 0.75,
+        "the free-molecular correction no longer flattens the low-pressure branch \
+         appreciably: {low:.4} against {BEFORE}"
+    );
+    // And the shortfall, asserted with equal weight.
+    assert!(
+        low > MEASURED_LOW * 2.2,
+        "the low-pressure branch now reaches {low:.4} against a measured \
+         {MEASURED_LOW} — if the gap closed, that is a real result and the \
+         remaining-MPI reading in docs/M6A_SPEC.md is wrong"
+    );
+
+    // The high-pressure branch must not be spoiled by it. The correction is a
+    // few percent there (6.3 % in the loss rate at 760 Torr), and the window
+    // still agrees with Chylek: 0.431 against a measured 0.468.
+    let high = slope_over(300.0, 786.0);
+    assert!(
+        (high / 0.468 - 1.0).abs() < 0.15,
+        "high-pressure slope {high:.4} against a measured 0.468; the free-molecular \
+         correction is supposed to leave this branch essentially alone"
     );
 }
