@@ -1,0 +1,58 @@
+# Digitized from P. Chylek, M. A. Jarzembski, V. Srivastava, R. G. Pinnick,
+# "Pressure dependence of the laser-induced breakdown thresholds of gases and
+# droplets", Appl. Opt. 29, 2303-2306 (1990) -- the CLEAN He GAS breakdown
+# threshold intensity curve (filled squares), I_TH against pressure.
+# Figure: Fig. 2, pinned at digitization time -- required so the digitization
+#   is reproducible against the paper, not just describable.
+# Traced by hand (Giuseppe, 2026-07-30). Fig. 2 carries six overlapping series
+# in three filled and three open marker shapes; a template-matching pass could
+# not separate them to the standard the Fig. 3 air trace reached, so the hand
+# trace is the primary data here.
+#
+# Independent cross-check: a programmatic trace of the same curve (axes fitted
+# on the log-decade minor ticks, markers by cross-correlation) agrees with this
+# file to a median 0.971x (spread 0.948-1.769 where the He and Ar bands nearly touch).
+# Two traces by different methods agreeing at that level is the provenance
+# claim; neither was adjusted toward the other.
+#
+# Setup (paper): Nd:YAG SECOND HARMONIC, lambda = 0.532 um, 6.5 ns pulse, 10 cm
+# plano-convex lens, ~33 um focal DIAMETER, gas chamber, 1-800 Torr.
+#
+# Helium: ionization potential U_i = 24.587 eV, so at 532 nm
+# (hbar*omega = 2.331 eV) the multiphoton order is K = ceil(U_i/hbar*omega)
+# = 11. Together with the other two gases this spans K = 11 / 7 / 6 at ONE
+# wavelength and ONE apparatus, which decouples photon order from wavelength in
+# a way the air data cannot. Noble gases also have NO attachment channel, so
+# they isolate cascade + diffusion + multiphoton ionization.
+#
+# Alpha printed in the paper's Sec. IV for this gas:
+#   p > 380 Torr: 0.65 +/- 0.06; at low p the slope increases up to 1.30 +/- 0.02
+# What this file reproduces is checked in tests/validation.rs,
+# chylek1990_fig2_digitization_reproduces_the_published_slopes.
+#
+# NOTE: no physics gate consumes this yet. The kernel is AirBreakdown -- U_i,
+# K_m and the attachment chemistry are air-specific -- so gating a noble gas
+# needs a general-gas model first. This file is the substrate for that, and
+# carries only its own integrity gate until then.
+#
+# columns: pressure_torr, I_th_W_per_cm2
+pressure_torr,I_th_W_per_cm2
+60.6299,2.39855e+12
+66.7785,2.07190e+12
+73.7346,1.78074e+12
+84.0433,1.45166e+12
+96.3144,1.31244e+12
+107.1551,1.11734e+12
+120.8526,9.25896e+11
+135.6506,8.72551e+11
+147.2890,7.70412e+11
+176.0814,6.44777e+11
+203.7307,5.60808e+11
+250.2364,5.14085e+11
+292.6889,4.54584e+11
+323.5699,4.24042e+11
+362.5942,3.73848e+11
+443.1120,3.17779e+11
+514.1948,2.92898e+11
+569.4618,2.65260e+11
+672.4251,2.35591e+11

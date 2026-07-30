@@ -528,7 +528,17 @@ References:
   532 nm (their Fig. 3, `α = 0.45 ± 0.01`), digitized into
   `tests/data/chylek1990_air_threshold_vs_pressure.csv` by
   `scripts/digitize_chylek1990.py`. Second group, second apparatus, second
-  wavelength, matched pulse and focus.
+  wavelength, matched pulse and focus. Their **Fig. 2** additionally gives clean
+  He, Ar and Xe thresholds on the same bench, hand-traced into
+  `tests/data/chylek1990_{he,ar,xe}_threshold_vs_pressure.csv` and cross-checked
+  against an independent programmatic trace to 0.3 % on Ar and Xe. Those three
+  gases span `U_i` = 24.59 / 15.76 / 12.13 eV, i.e. multiphoton order
+  **K = 11 / 7 / 6 at a single wavelength and a single apparatus** — the one
+  dataset here that separates photon order from `λ` — and having no attachment
+  channel they isolate cascade + diffusion + MPI. No physics gate consumes them
+  yet: the kernel is `AirBreakdown`, so a noble gas needs a general-gas model
+  first. Carried with an integrity gate
+  (`chylek1990_fig2_digitization_reproduces_the_published_slopes`) meanwhile.
 
 ## M6a.2 — Aperture optics and pupil phase statistics
 
