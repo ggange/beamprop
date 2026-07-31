@@ -362,6 +362,63 @@ tight focus is stochastic and why the physically correct seed is multiphoton
 ionization during the pulse. Turning `S_mpi` on with a defensible `σ_K` is the
 open item; until then the floor is the honest stand-in and is labelled as such.
 
+### Superseded 2026-07-31 — the seed is now produced, not assumed
+
+Everything above describes the kernel as it stood until seed production landed.
+It is kept because the reasoning was right and the fix it argued for is the one
+that eventually happened; what follows is what replaced it.
+
+**The stand-in was worse than this section admitted.** It compared `1/V_focal`
+against a background of ~10⁹ m⁻³ and concluded the focus holds ~8×10⁻⁵
+electrons. That figure is the **ion** density. Air is electronegative — the
+kernel's own validated attachment gives `ν_att` = 6.7×10⁷ s⁻¹ at 1 atm, so a
+free electron survives ~15 ns — and the free-*electron* background is
+`q/ν_att` = **0.149 m⁻³**, i.e. **1.2×10⁻¹⁴** electrons in the focus. The
+assumption was off by ~14 orders, not ~4, and this document was the source of
+the smaller number.
+
+**What landed.** `n_e0(p) = q(p)/ν_att(p)` with `q` ≈ 10 ion pairs cm⁻³ s⁻¹
+(AFRL *Handbook of Geophysics*, ch. 20), PPT photoionization on by default, and
+the floor removed. Three edits that are one change: any one alone is wrong. The
+formulation and results are in `docs/MODELS.md` § "Seed production". Four things
+belong here as milestone record.
+
+**1. The new constant is not load-bearing, and that was the acceptance test.**
+Introducing `q` would be a poor trade if the answer depended on it. It does not:
+the threshold is *bit-identical* across twelve decades of seed density, and
+takes ~10 orders to move 0.04 %. The retired `1/V_focal` sat where the seed
+*does* matter (2.6 % at 10¹² m⁻³) — the old constant was load-bearing and wrong,
+the new one is neither. This gate was written before the change was committed,
+with the stated intent that a failure would stop it landing.
+
+**2. It repaired the low-pressure branch.** 10–100 Torr goes 1.292 → **0.501**
+against a measured 0.428: from 3.0× too steep to 1.17×. That branch was M6a's
+worst residual for the milestone's entire life, and *both* source papers said
+multiphoton ionization dominates there. The largest single improvement M6a has
+had, from deleting an assumption rather than adding a term.
+
+**3. The floor had to be kept for an explicit seed.** Removing it outright would
+have moved every isolation gate's baseline, because those gates run without a
+multiphoton source and their seed would then decay through the quiet arm — the
+exact window-dependence this section was written about. The rule that resolves
+it: an **explicit** seed is a modelling assumption and acts as a floor; the
+**derived** background is a physical initial condition and is free to deplete.
+That keeps `seeding_suppressed` gates numerically identical to what they
+published, so the closure and loss-term comparisons are unaffected by this
+change, which is what makes it reviewable.
+
+**4. A gate caught a real bug in the change.** With PPT made default,
+`with_tt2012_mpi` silently became a no-op, because `mpi_source` tests the PPT
+path first and that builder never zeroed it. `tt2012_mpi_calibration_undershoots_
+the_data` failed and said so. The builder now zeroes the other paths, as the
+other two already did.
+
+**What it costs.** The 300–786 Torr window slips 0.431 → 0.386 against 0.468,
+and a mid-pressure bump survives at 100–300 Torr (0.857 vs 0.413) — the seeding
+transition, where the kernel crosses from multiphoton-supplied to
+cascade-supplied electrons too abruptly. That is now M6a's sharpest open
+question, and it is a better one than the branch it replaced.
+
 ## Constants (SI, documented)
 
 | symbol | value | source / note |

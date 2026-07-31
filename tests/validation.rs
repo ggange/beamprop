@@ -906,6 +906,25 @@ fn interp_log(curve: &[(f64, f64)], x: f64) -> Option<f64> {
 }
 
 const TORR: f64 = 133.322_368_4;
+
+/// The kernel with **seeding switched off**: one electron assumed present in the
+/// focal volume, no multiphoton source.
+///
+/// This is how M6a ran until seed production landed, and it is what the gates
+/// that **isolate** a cascade closure or a loss term must pin. Once
+/// photoionization is on by default, a gate that means to measure one mechanism
+/// has to say so, or it silently measures that mechanism *convolved with*
+/// seeding and stops testing the thing it is named for.
+///
+/// Gates that report the model's **agreement with measurement** deliberately do
+/// **not** use this — they run the default, because the default is the claim.
+fn seeding_suppressed(
+    m: beamprop::breakdown0d::AirBreakdown,
+) -> beamprop::breakdown0d::AirBreakdown {
+    let volume = m.focus().volume();
+    m.without_mpi().with_seed_density(1.0 / volume)
+}
+
 /// Pressure window of the M6a slope gates (Torr) — the high-pressure branch,
 /// where cascade and attachment both scale ∝ p, diffusion is sub-dominant, and
 /// T&T's digitization uncertainty is smallest.
@@ -1232,9 +1251,14 @@ fn tt2012_wavelength_scaling_matches_cascade_theory() {
         let mut ratios = Vec::new();
         for lambda_um in LAMBDAS_UM {
             let lambda = lambda_um * 1e-6;
-            let m = AirBreakdown::dry_air_tt2012_focus(lambda)
-                .expect("geometry")
-                .with_cascade_model(model);
+            // Seeding pinned off: this gate compares the kernel against T&T's
+            // CASCADE closed form, so the cascade is what it must isolate. It
+            // also sweeps to 10.6 µm, where K ≈ 103 and photoionization is nil.
+            let m = seeding_suppressed(
+                AirBreakdown::dry_air_tt2012_focus(lambda)
+                    .expect("geometry")
+                    .with_cascade_model(model),
+            );
             let mine = m.threshold_intensity(6e-9, p, 400).expect("threshold");
             let eq4 = tt2012_cascade_threshold(p, lambda);
             kernel.push((lambda, mine));
@@ -1286,7 +1310,9 @@ fn tt2012_wavelength_scaling_matches_cascade_theory() {
     // ω² times the inelastic energy loss per collision. At the literature
     // centre they agree to ~1%. Recorded because it is the branch's sharpest
     // physical result; NOT used to pin δ_eff·⟨ε⟩ (see the doc comment).
-    let m = AirBreakdown::air_1064nm().with_cascade_model(CascadeModel::FixedMeanEnergy);
+    let m = seeding_suppressed(
+        AirBreakdown::air_1064nm().with_cascade_model(CascadeModel::FixedMeanEnergy),
+    );
     // Pressure-independent by construction (both powers ∝ p), so any p serves.
     let plateau = m.inelastic_loss_power(p) / m.heating_power(1.0, p);
     let eq4_1064 = tt2012_cascade_threshold(p, 1064e-9);
@@ -1789,7 +1815,9 @@ fn keldysh_mpi_does_not_close_the_wavelength_gap() {
     let p = 760.0 * TORR;
     let ratio_at = |prefactor: f64| -> f64 {
         let mk = |nm: f64| {
-            let m = AirBreakdown::dry_air_tt2012_focus(nm * 1e-9).expect("λ in range");
+            let m = seeding_suppressed(
+                AirBreakdown::dry_air_tt2012_focus(nm * 1e-9).expect("λ in range"),
+            );
             if prefactor > 0.0 {
                 m.with_keldysh_mpi(prefactor)
             } else {
@@ -2082,7 +2110,9 @@ fn ppt_does_not_close_the_wavelength_gap_either() {
     let p = 760.0 * TORR;
     let ratio = |ppt: bool, seed: Option<f64>| -> f64 {
         let mk = |nm: f64| {
-            let m = AirBreakdown::dry_air_tt2012_focus(nm * 1e-9).expect("λ in range");
+            let m = seeding_suppressed(
+                AirBreakdown::dry_air_tt2012_focus(nm * 1e-9).expect("λ in range"),
+            );
             let m = if ppt { m.with_ppt_mpi(Z_EFF_O2) } else { m };
             match seed {
                 Some(n) => m.with_seed_density(n),
@@ -2497,7 +2527,10 @@ fn chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not() {
         measured.push(-beamprop::validate::loglog_slope(&pts).expect("measured slope"));
 
         // The kernel at Chylek's own wavelength and pulse, at the measured
-        // abscissae, so the two fits have identical support.
+        // abscissae, so the two fits have identical support. Runs the DEFAULT
+        // configuration deliberately — this gate reports the model's agreement
+        // with a measurement, so suppressing seeding here would be reporting a
+        // model nobody uses.
         let m = AirBreakdown::dry_air_tt2012_focus(532e-9).expect("λ in range");
         let mp: Vec<(f64, f64)> = pts
             .iter()
@@ -2521,43 +2554,91 @@ fn chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not() {
          if this spread grew, re-check the digitization before the model"
     );
 
-    // The kernel is not, and by a margin far outside the measurement's spread.
+    // The kernel is still not a power law — but the shape of the failure has
+    // changed, and this gate now measures WHAT CHANGED IT by running the same
+    // three windows with seeding suppressed.
+    //
+    // | window (Torr) | seeding off | default | measured |
+    // |---|---|---|---|
+    // | 10–100  | 1.292 | **0.501** | 0.428 |
+    // | 100–300 | 0.947 | 0.857     | 0.413 |
+    // | 300–786 | 0.431 | 0.386     | 0.468 |
+    //
+    // The low-pressure branch — this milestone's worst residual for its whole
+    // life, and the one both source papers attribute to multiphoton ionization
+    // — goes from 3.0× too steep to **1.17×**. It is the largest single
+    // improvement M6a has had, and it comes from deleting an assumption rather
+    // than from adding a term.
+    let unseeded: Vec<f64> = WINDOWS
+        .iter()
+        .map(|&(lo, hi)| {
+            let m =
+                seeding_suppressed(AirBreakdown::dry_air_tt2012_focus(532e-9).expect("λ in range"));
+            let pts: Vec<(f64, f64)> = curve
+                .iter()
+                .copied()
+                .filter(|(p, _)| (lo..=hi).contains(p))
+                .map(|(p_torr, _)| {
+                    (
+                        p_torr,
+                        m.threshold_intensity(6.5e-9, p_torr * TORR, 400)
+                            .expect("threshold in bracket"),
+                    )
+                })
+                .collect();
+            -beamprop::validate::loglog_slope(&pts).expect("slope")
+        })
+        .collect();
+
     let k_lo = modelled.iter().copied().fold(f64::MAX, f64::min);
     let k_hi = modelled.iter().copied().fold(0.0f64, f64::max);
     assert!(
-        k_hi / k_lo > 3.0,
+        k_hi / k_lo > 1.8,
         "kernel local exponents are {modelled:?} (spread {:.1}×); this gate asserts \
          the known curvature. If something straightened the curve further, this is \
          the assertion to revisit",
         k_hi / k_lo
     );
-    // The curvature is still there, but it is no longer symmetric about the
-    // data, and that asymmetry is the whole content of this gate now.
-    //
-    // The HIGH-pressure window agrees. Resolving the electron energy
-    // distribution took it from 0.172 to 0.466 against a measured 0.468 — the
-    // "2.8× too flat" half of this gate is discharged.
+
+    // THE LOW-PRESSURE BRANCH IS FIXED, and by seeding specifically.
     assert!(
-        (modelled[2] / measured[2] - 1.0).abs() < 0.15,
-        "kernel is {:.3} vs measured {:.3} over 300–786 Torr; these agreed to \
-         better than 1 % when the distribution-resolved closure landed, and a \
-         drift here is the first sign that agreement was coincidental",
-        modelled[2],
-        measured[2]
+        unseeded[0] > 2.5 * measured[0],
+        "the unseeded low-pressure slope is {:.4} vs measured {:.4}; this gate's \
+         claim is that seeding is what repaired a branch that was ≈3× too steep \
+         without it",
+        unseeded[0],
+        measured[0]
     );
-    // The LOW-pressure window does not, and is untouched by that change: this
-    // branch is set by diffusion loss D_e/Λ², not by the cascade closure. So
-    // what survives of "the kernel is not a power law" is one-sided — the model
-    // is far too steep below ~250 Torr and correct above ~300, which is a
-    // sharper statement about where the remaining defect lives than the
-    // symmetric crossing this gate used to assert.
     assert!(
-        modelled[0] > measured[0] * 2.0,
-        "kernel is {:.3} vs measured {:.3} over 10–100 Torr; expected ≈2.6× steeper. \
-         If THIS closed, the diffusion branch has been fixed and that is the \
-         milestone's remaining open question",
+        (modelled[0] / measured[0] - 1.0).abs() < 0.25,
+        "kernel is {:.4} vs measured {:.4} over 10–100 Torr — expected ≈1.17×. \
+         This branch was 3.0× too steep until seed production landed; a drift \
+         here means that repair is coming undone",
         modelled[0],
         measured[0]
+    );
+
+    // What survives is a MID-pressure bump, which is where the seeding
+    // transition sits: below ~100 Torr multiphoton ionization supplies the
+    // electrons, above ~300 Torr the cascade does, and the kernel crosses
+    // between the two too abruptly. That is a sharper open question than the
+    // one it replaces.
+    assert!(
+        modelled[1] / measured[1] > 1.5,
+        "the 100–300 Torr window is now {:.4} vs measured {:.4}; this gate \
+         asserts the residual bump at the seeding transition",
+        modelled[1],
+        measured[1]
+    );
+    // And the high-pressure window, which the distribution-resolved closure had
+    // brought to 0.431 against 0.468, slipped to 0.386 when seeding landed —
+    // recorded rather than smoothed over, because it is the cost side.
+    assert!(
+        (0.34..=0.42).contains(&modelled[2]),
+        "kernel is {:.4} vs measured {:.4} over 300–786 Torr; expected ≈0.386, \
+         down from the 0.431 the closure change achieved",
+        modelled[2],
+        measured[2]
     );
 }
 
@@ -2629,10 +2710,12 @@ fn chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared() {
         / lo.threshold_intensity(6e-9, p, 400).unwrap();
 
     assert!(
-        (3.2..=3.6).contains(&predicted),
-        "kernel λ-ratio is {predicted:.3}, expected ≈3.39. The pure cascade gives \
+        (2.70..=3.00).contains(&predicted),
+        "kernel λ-ratio is {predicted:.3}, expected ≈2.85. The pure cascade gives \
          exactly (1064/532)² = 4; the distribution-resolved closure subtracts ~15 % \
-         because D_ε ∝ ħω makes the shorter wavelength take bigger energy steps"
+         because D_ε ∝ ħω makes the shorter wavelength take bigger energy steps, \
+         and physical seeding subtracts a further ~16 % because multiphoton \
+         production is `I^6` at 532 nm against `I^11` at 1064"
     );
     // The measurement is on the other side of unity from the prediction.
     assert!(
@@ -2649,10 +2732,12 @@ fn chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared() {
     // up here as a loud change rather than a quiet improvement.
     let overshoot = predicted / measured;
     assert!(
-        (3.8..=4.8).contains(&overshoot),
+        (3.2..=4.0).contains(&overshoot),
         "the kernel overpredicts the measured λ-ratio by {overshoot:.2}×, expected \
-         ≈4.24× (it was 4.99× under the mean-trajectory closure — resolving the \
-         distribution moved it the right way and nowhere near far enough)"
+         ≈3.57×. The history of this number is the history of the milestone: \
+         4.99× under the mean-trajectory closure, 4.24× once the distribution \
+         was resolved, 3.57× once the seed became physical — each step the right \
+         way, none of them close"
     );
 }
 
@@ -4215,10 +4300,10 @@ fn distribution_resolved_cascade_fixes_the_high_pressure_slope() {
     use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
 
     let slope_over = |m: CascadeModel, delta: f64, lambda: f64, lo: f64, hi: f64, fwhm: f64| {
-        let model = AirBreakdown::dry_air_tt2012_focus(lambda)
-            .expect("λ in range")
-            .with_cascade_model(m)
-            .with_inelastic_loss(delta, 3.0);
+        let model =
+            seeding_suppressed(AirBreakdown::dry_air_tt2012_focus(lambda).expect("λ in range"))
+                .with_cascade_model(m)
+                .with_inelastic_loss(delta, 3.0);
         let c = model.pressure_sweep(lo * TORR, hi * TORR, 8, fwhm, 400);
         assert_eq!(c.len(), 8, "sweep lost points at δ_eff = {delta}");
         -beamprop::validate::loglog_slope(&c).expect("slope")
@@ -4352,9 +4437,9 @@ fn distribution_resolved_does_not_fix_the_low_pressure_branch() {
     use beamprop::breakdown0d::{AirBreakdown, CascadeModel};
 
     let slope_of = |m: CascadeModel| {
-        let model = AirBreakdown::dry_air_tt2012_focus(532e-9)
-            .expect("λ in range")
-            .with_cascade_model(m);
+        let model =
+            seeding_suppressed(AirBreakdown::dry_air_tt2012_focus(532e-9).expect("λ in range"))
+                .with_cascade_model(m);
         let c = model.pressure_sweep(10.0 * TORR, 100.0 * TORR, 8, 6.5e-9, 400);
         assert_eq!(c.len(), 8, "low-pressure sweep lost points");
         -beamprop::validate::loglog_slope(&c).expect("slope")
@@ -4405,11 +4490,9 @@ fn distribution_resolved_does_not_close_the_wavelength_gap() {
 
     let ratio_of = |m: CascadeModel| {
         let p = 760.0 * TORR;
-        let hi = AirBreakdown::dry_air_tt2012_focus(532e-9)
-            .unwrap()
+        let hi = seeding_suppressed(AirBreakdown::dry_air_tt2012_focus(532e-9).unwrap())
             .with_cascade_model(m);
-        let lo = AirBreakdown::dry_air_tt2012_focus(1064e-9)
-            .unwrap()
+        let lo = seeding_suppressed(AirBreakdown::dry_air_tt2012_focus(1064e-9).unwrap())
             .with_cascade_model(m);
         hi.threshold_intensity(6e-9, p, 400).unwrap()
             / lo.threshold_intensity(6e-9, p, 400).unwrap()
@@ -4551,7 +4634,7 @@ fn distribution_resolved_softens_the_plateau_floor() {
 fn free_molecular_escape_flattens_the_low_pressure_branch() {
     use beamprop::breakdown0d::AirBreakdown;
 
-    let m = AirBreakdown::dry_air_tt2012_focus(532e-9).expect("λ in range");
+    let m = seeding_suppressed(AirBreakdown::dry_air_tt2012_focus(532e-9).expect("λ in range"));
 
     // The correction is required, not optional: the continuum formula is being
     // asked to work where its own assumption fails.

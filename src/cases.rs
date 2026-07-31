@@ -377,8 +377,9 @@ pub struct BreakdownRun {
     pub trace_time: Vec<f64>,
     /// Breakdown criterion density (m⁻³) — the line the traces must cross.
     pub n_bd: f64,
-    /// Seed density (m⁻³): one electron in the focal volume, where every
-    /// trace starts.
+    /// Ambient free-electron density at 1 atm (m⁻³) — the attachment/ionization
+    /// equilibrium the traces start from. Reported at a single pressure as an
+    /// indicative marker; the traces each start at their own pressure's value.
     pub n_seed: f64,
     /// Neutral density at each sweep pressure (m⁻³) — the ceiling each trace
     /// saturates against, since it is full ionization.
@@ -447,12 +448,13 @@ pub fn run_breakdown(p: &BreakdownParams) -> Result<BreakdownRun> {
     let mut ne_traces = Array2::<f64>::zeros((p.points, n_time));
     for (row, &(torr, _)) in central.iter().enumerate() {
         let pressure = torr * TORR;
-        let mut n_e = model.seed_density();
+        let mut n_e = model.seed_density(pressure);
         for (col, &t) in trace_time.iter().enumerate() {
             let intensity = drive_intensity * (-c * t * t).exp();
-            n_e = model
-                .advance(n_e, intensity, pressure, dt)
-                .max(model.seed_density());
+            // No floor, matching `AirBreakdown::peak_ne`: the trace shows the
+            // avalanche climbing out of the ambient background under the
+            // multiphoton source, not out of an assumed seed electron.
+            n_e = model.advance(n_e, intensity, pressure, dt);
             // Bounded by construction: the logistic term caps n_e at full
             // ionization, so no plotting clamp is needed (there used to be one
             // at 1e40, which was the visible ceiling in the first release).
@@ -471,7 +473,7 @@ pub fn run_breakdown(p: &BreakdownParams) -> Result<BreakdownRun> {
         ne_traces,
         trace_time,
         n_bd: model.criterion_density(),
-        n_seed: model.seed_density(),
+        n_seed: model.seed_density(760.0 * TORR),
         neutral_density: central
             .iter()
             .map(|c| model.neutral_density(c.0 * TORR))
@@ -1120,12 +1122,17 @@ mod lsd_tests {
         // rate is small but nonzero, so a longer pulse does buy something. It
         // buys 1.25×, and then stops:
         //
-        //     6 ns   8.510e15        600 ns  6.886e15
-        //     60 ns  7.204e15        6 µs    6.814e15
-        //                            1 ms    6.797e15
+        //     6 ns   8.815e15        600 ns  6.852e15
+        //     60 ns  7.233e15        6 µs    6.767e15
+        //                            1 ms    6.745e15
+        //
+        // (Those numbers moved when the seed became physical: seed production
+        // scales with pulse length, so the SHORT-pulse threshold rose while the
+        // long-pulse one stayed cascade-limited. The total fall grew from 1.25×
+        // to 1.31×, which is the direction to expect and still bounded.)
         //
         // So the threshold *converges* to a genuine intensity floor of
-        // 6.797e15 W/m² by ~10 µs rather than being exactly flat from the
+        // 6.745e15 W/m² by ~10 µs rather than being exactly flat from the
         // start. That is the physically expected shape — real breakdown
         // thresholds do depend on pulse duration — and the two-stage argument
         // in `run_lsd`'s docs is untouched by it, because the drive sits ~10⁵

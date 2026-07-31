@@ -145,6 +145,23 @@ const PPT_ATI_MAX_TERMS: usize = 1 << 16;
 /// `ppt_tunnelling_branch_joins_the_sum` gates.
 const PPT_TUNNELLING_CUTOVER: f64 = 0.1;
 
+/// Cosmic-ray and radon ion-pair production rate in air at the surface
+/// (m⁻³·s⁻¹).
+///
+/// ≈ 10 ion pairs cm⁻³ s⁻¹, a standard atmospheric-electricity value (AFRL
+/// *Handbook of Geophysics and the Space Environment*, ch. 20 "Atmospheric
+/// Electricity", Sagalyn & Burke, 1985). It is a **band, not a point**: ≈2 over
+/// ocean, where cosmic rays are the only source, rising to ≈10 over land where
+/// radon dominates.
+///
+/// That range would matter if the answer depended on it. It does not — once
+/// multiphoton ionization supplies the seed, the threshold is insensitive to
+/// this over *decades*, which `ionization_background_is_not_load_bearing`
+/// gates. That insensitivity is the reason it is defensible to introduce this
+/// constant at all: it replaces an assumption the model was known to be making
+/// wrongly, and it does not become a new one.
+pub const ION_PAIR_PRODUCTION: f64 = 1.0e7;
+
 /// Effective residual charge `Z_eff` for molecular O₂ in PPT.
 ///
 /// **Published, not fitted**: Talebpour, Chien and Chin, *J. Phys. B* 32, 1229
@@ -943,6 +960,24 @@ impl Gas {
         self.mean_energy
     }
 
+    /// Electron attachment frequency `ν_att` (s⁻¹) at `pressure` (Pa) and
+    /// neutral density `n_neutral` (m⁻³): two-body dissociative attachment plus
+    /// three-body attachment to O₂,
+    ///
+    /// ```text
+    /// ν_att = k₂·n_O₂ + k₃·n_O₂·N,      n_O₂ = f_att·N
+    /// ```
+    ///
+    /// Split out of [`AirBreakdown::loss_rate`] so that the **loss** term and
+    /// the **background seed** — which is the equilibrium between attachment
+    /// and cosmic-ray production, [`AirBreakdown::background_electron_density`]
+    /// — are computed from one expression and cannot drift apart. Same
+    /// discipline as [`Focus`] bundling the three length scales.
+    pub fn attachment_rate(&self, n_neutral: f64) -> f64 {
+        let n_o2 = self.f_att * n_neutral;
+        self.k_att_2body * n_o2 + self.k_att_3body * n_o2 * n_neutral
+    }
+
     /// Free-electron diffusion coefficient this gas' `k_m` implies at `pressure`
     /// for an electron of energy `energy` (J), from kinetic theory:
     ///
@@ -1105,8 +1140,10 @@ pub struct AirBreakdown {
     /// Neutral-density-per-pressure `N/p` at reference temperature (m⁻³·Pa⁻¹),
     /// i.e. `1/(k_B·T)`.
     n_over_p: f64,
-    /// Initial seed density `n_e0` (m⁻³): one electron in the focal volume.
-    n_seed: f64,
+    /// Explicit override for the initial electron density (m⁻³). `None` means
+    /// use the derived background,
+    /// [`AirBreakdown::background_electron_density`].
+    n_seed: Option<f64>,
 }
 
 impl AirBreakdown {
@@ -1152,11 +1189,15 @@ impl AirBreakdown {
             // gate keeps its published numbers. Enable with
             // `with_keldysh_mpi`.
             keldysh_prefactor: 0.0,
-            // PPT likewise off by default — see `with_ppt_mpi`.
-            ppt_z_eff: 0.0,
+            // PPT photoionization is ON by default: with a physical ambient
+            // electron density (see `background_electron_density`) the focus
+            // holds ~10⁻¹⁵ electrons, so seed *production* is not optional —
+            // without it nothing would ever break down. The other two
+            // multiphoton paths stay off.
+            ppt_z_eff: Z_EFF_O2,
             n_bd: 1.0e23,
             n_over_p: 1.0 / (K_B * temperature),
-            n_seed: 1.0 / focus.volume(),
+            n_seed: None,
         })
     }
 
@@ -1263,6 +1304,11 @@ impl AirBreakdown {
         self.k_photons = 14;
         self.mpi_i_ref = I_B_MPI;
         self.mpi_rate_ref = self.n_bd / (self.n_over_p * pressure * fwhm);
+        // The multiphoton paths model the same channel; keep one live. Without
+        // this, enabling the calibrated σ_K would silently do nothing, because
+        // `mpi_source` tests the PPT path first and PPT is now the default.
+        self.keldysh_prefactor = 0.0;
+        self.ppt_z_eff = 0.0;
         self
     }
 
@@ -1280,6 +1326,20 @@ impl AirBreakdown {
         // The multiphoton paths model the same physics; keep one live.
         self.mpi_rate_ref = 0.0;
         self.ppt_z_eff = 0.0;
+        self
+    }
+
+    /// Disable every multiphoton source.
+    ///
+    /// Exists for the gates that **isolate** the cascade or the loss terms:
+    /// once photoionization is on by default, a gate that means to measure a
+    /// cascade closure has to say so, or it measures the closure *and* the
+    /// seeding together and quietly stops testing what it is named for.
+    /// Typically paired with [`Self::with_seed_density`].
+    pub fn without_mpi(mut self) -> Self {
+        self.ppt_z_eff = 0.0;
+        self.keldysh_prefactor = 0.0;
+        self.mpi_rate_ref = 0.0;
         self
     }
 
@@ -1316,7 +1376,7 @@ impl AirBreakdown {
     /// ionization create the seed instead, which is the physically ordered
     /// calculation. See `docs/M6A_SPEC.md` § "Seeding".
     pub fn with_seed_density(mut self, n_seed: f64) -> Self {
-        self.n_seed = n_seed;
+        self.n_seed = Some(n_seed);
         self
     }
 
@@ -1350,9 +1410,48 @@ impl AirBreakdown {
         self.heating_power(intensity, pressure) / (self.gas.delta_eff * self.gas.k_m * pressure)
     }
 
-    /// Initial seed density `n_e0` (m⁻³): one electron in the focal volume.
-    pub fn seed_density(&self) -> f64 {
+    /// Initial electron density `n_e0` (m⁻³) at `pressure` — the explicit
+    /// override if one was set with [`Self::with_seed_density`], otherwise
+    /// [`Self::background_electron_density`].
+    pub fn seed_density(&self, pressure: f64) -> f64 {
         self.n_seed
+            .unwrap_or_else(|| self.background_electron_density(pressure))
+    }
+
+    /// Ambient free-electron density (m⁻³) — the steady state between
+    /// cosmic-ray/radon ionization and attachment,
+    ///
+    /// ```text
+    /// n_e0(p) = q(p)/ν_att(p),      q(p) = q_ref·(p/p_ref)
+    /// ```
+    ///
+    /// `q` scales with gas density because ionizing radiation deposits per
+    /// molecule; `ν_att` is the **same** expression [`Self::loss_rate`] uses,
+    /// via [`Gas::attachment_rate`], so the two cannot drift apart.
+    ///
+    /// **This is tiny, and that is the physics.** At 1 atm `ν_att` = 1.9×10⁸
+    /// s⁻¹, giving `n_e0` ≈ 0.05 m⁻³ — about 4×10⁻¹⁵ electrons in a 8.3×10⁻¹⁴ m³
+    /// focus. Air is electronegative: a free electron attaches to O₂ in ~5 ns,
+    /// so the lower atmosphere holds essentially **no** free electrons, and a
+    /// tightly focused pulse cannot expect to find one waiting.
+    ///
+    /// An earlier version of this kernel assumed `n_e0 = 1/V_focal`, and its own
+    /// documentation defended that as "~10⁴ above the cosmic-ray background of
+    /// 10⁹–10¹⁰ m⁻³". That comparison was against the **ion** density; free
+    /// electrons are ~10 orders scarcer, so the assumption was wrong by ~14
+    /// orders, not 4. The seed has to be *produced* by the pulse, which is what
+    /// the multiphoton source is for.
+    ///
+    /// Gases with no attachment channel (the noble gases, [`Gas::from_monatomic`])
+    /// have no such equilibrium — nothing removes an electron but diffusion —
+    /// so this returns 0 for them and the caller must supply a seed explicitly.
+    pub fn background_electron_density(&self, pressure: f64) -> f64 {
+        let n_neutral = self.n_over_p * pressure;
+        let nu_att = self.gas.attachment_rate(n_neutral);
+        if nu_att <= 0.0 {
+            return 0.0;
+        }
+        ION_PAIR_PRODUCTION * (pressure / P_REF) / nu_att
     }
 
     /// Breakdown criterion density `n_bd` (m⁻³) — the level `n_e` must reach
@@ -1458,9 +1557,7 @@ impl AirBreakdown {
     /// [`threshold_intensity`](Self::threshold_intensity) is where pressure is
     /// validated.
     pub fn loss_rate(&self, pressure: f64) -> f64 {
-        let n_neutral = self.n_over_p * pressure;
-        let n_o2 = self.gas.f_att * n_neutral;
-        let nu_att = self.gas.k_att_2body * n_o2 + self.gas.k_att_3body * n_o2 * n_neutral;
+        let nu_att = self.gas.attachment_rate(self.n_over_p * pressure);
         let nu_diff = self.escape_rate(pressure);
         nu_att + nu_diff
     }
@@ -1670,12 +1767,23 @@ impl AirBreakdown {
         let dt = 2.0 * half / n_steps as f64;
         // I(t) = I_pk·exp(−4 ln2 (t/fwhm)²); t centred on the pulse peak.
         let c = 4.0 * std::f64::consts::LN_2 / (fwhm * fwhm);
-        let mut n_e = self.n_seed;
+        // An EXPLICIT seed (`with_seed_density`) is a modelling assumption —
+        // "this many electrons are available" — and so acts as a floor, which
+        // is what keeps a source-free run independent of the integration
+        // window. The DERIVED background is a physical initial condition and is
+        // free to deplete: nothing holds it up, and nothing needs to, because
+        // the multiphoton source refills it. That distinction is the whole
+        // change; `seed_floor_applies_only_to_an_explicit_seed` gates it.
+        let floor = self.n_seed;
+        let mut n_e = self.seed_density(pressure);
         let mut peak = n_e;
         for step in 0..n_steps {
             let t = -half + (step as f64 + 0.5) * dt;
             let intensity = i_peak * (-c * t * t).exp();
-            n_e = self.advance(n_e, intensity, pressure, dt).max(self.n_seed);
+            n_e = self.advance(n_e, intensity, pressure, dt);
+            if let Some(floor) = floor {
+                n_e = n_e.max(floor);
+            }
             if n_e > peak {
                 peak = n_e;
             }
@@ -1788,6 +1896,7 @@ mod tests {
                 ..m.gas
             },
             mpi_rate_ref: 0.0,
+            ppt_z_eff: 0.0,
             ..m
         };
         let dt = 1e-11;
@@ -1811,6 +1920,7 @@ mod tests {
         let loss = m.loss_rate(p);
         let bare = AirBreakdown {
             mpi_rate_ref: 0.0,
+            ppt_z_eff: 0.0,
             ..m
         };
         let dt = 1e-10;
@@ -1848,6 +1958,7 @@ mod tests {
         let src = AirBreakdown {
             mpi_rate_ref: s / (balanced.n_over_p * p),
             mpi_i_ref: i0,
+            ppt_z_eff: 0.0,
             ..balanced
         };
         // At I0 the cascade is nonzero, so also null it to isolate β=0: use a
@@ -1890,6 +2001,7 @@ mod tests {
             },
             mpi_rate_ref: s / (m.n_over_p * p),
             mpi_i_ref: i0,
+            ppt_z_eff: 0.0,
             ..m
         };
         let dt = 1e-11;
@@ -2213,8 +2325,19 @@ mod tests {
             "T&T-calibrated MPI threshold {i_mpi:.3e} is no longer far below the \
              measured {MEASURED:.3e}; recheck the calibration before enabling it"
         );
-        // And the default must keep it off.
-        assert_eq!(model().mpi_source(1e16, p), 0.0);
+        // And the default must not be *this* source. It is no longer "no
+        // source at all" — the default multiphoton channel is now PPT, whose
+        // magnitude is validated against a measured cross-section — so the
+        // claim to gate is that the two differ, by a lot, in the direction that
+        // matters.
+        let default_source = model().mpi_source(1e16, p);
+        let tt_source = with_mpi.mpi_source(1e16, p);
+        assert!(
+            default_source > 0.0 && tt_source > default_source * 100.0,
+            "the default MPI source is {default_source:.3e} and the \
+             T&T-calibrated one {tt_source:.3e}; the calibrated one is supposed \
+             to be the wildly over-strong one"
+        );
     }
 
     #[test]
@@ -2226,6 +2349,16 @@ mod tests {
         // 12 ns), so the avalanche had to climb out of a hole whose depth was
         // set by an arbitrary integration bound. The threshold rose 11% from
         // w = 2 to w = 4 and never converged.
+        //
+        // WHY IT HOLDS HAS CHANGED, and the new reason is stronger. It used to
+        // hold because the seed was clamped at a floor, which patched the
+        // symptom. Now the seed is *produced* by the pulse rather than assumed
+        // present, so there is no initial condition left to decay: the quiet
+        // arm contributes nothing at any w, and the residual spread across
+        // w ∈ [1,4] is 5e-5 rather than the 1 % this gate tolerates. If a floor
+        // is ever reintroduced for the derived seed, this gate would keep
+        // passing while meaning much less — `seed_floor_applies_only_to_an_
+        // explicit_seed` is what guards that.
         //
         // Worse, that decay is pressure-dependent, so it manufactured SLOPE:
         // removing it moved the default model from n = 0.356 to n = 0.127
@@ -2917,6 +3050,159 @@ mod tests {
                  rather than widening this tolerance"
             );
         }
+    }
+
+    // --- Seed production (S-V1 … S-V4). -------------------------------------
+
+    /// S-V1: the ambient seed is the attachment equilibrium, against the very
+    /// same `ν_att` the loss term uses.
+    ///
+    /// The two are computed from one expression ([`Gas::attachment_rate`]) so
+    /// they cannot drift; this gate is what makes that structural guarantee
+    /// checkable rather than merely intended.
+    #[test]
+    fn background_electron_density_is_the_attachment_equilibrium() {
+        let m = model();
+        for torr in [10.0f64, 100.0, 760.0, 2000.0] {
+            let p = torr * TORR;
+            let n_neutral = m.neutral_density(p);
+            let nu_att = m.gas.attachment_rate(n_neutral);
+            let q = ION_PAIR_PRODUCTION * (p / P_REF);
+            let expected = q / nu_att;
+            let got = m.background_electron_density(p);
+            assert!(
+                (got / expected - 1.0).abs() < 1e-12,
+                "at {torr} Torr the background is {got:.6e} but q/ν_att is \
+                 {expected:.6e}"
+            );
+            // And ν_att must be the one `loss_rate` actually uses: the loss
+            // rate is attachment plus escape, so the difference is escape.
+            let residual = m.loss_rate(p) - nu_att - m.escape_rate(p);
+            assert!(
+                residual.abs() < 1e-6 * m.loss_rate(p),
+                "at {torr} Torr the seed's ν_att is not the loss term's: \
+                 residual {residual:.3e}"
+            );
+        }
+    }
+
+    /// **S-V2: the focus essentially never holds a free electron.**
+    ///
+    /// This is the claim the whole change exists to make, and it is also a
+    /// correction. The kernel previously assumed `n_e0 = 1/V_focal` and
+    /// defended it as "~10⁴ above the cosmic-ray background of 10⁹–10¹⁰ m⁻³".
+    /// That comparison was against the **ion** density; air is
+    /// electronegative, so free electrons attach to O₂ in ~5 ns and the free
+    /// electron background is ~10 orders scarcer. The old assumption was wrong
+    /// by ~14 orders, not 4.
+    #[test]
+    fn the_focus_holds_essentially_no_free_electrons() {
+        let m = model();
+        let p = 760.0 * TORR;
+        let n_e0 = m.background_electron_density(p);
+        // ~0.149 m⁻³ at 1 atm.
+        assert!(
+            (0.05..=0.5).contains(&n_e0),
+            "ambient free-electron density is {n_e0:.4e} m⁻³, expected ≈0.15"
+        );
+        let in_focus = n_e0 * m.focus().volume();
+        assert!(
+            in_focus < 1e-12,
+            "the focus holds {in_focus:.3e} free electrons; the claim is that it \
+             holds essentially none, so the seed must be produced by the pulse"
+        );
+        // And that this is far below what the old assumption asserted.
+        let old_assumption = 1.0 / m.focus().volume();
+        assert!(
+            old_assumption / n_e0 > 1e12,
+            "the retired seed was only {:.2e}× the physical background; the \
+             record says ~14 orders",
+            old_assumption / n_e0
+        );
+    }
+
+    /// **S-V3: the ionization background is not load-bearing.**
+    ///
+    /// The change introduces one new constant, [`ION_PAIR_PRODUCTION`], and the
+    /// defence of it is not its provenance but its irrelevance. Sweeping the
+    /// seed over **twelve decades** either side of the derived value leaves the
+    /// threshold *bit-identical*; it takes ~10 orders before it moves 0.04 %.
+    ///
+    /// The same sweep is why the retired assumption mattered: `1/V_focal` =
+    /// 1.2×10¹³ m⁻³ sits in the range where the seed *does* move the answer
+    /// (2.6 % at 10¹²). The old constant was load-bearing and wrong; the new one
+    /// is neither.
+    #[test]
+    fn ionization_background_is_not_load_bearing() {
+        let m = model();
+        let p = 760.0 * TORR;
+        let base = m.threshold_intensity(6e-9, p, 400).expect("threshold");
+        for seed in [1e-6f64, 1e-3, 1.0, 1e3, 1e6] {
+            let moved = m
+                .with_seed_density(seed)
+                .threshold_intensity(6e-9, p, 400)
+                .expect("threshold");
+            assert!(
+                (moved / base - 1.0).abs() < 1e-6,
+                "seed {seed:.0e} m⁻³ moves the threshold to {moved:.6e} from \
+                 {base:.6e}; over this range it must not move at all, or the \
+                 ion-pair production rate is a fitted constant in disguise"
+            );
+        }
+        // The sensitivity is real, just very far away — this half stops the
+        // gate above from passing on a threshold that ignores the seed entirely.
+        let far = m
+            .with_seed_density(1e14)
+            .threshold_intensity(6e-9, p, 400)
+            .expect("threshold");
+        assert!(
+            far < 0.97 * base,
+            "a seed of 10¹⁴ m⁻³ gives {far:.4e} against {base:.4e}; if even that \
+             changes nothing, the seed is not entering the calculation"
+        );
+    }
+
+    /// S-V4: the floor applies to an **explicit** seed only.
+    ///
+    /// An explicit seed is a modelling assumption — "this many electrons are
+    /// available" — and holding it as a floor is what keeps a source-free run
+    /// independent of the integration window. The derived background is a
+    /// physical initial condition and must be free to deplete, because nothing
+    /// holds it up. Re-clamping it would silently restore the behaviour this
+    /// change removed, so the distinction is gated.
+    #[test]
+    fn seed_floor_applies_only_to_an_explicit_seed() {
+        let p = 760.0 * TORR;
+        // Two runs identical in every way except how the same starting density
+        // is declared. With no multiphoton source, losses grind the population
+        // down through the quiet arm; the floored run climbs from the full
+        // seed at the peak, the unfloored one from whatever survived.
+        let bare = model().without_mpi();
+        let n0 = bare.seed_density(p);
+        let pinned = bare.with_seed_density(n0);
+        assert_eq!(
+            n0,
+            pinned.seed_density(p),
+            "the two runs must start from the same density"
+        );
+
+        // 8e15 W/m² is just under the source-free threshold, so the floored
+        // run avalanches five orders while the free one never recovers from the
+        // quiet arm at all.
+        let free = bare.peak_ne(8e15, 6e-9, p, 400);
+        let floored = pinned.peak_ne(8e15, 6e-9, p, 400);
+        assert!(
+            floored > free * 1000.0,
+            "floored peak {floored:.4e} vs free peak {free:.4e} from the same \
+             seed {n0:.3e}: the explicit seed is supposed to act as a floor and \
+             the derived one is not, so these must differ"
+        );
+        // The floored run cannot fall below its seed at any point, which is the
+        // property that makes it window-independent.
+        assert!(
+            floored >= n0,
+            "floored peak {floored:.4e} fell below its own seed {n0:.3e}"
+        );
     }
 
     /// T12-V6b: the rate is **monotonic** in intensity across the whole

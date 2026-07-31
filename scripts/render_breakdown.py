@@ -213,6 +213,11 @@ def render_avalanche(base, meta, fps):
     drive = float(meta["drive_intensity_w_per_cm2"])
     fwhm_ns = float(meta["fwhm"]) * 1e9
 
+    # n_seed is the AMBIENT free-electron density (the attachment/ionization
+    # equilibrium), not an assumed seed electron, so the traces now start ~14
+    # orders lower than they used to and the panel's dynamic range is
+    # correspondingly larger. That range is the physics: the avalanche really
+    # does span it.
     floor = n_seed * 1e-2
     top = float(n_neutral.max()) * 30.0
 
@@ -244,7 +249,7 @@ def render_avalanche(base, meta, fps):
     )
     ax.axhline(n_seed, color="#888888", lw=1.0, ls=":", zorder=3)
     ax.text(
-        t_ns[0], n_seed * 1.7, "seed: one electron in the focal volume",
+        t_ns[0], n_seed * 1.7, "ambient free electrons (attachment equilibrium)",
         color="#888888", fontsize=7.5, va="bottom", zorder=3,
     )
     for row in ne:

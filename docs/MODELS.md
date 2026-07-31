@@ -15,7 +15,7 @@ depends on looking a number up.
 
 ## Claims ledger
 
-**Read this before the test count.** `cargo test` runs 213 tests. That number is
+**Read this before the test count.** `cargo test` runs 217 tests. That number is
 not a measure of how much of this solver is validated against the world, and
 reading it as one would be a mistake: most of those tests check that the code
 solves the equations it was given, several deliberately assert a *known
@@ -50,7 +50,7 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 103 rows below: 67 verified, 10 validated, 14 pinned, 12 ungated.**
+**Census of the 106 rows below: 71 verified, 10 validated, 14 pinned, 11 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
 not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
@@ -166,7 +166,10 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | `δ_eff` = 0.02 | `AirBreakdown::new` | **ungated** | free within ≈0.01–0.05; sets the plateau level |
 | `⟨ε⟩` = 3 eV (`FixedMeanEnergy` only) | `AirBreakdown::new` | **ungated** | free within ≈2–5 eV |
 | `n_bd` = 10²³ m⁻³ | `AirBreakdown::new` | **ungated** | asserted; audit says the slope is insensitive to ×0.1/×10 |
-| Seed density `n_e0 = 1/V_focal` | `AirBreakdown::with_seed_density` | **ungated** | known **~10⁴ unphysical** — cosmic-ray background gives ~10⁻⁴ electrons in this focus |
+| The seed is the attachment/ionization equilibrium | `breakdown0d::tests::background_electron_density_is_the_attachment_equilibrium` | verified | `n_e0·ν_att = q` to 1e-12, against the same `ν_att` the loss term uses |
+| The focus holds essentially no free electrons | `breakdown0d::tests::the_focus_holds_essentially_no_free_electrons` | verified | `n_e0` = 0.149 m⁻³ at 1 atm → **1.2×10⁻¹⁴** electrons in the focus |
+| The ionization background is not load-bearing | `breakdown0d::tests::ionization_background_is_not_load_bearing` | verified | threshold **bit-identical** over 12 decades of seed (10⁻⁶–10⁶ m⁻³) |
+| The seed floor applies to an explicit seed only | `breakdown0d::tests::seed_floor_applies_only_to_an_explicit_seed` | verified | floored vs free peak differ by >10³ at 8×10¹⁵ W/m² |
 | `Λ` = 7.74 µm and `ℓ` = 30.72 µm | `Focus::cylinder` | **ungated** | both pinned from T&T's Eq. 5 geometry, never fit; `Λ` matches the 8 µm the paper states |
 | The `ε_∞ → U_i` margin at threshold | — | **ungated** | `ε_∞/U_i` = 1.032 at 760 Torr, 1.011 at 1500 — the model sits at the bifurcation that *is* its plateau |
 
@@ -1053,6 +1056,81 @@ special-function checks in `breakdown0d::tests`.
 **References.** V. S. Popov, *Tunnel and multiphoton ionization of atoms and
 ions in a strong laser field (Keldysh theory)*, Phys.-Usp. **47**, 855 (2004),
 for the PPT rate in the form used here; the two anchors above.
+
+### Seed production (`AirBreakdown::background_electron_density`)
+
+Added 2026-07-31. The last knowingly-false assumption on M6a's default path.
+
+The kernel used to start every pulse from `n_e0 = 1/V_focal` = 1.2×10¹³ m⁻³ —
+one electron sitting in the focus — and to clamp `n_e` at that value throughout
+the integration. Both are now gone. The initial condition is the physical
+ambient density and the pulse produces its own electrons.
+
+```text
+n_e0(p) = q(p)/ν_att(p),      q(p) = q_ref·(p/p_ref),      q_ref = 10⁷ m⁻³s⁻¹
+```
+
+`ν_att` is the **same** expression the loss term uses (`Gas::attachment_rate`,
+factored out so the two cannot drift), and `q_ref` ≈ 10 ion pairs cm⁻³ s⁻¹ is a
+standard atmospheric-electricity value (AFRL *Handbook of Geophysics and the
+Space Environment*, ch. 20, Sagalyn & Burke, 1985). Multiphoton production is
+`ppt_rate`, on by default — without it a physical background would never break
+down.
+
+**The retired assumption was wrong by ~14 orders, not the ~10⁴ this file used to
+claim.** That claim compared `1/V_focal` against the cosmic-ray **ion** density,
+10⁹–10¹⁰ m⁻³. Air is electronegative: `ν_att` = 6.7×10⁷ s⁻¹ at 1 atm, so a free
+electron survives ~15 ns and the free-*electron* background is
+`q/ν_att` = **0.149 m⁻³** — about **1.2×10⁻¹⁴** electrons in an 8.3×10⁻¹⁴ m³
+focus. The lower atmosphere holds essentially no free electrons, and a tight
+focus cannot expect to find one waiting.
+
+**The new constant is not load-bearing, and that is the argument for it.**
+Sweeping the seed over twelve decades (10⁻⁶ → 10⁶ m⁻³) leaves the threshold
+*bit-identical*; it takes ~10 orders before it moves 0.04 %. The retired
+`1/V_focal` sat in the range where the seed *does* matter (2.6 % at 10¹²), so
+the old constant was load-bearing and wrong while the new one is neither.
+Gated as `ionization_background_is_not_load_bearing`.
+
+**An explicit seed still behaves as a floor; the derived one does not.** Setting
+`with_seed_density` is a modelling assumption — "this many electrons are
+available" — and holding it constant is what keeps a source-free run independent
+of the integration window. The derived background is a physical initial
+condition and must be free to deplete. That distinction is what lets the gates
+that **isolate** a cascade closure or a loss term (`seeding_suppressed` in
+`tests/validation.rs`) keep their published baselines unchanged, and it is gated
+by `seed_floor_applies_only_to_an_explicit_seed`.
+
+**What it does to the measurements.** The low-pressure branch — this milestone's
+worst residual for its whole life, and the one *both* source papers attribute to
+multiphoton ionization — is essentially repaired:
+
+| Chylek window (Torr) | seeding off | **default** | measured |
+|---|---|---|---|
+| 10–100 | 1.292 | **0.501** | 0.428 |
+| 100–300 | 0.947 | 0.857 | 0.413 |
+| 300–786 | 0.431 | 0.386 | 0.468 |
+
+3.0× too steep → **1.17×**. It is the largest single improvement M6a has had,
+and it came from deleting an assumption rather than adding a term. The
+wavelength ratio also moves, 3.39 → **2.854** against a measured 0.80 (overshoot
+4.24× → 3.57×), because multiphoton production is `I⁶` at 532 nm against `I¹¹`
+at 1064.
+
+**What it costs, recorded rather than smoothed over.** The 300–786 Torr window
+slips from 0.431 to 0.386 against 0.468, and a **mid-pressure bump** survives at
+100–300 Torr (0.857 vs 0.413) — which is where the seeding transition sits:
+multiphoton ionization supplies the electrons below ~100 Torr and the cascade
+does above ~300, and the kernel crosses between them too abruptly. That is a
+sharper open question than the one it replaces. Absolute thresholds rise 3.3–4.2 %.
+
+**Window independence now holds for a better reason.** It used to hold because
+the seed was clamped, which patched a symptom; with production replacing the
+initial condition there is nothing left to decay, and the spread over
+`w ∈ [1,4]` is 5×10⁻⁵ against the 1 % the gate tolerates. The threshold stays an
+intensity floor rather than a fluence criterion — 8.815×10¹⁵ at 6 ns converging
+to 6.745×10¹⁵ by ~10 µs, a bounded 1.31× fall (was 1.25×), so M6c's two-stage
+argument is untouched.
 
 ## M6a.2 — Aperture optics and pupil phase statistics
 
