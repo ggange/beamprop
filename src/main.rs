@@ -12,9 +12,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use beamprop::cases::{
-    BloomingParams, BreakdownParams, IgnitionParams, IgnitionSweepParams, LsdParams,
+    BloomingParams, BreakdownParams, IgnitionParams, IgnitionSweepParams, Lsd2dParams, LsdParams,
     PropagateParams, TurbulenceParams, run_blooming, run_breakdown, run_ignition_sweep, run_lsd,
-    run_propagate, run_turbulence,
+    run_lsd2d, run_propagate, run_turbulence,
 };
 use beamprop::field::Field;
 use beamprop::grid::Grid;
@@ -204,6 +204,57 @@ enum Cmd {
     /// <out>_trajectory.csv (the front track and the column's optical depth),
     /// and _meta.json/_notes.md. Render with `python3 scripts/render_lsd.py`.
     /// 1-D gas dynamics: the beam arguments do not apply.
+    /// Axisymmetric LSD wave (M6d): the same detonation driven by a
+    /// **finite-diameter** beam, so the shocked gas can relieve sideways.
+    ///
+    /// Reports how much that slows the front against the wide-beam limit —
+    /// the effect M6c's planar geometry removed by assumption.
+    Lsd2d {
+        /// Sustaining drive intensity on the beam axis in W/m^2.
+        #[arg(long, default_value_t = 1e11)]
+        drive: f64,
+        /// Beam radius in metres. The default 1.6e-4 puts R_b*alpha at 3.2,
+        /// where the relief deficit is ~0.23.
+        #[arg(long, default_value_t = 1.6e-4)]
+        beam_radius: f64,
+        /// Super-Gaussian order; 0 selects a top-hat.
+        #[arg(long, default_value_t = 0)]
+        beam_order: u32,
+        /// Ambient pressure in pascals.
+        #[arg(long, default_value_t = 101_325.0)]
+        p0: f64,
+        /// Ambient temperature in kelvin.
+        #[arg(long, default_value_t = 288.0)]
+        t0: f64,
+        /// Column length in metres.
+        #[arg(long, default_value_t = 5e-3)]
+        length: f64,
+        /// Domain radius, in beam radii. Must be at least 3 so relief comes
+        /// from the beam being finite rather than from the wall.
+        #[arg(long, default_value_t = 3.0)]
+        domain_radii: f64,
+        /// Hydro cells along the beam.
+        #[arg(long, default_value_t = 500)]
+        cells_x: usize,
+        /// Rings across the domain radius.
+        #[arg(long, default_value_t = 48)]
+        cells_r: usize,
+        /// Grey-plasma absorption coefficient in 1/m.
+        #[arg(long, default_value_t = 2e4)]
+        alpha: f64,
+        /// Fraction of the column the front is asked to cross.
+        #[arg(long, default_value_t = 0.4)]
+        cross: f64,
+        /// Number of recorded snapshots (= animation frames).
+        #[arg(long, default_value_t = 32)]
+        frames: usize,
+        /// Output basename (within --out-dir).
+        #[arg(long, default_value = "lsd2d")]
+        out: String,
+        /// Directory for all generated files; created if missing.
+        #[arg(long, default_value = "out")]
+        out_dir: PathBuf,
+    },
     Lsd {
         /// Vacuum wavelength in metres.
         #[arg(long, default_value_t = 1064e-9)]
@@ -385,6 +436,39 @@ fn main() -> Result<()> {
             out_dir,
         } => breakdown(
             wavelength, fwhm, p_min, p_max, points, steps, drive, &out, &out_dir,
+        ),
+        Cmd::Lsd2d {
+            drive,
+            beam_radius,
+            beam_order,
+            p0,
+            t0,
+            length,
+            domain_radii,
+            cells_x,
+            cells_r,
+            alpha,
+            cross,
+            frames,
+            out,
+            out_dir,
+        } => lsd2d(
+            &Lsd2dParams {
+                drive,
+                beam_radius,
+                beam_order,
+                p0,
+                t0,
+                length,
+                domain_radii,
+                cells_x,
+                cells_r,
+                alpha,
+                cross_fraction: cross,
+                frames,
+            },
+            &out,
+            &out_dir,
         ),
         Cmd::Lsd {
             wavelength,
@@ -1624,6 +1708,167 @@ fn propagate(
         "  render images: python3 scripts/render.py {}/{}",
         args.out_dir.display(),
         args.out
+    );
+    Ok(())
+}
+
+/// Write the `lsd2d` case: data only, images from `scripts/render_lsd2d.py`.
+fn lsd2d(p: &Lsd2dParams, out: &str, out_dir: &Path) -> Result<()> {
+    let run = run_lsd2d(p)?;
+
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    let path = |name: &str| out_dir.join(name);
+
+    println!(
+        "lsd2d: {:.3e} W/m² through a {:.1} µm beam ({}), R_b·α = {:.2}; ρ₀ = {:.4} kg/m³",
+        p.drive,
+        p.beam_radius * 1e6,
+        if p.beam_order == 0 {
+            "top-hat".to_string()
+        } else {
+            format!("super-Gaussian order {}", p.beam_order)
+        },
+        p.beam_radius * p.alpha,
+        run.rho_0
+    );
+    println!(
+        "  wide-beam limit D = {:.1} m/s vs Raizer {:.1} m/s ({:+.2} %)",
+        run.d_wide,
+        run.d_raizer,
+        100.0 * (run.d_wide / run.d_raizer - 1.0)
+    );
+    println!(
+        "  finite beam    D = {:.1} m/s → radial relief costs {:.1} % of the front speed",
+        run.d_measured,
+        100.0 * run.relief_deficit
+    );
+    println!(
+        "  the front is curved: the axis leads the beam edge by {:.2e} m at the last frame",
+        run.front_x_edge[run.front_x_edge.len() - 1] - run.front_x_axis[run.front_x_axis.len() - 1]
+    );
+    println!(
+        "  deposited {:.4e} J/rad, escaped {:.4e}; budget closes to {:.2e}",
+        run.deposited_energy, run.escaped_energy, run.energy_residual
+    );
+    if !run.boundaries_undisturbed {
+        println!("  WARNING: the wave reached an axial boundary; the front speed is contaminated.");
+    }
+    if !run.rim_undisturbed {
+        println!(
+            "  the outer rim is disturbed — expected, since the seed is radially uniform, \
+             and the escape term above accounts for what leaves. The deficit is \
+             insensitive to the domain radius (21.1 / 21.3 / 21.3 % at 3 / 5 / 8 beam \
+             radii), so the wall is not doing the relief."
+        );
+    }
+
+    let npy_path = path(&format!("{out}_fields.npy"));
+    ndarray_npy::write_npy(&npy_path, &run.fields)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", npy_path.display()))?;
+
+    let mut csv = String::from(
+        "# beamprop M6d axisymmetric laser-supported detonation: front track\n\
+         # columns: time_s, front_x_axis_m, front_x_edge_m, lag_m\n\
+         # Both front positions DECREASE: the wave runs back up the beam toward\n\
+         # the laser. lag = edge - axis is positive because the axis leads —\n\
+         # the beam edge is where gas escapes sideways, so it is driven least,\n\
+         # and that curvature IS the radial relief this case measures.\n\
+         time_s,front_x_axis_m,front_x_edge_m,lag_m\n",
+    );
+    for i in 0..run.frame_time.len() {
+        csv.push_str(&format!(
+            "{:.9e},{:.9e},{:.9e},{:.9e}\n",
+            run.frame_time[i],
+            run.front_x_axis[i],
+            run.front_x_edge[i],
+            run.front_x_edge[i] - run.front_x_axis[i]
+        ));
+    }
+    let csv_path = path(&format!("{out}_trajectory.csv"));
+    fs::write(&csv_path, csv).with_context(|| format!("writing {}", csv_path.display()))?;
+
+    let meta = format!(
+        "{{\n  \"case\": \"lsd2d\",\n  \"drive\": {drive},\n  \
+         \"beam_radius\": {rb},\n  \"beam_order\": {bo},\n  \"p0\": {p0},\n  \
+         \"t0\": {t0},\n  \"rho_0\": {rho},\n  \"length\": {len},\n  \
+         \"domain_radius\": {domr},\n  \"cells_x\": {cx},\n  \"cells_r\": {cr},\n  \
+         \"alpha\": {alpha},\n  \"frames\": {frames},\n  \
+         \"d_measured\": {dm},\n  \"d_wide\": {dw},\n  \"d_raizer\": {dr},\n  \
+         \"relief_deficit\": {rd},\n  \"deposited_energy\": {dep},\n  \
+         \"escaped_energy\": {esc},\n  \"energy_residual\": {res},\n  \
+         \"boundaries_undisturbed\": {bnd},\n  \
+         \"r_min\": {rmin},\n  \"r_max\": {rmax},\n  \
+         \"x_min\": {xmin},\n  \"x_max\": {xmax},\n  \
+         \"quantities\": [\"p_Pa\", \"rho_kg_m3\", \"u_x_m_s\", \"u_r_m_s\", \
+         \"alpha_1_m\", \"I_W_m2\"]\n}}\n",
+        drive = p.drive,
+        rb = p.beam_radius,
+        bo = p.beam_order,
+        p0 = p.p0,
+        t0 = p.t0,
+        rho = run.rho_0,
+        len = p.length,
+        domr = p.domain_radii * p.beam_radius,
+        cx = p.cells_x,
+        cr = p.cells_r,
+        alpha = p.alpha,
+        frames = p.frames,
+        dm = run.d_measured,
+        dw = run.d_wide,
+        dr = run.d_raizer,
+        rd = run.relief_deficit,
+        dep = run.deposited_energy,
+        esc = run.escaped_energy,
+        res = run.energy_residual,
+        bnd = run.boundaries_undisturbed,
+        rmin = run.r[0],
+        rmax = run.r[run.r.len() - 1],
+        xmin = run.x[0],
+        xmax = run.x[run.x.len() - 1],
+    );
+    let meta_path = path(&format!("{out}_meta.json"));
+    fs::write(&meta_path, meta).with_context(|| format!("writing {}", meta_path.display()))?;
+
+    let notes = format!(
+        "# lsd2d — axisymmetric laser-supported detonation (M6d)\n\n\
+         A seeded detonation driven by a beam of finite radius {rb:.2e} m through air at \
+         {p0:.0} Pa, in axisymmetric (r, x) coordinates. The beam enters at x = 0 and \
+         travels +x; the front runs the other way, back up the beam toward the laser.\n\n\
+         ## What this case measures\n\n\
+         M6c's planar solver has no transverse direction, so its beam is infinitely wide \
+         and the shocked gas cannot escape sideways. Here it can. Against the wide-beam \
+         limit ({dw:.1} m/s, itself within {wpct:+.2} % of Raizer's closed form), the \
+         finite beam runs at {dm:.1} m/s — radial relief costs **{pct:.1} %** of the \
+         front speed at R_b·α = {rba:.2}.\n\n\
+         The reference is the wide-beam *2-D* run, not the 1-D column, and deliberately: \
+         the modelled front is transversely unstable (see gate G14), so a 1-D comparison \
+         would report that instability as relief. Both runs here carry it.\n\n\
+         ## Files\n\n\
+         - `{out}_fields.npy` — [frame, quantity, ring, cell], quantities \
+         [p, rho, u_x, u_r, alpha, I].\n\
+         - `{out}_trajectory.csv` — the front on the axis and at the beam edge. The axis \
+         leads; that curvature is the relief made visible.\n\
+         - `{out}_meta.json` — parameters and derived quantities.\n\n\
+         Render with `python3 scripts/render_lsd2d.py <basename>`.\n",
+        rb = p.beam_radius,
+        p0 = p.p0,
+        dw = run.d_wide,
+        wpct = 100.0 * (run.d_wide / run.d_raizer - 1.0),
+        dm = run.d_measured,
+        pct = 100.0 * run.relief_deficit,
+        rba = p.beam_radius * p.alpha,
+        out = out,
+    );
+    let notes_path = path(&format!("{out}_notes.md"));
+    fs::write(&notes_path, notes).with_context(|| format!("writing {}", notes_path.display()))?;
+
+    println!(
+        "  wrote {}, {}, {} and {}",
+        npy_path.display(),
+        csv_path.display(),
+        meta_path.display(),
+        notes_path.display()
     );
     Ok(())
 }

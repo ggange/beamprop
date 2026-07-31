@@ -50,7 +50,7 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 108 rows below: 72 verified, 10 validated, 15 pinned, 11 ungated.**
+**Census of the 118 rows below: 80 verified, 10 validated, 16 pinned, 12 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
 not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
@@ -208,7 +208,26 @@ screen linearly in `r₀`), and a width gate (no independent anchor).
 | **G6 — frozen plasma table vs direct Mutation++ off-grid** | `plasma_table_matches_direct_mutationpp_off_grid` | **validated** | worst 1.48e-3 in `n_e` (independent third-party code) |
 | G8 — a real beam through the plasma column is Beer–Lambert, `δn ≡ 0` | `plasma_column_absorbs_as_beer_lambert` | verified | 1.7e-13 at τ = 339 |
 | The table's charge-state ceiling | `plasma_table_charge_state_ceiling_is_pinned` | **pinned** | regression pin on the table's extrapolation limit |
-| G7 — absolute LSD velocity vs measurement | — | **ungated** | on purpose: a planar solver has no radial relief, so the known experimental gap is a *prediction* of the omissions |
+| G7 — absolute LSD velocity vs measurement | — | **ungated** | **Amended by M6d.** Radial relief is no longer the excuse — it is modelled and pinned at δ = 0.23 (R_b·α = 3.2), i.e. ~23 % of the front speed, which covers part but not all of the ~2× gap to measurement. G7 stays ungated for exactly one reason now: there is no anchored measured dataset (the M6a-D5-style debt, inherited by M6d). Remaining candidates for the rest: radiation losses, incomplete absorption, the production EOS, and the un-refracted beam |
+
+### M6d — Axisymmetric gas dynamics and radial relief
+
+| claim | site | status | number |
+|---|---|---|---|
+| G9 — the planar 2-D solver reproduces `Euler1d` bit for bit | `euler2d_planar_limit_reproduces_euler1d_bit_for_bit` | verified | bit-identical over 240 cells x 40 steps, with both non-vacuity legs |
+| **G10 — Sedov–Taylor point blast** | `sedov_blast_matches_the_self_similar_solution` | verified | exponent 0.38628 vs 2/5; level 1.0842x falling to 1.0587 under refinement; peak compression 2.09 → 2.62 climbing toward 6 |
+| The Sedov reference reproduces the published `ξ₀` | `sedov_xi_0_matches_the_published_value` | verified | `ξ₀` = 1.03278 **derived** from the energy integral vs the published ≈1.033 |
+| The Sedov profile solves the Euler equations it was derived from | `sedov_profile_satisfies_the_euler_equations` | verified | worst residual 6.9e-5, falling as the finite-difference step squared |
+| G11 — 2nd order on smooth axisymmetric flow | `euler2d_is_second_order_on_smooth_axisymmetric_flow` | verified | 1.861 / 1.964 against a split-source contrast at 1.030 / 1.155 |
+| G12 — conservation in the `r`-weighted measure | `euler2d_conserves_mass_and_energy_in_the_r_weighted_measure` | verified | mass and energy < 1e-13 closed box; escape term needed and sufficient when the wall is brought in |
+| G13 — the axis is not a wall | `the_axis_boundary_does_not_heat_or_starve_the_on_axis_cells` | verified | on-axis entropy defect 2.99e-7 → 3.12e-8 under refinement, vs 3.02e-6 for an even-parity contrast |
+| G13(i) — a radially uniform state is a fixed point | `a_radially_uniform_state_is_a_fixed_point_of_the_axisymmetric_operator` | verified | bit-identical in mass and both momenta; energy drift < 1e-13 |
+| **G14 — the wide-beam limit reproduces the 1-D column** | `lsd2d_with_a_full_width_beam_reproduces_the_one_dimensional_column` | verified | 3.1e-13 while the front is smooth |
+| **The modelled LSD front is transversely unstable** | `lsd2d_with_a_full_width_beam_reproduces_the_one_dimensional_column` | **pinned** | grows out of round-off, amplitude-proportional (10⁶× seed → 10⁶× response), saturating at `\|u_r\|` ≈ 200–400 m/s. Identical in planar and axisymmetric geometry, so it is not the geometric source. A planar solver structurally cannot show it |
+| **G15 — radial relief lowers the front speed** | `radial_relief_lowers_the_lsd_front_speed_by_a_pinned_amount` | **pinned** | δ = 0.230 at `R_b·α` = 3.2 and 0.305 at 1.6, monotone in `R_b`; banded at ±13 %, which is the measured spread over grid (+6 %), seed (−7 %) and ignition threshold (±8 %) |
+| The relief deficit is not a boundary effect | `src/lsd2d.rs` (`rim_undisturbed`) | verified | 21.1 / 21.3 / 21.3 % at domain radii of 3 / 5 / 8 beam radii |
+| G16 — the one-third scaling survives relief | `the_one_third_scaling_survives_radial_relief` | verified | `S^0.34666` at finite `R_b` against the parameter-free 1/3, while the level moves 23 % |
+| The beam is not refracted by the plasma | `src/lsd2d.rs` (`BeamProfile`) | **ungated** | independent parallel pencils, by assumption; a two-way beam↔plasma loop is a later milestone |
 
 ### What this table says, in one paragraph
 
@@ -231,6 +250,21 @@ verification is close to the whole job, and M4 additionally reproduces a
 published experimental curve. M6c's core is verified to high order but its one
 headline agreement (Raizer) is circular by construction, which is why G4 — a
 parameter-free scaling exponent — is the milestone's real physics gate.
+
+M6d changes two things about that picture and neither is a validation. First, it
+adds the repo's **first multidimensional verification anchor**: the Sedov–Taylor
+blast is a self-similar solution the model is not built from, and its
+coefficient `ξ₀` is derived here from the energy integral rather than quoted, so
+agreeing with the published value to 0.03 % is evidence rather than bookkeeping.
+Second, it retires an *excuse*. M6c's G7 was ungated on the grounds that a
+planar solver structurally cannot show radial relief; relief is now modelled and
+pinned at 23 % of the front speed, which is a real effect and not the whole ~2×
+gap to measurement. G7 remains ungated, but only because no anchored measured
+dataset has been acquired — a smaller and more actionable claim than the one it
+replaces. M6d also produced something nobody asked it for: the modelled front is
+**transversely unstable**, growing cellular structure out of round-off, which a
+1-D solver has no way to exhibit and which had to be separated from relief before
+the relief number meant anything.
 
 ## M1 — Diffraction
 
@@ -1719,3 +1753,111 @@ metres.
 
 Reference: S. van der Walt, N. Smith, *matplotlib colormaps* (magma),
 <https://bids.github.io/colormap/>.
+
+## M6d — Axisymmetric gas dynamics and radial relief
+
+### Axisymmetric Euler, area-weighted finite volume
+
+```text
+∂U/∂t + (1/r)·∂(r·F_r)/∂r + ∂F_x/∂x = Ṡ_geom + Ṡ_laser
+
+U   = (ρ, ρu_r, ρu_x, E)ᵀ
+F_r = (ρu_r, ρu_r² + p, ρu_r u_x, (E + p)u_r)ᵀ
+F_x = (ρu_x, ρu_r u_x, ρu_x² + p, (E + p)u_x)ᵀ
+Ṡ_geom = (0, p/r, 0, 0)ᵀ
+```
+
+Site: `src/euler2d.rs`. HLLC + MUSCL-Hancock with minmod, Strang-split
+dimensionally as `R(dt/2) → X(dt) → R(dt/2)`, CFL asserted per step in both
+directions, positivity guard that bails with the cell **and stage** rather than
+clamping. **No laser physics is in this module**, deliberately — M6c gate
+decision 4, carried forward.
+
+Two implementation facts carry the milestone and both are recorded in the code:
+
+- **The `1/r` never appears.** Cells are annuli, interfaces carry area `A ∝ r`,
+  and the axis interface has zero area, so nothing crosses `r = 0` by
+  construction. `(A_+ − A_−)/V` *is* `1/r_j` analytically, finite in the
+  innermost ring without a floor.
+- **The geometric source is written as the same floating-point expression as
+  the pressure part of the flux difference**, so a radially uniform state is a
+  bit-exact fixed point. That is what lets G9, G13(i) and G14 assert equality
+  rather than a tolerance.
+
+The 1-D Riemann solver is **reused, not reimplemented**: a sweep packs
+`(ρ, ρu_∥, E − ½ρv_t²)` into `euler1d`'s `Conserved`, calls its `hllc_flux`, and
+recovers the transverse flux as `F_ρ·v_t` with the upwind side read off
+`sign(F_ρ)`. Both identities are exact.
+
+- **G9 — the planar limit reproduces `Euler1d` bit for bit**
+  (`euler2d_planar_limit_reproduces_euler1d_bit_for_bit`). Not a tolerance: the
+  same floating-point operations. Two non-vacuity legs.
+- **G10 — Sedov–Taylor** (`sedov_blast_matches_the_self_similar_solution`).
+  Exponent 0.38628 vs the exact 2/5; level and peak compression both gated as
+  *trends* under refinement, because a spherical blast's density spike is one or
+  two cells wide at any affordable resolution.
+- **G11 — 2nd order on smooth axisymmetric flow** (1.861 / 1.964 against a
+  split-source contrast at 1.030 / 1.155). This gate found a real defect: the
+  Hancock predictor originally built the geometric source from the reconstructed
+  *face* pressures, which is well-balanced and wrong — the pressure terms then
+  cancel identically against the flux difference and the gradient disappears
+  from the predictor. It cost an order.
+- **G12 — conservation in the `r dr dx` measure**, with radial momentum
+  deliberately *not* conserved, and an escape-flux leg that closes the budget
+  when relief reaches the wall.
+- **G13 — the axis is not a wall**, against a deliberate even-parity contrast.
+
+### The Sedov–Taylor reference
+
+Site: `src/validate.rs` (`SedovBlast`). The self-similar ODEs are integrated
+inward from the strong-shock Rankine–Hugoniot state and `ξ₀` follows from the
+energy integral, so **nothing external is quoted**: the published ≈1.033 for
+`γ` = 1.4 is an independent cross-check that the derived 1.03278 passes to
+0.03 %. Its own unit tests include putting the profile back into the Euler PDEs,
+where the residual is 6.9e-5 and falls as the finite-difference step squared —
+the check that verifies the hand derivation rather than the arithmetic.
+
+### Radial relief and the transverse instability
+
+Site: `src/lsd2d.rs`. M6c's `LsdColumn` with a beam of finite radius: one
+independent Beer–Lambert march per ring, no refraction, no diffraction.
+`Absorption`, `IonizationCeiling` and `raizer_lsd_velocity` are reused
+unchanged — the closures depend on `(ρ, p)` alone.
+
+**The transverse instability, found rather than sought.** A radially uniform
+run diverges exponentially from the 1-D column, out of round-off, reaching 3 %
+by M6c's settle. Three measurements identify it: it is bit-identical in planar
+and axisymmetric geometry (so not the geometric source), amplitude-proportional
+(a 10⁶× larger seed gives a 10⁶× larger early response), and it saturates at
+`|u_r|` ≈ 200–400 m/s. That is a linear instability going nonlinear — the
+mechanism behind the cellular structure real detonations have. It is pinned, not
+validated: no measurement has been compared to.
+
+**The relief deficit** (G15, `pinned`). Because the instability is present at
+*every* beam radius including infinite, the deficit is measured against the
+**wide-beam 2-D run**, not the 1-D column — otherwise the instability would be
+reported as relief. Measured `δ = 1 − D/D_wide` = 0.305 at `R_b·α` = 1.6 and
+0.230 at 3.2, monotone in `R_b`, with the wide-beam limit itself within 1 % of
+Raizer. The pinned claim is a **band** of ±13 %, and that width is measured
+rather than chosen: grid (+6 % on halving `Δx`), seed (−7 % at a 1× rather than
+2× CJ-pressure seed), and ignition threshold (±8 % over a 4× sweep). Pinning a
+third digit would assert a precision three separate knobs say is not there.
+
+A **failure radius** is predicted and was not reached: `check_regime` requires
+eight cells across `R_b`, so the smallest beam affordable at this `Δr` still
+carries a healthy wave. Recorded as an open item rather than asserted.
+
+- **G16 — the one-third scaling survives relief**
+  (`the_one_third_scaling_survives_radial_relief`): `S^0.34666` against the
+  parameter-free 1/3 while the level moves 23 %. M6c's G4 argues that relief can
+  only enter as a coefficient; this measures it.
+
+### The `lsd2d` demonstration run (CLI case)
+
+`cargo run --release -- lsd2d` seeds a wave, drives it with a 160 µm top-hat
+beam at `R_b·α` = 3.2, and reports the deficit against a matching wide-beam run.
+Writes `_fields.npy` `[frame, quantity, ring, cell]`, a front-track CSV carrying
+both the axis and the beam edge, `_meta.json` and `_notes.md`; images come from
+`scripts/render_lsd2d.py`. No M6a ignition stage, deliberately — the `lsd` case
+owns that story, and seeding keeps this one from re-inheriting M6a's ungated
+absolute threshold.

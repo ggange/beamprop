@@ -450,6 +450,25 @@ velocities, and the spec says so in advance rather than discovering it:
 - Radiation losses and incomplete absorption push the same direction and are
   also out of scope (§ NOT in scope).
 
+**Amended (M6d): the first bullet is no longer available as an excuse.** Radial
+relief is modelled, and its size is measured and pinned:
+`δ = 1 − D/D_wide` = **0.230** at `R_b·α` = 3.2 and 0.305 at 1.6, i.e. a
+finite-diameter beam costs roughly a quarter of the front speed. That is a real
+effect and it is **not the whole ~2× gap** — so relief is part of the answer,
+not the answer. The remaining candidates are the ones already named here
+(radiation losses, incomplete absorption) plus the production EOS and, new with
+M6d, the assumption that the beam travels in straight pencils and is not
+refracted by the plasma it creates.
+
+M6d also found something that changes how any future G7 comparison must be
+made: the modelled front is **transversely unstable**, so a single run's speed
+carries the instability's signature and a comparison against a 1-D calculation
+would attribute that to relief. See [M6D_SPEC.md](M6D_SPEC.md) § G14.
+
+**G7 therefore remains ungated for exactly one reason: there is no anchored
+measured dataset.** That is open question 1 below, inherited by M6d and still
+unpaid.
+
 So the honest claim M6c can make is: **the 1-D model agrees with CJ/Raizer where
 that theory applies, and the gap to experiment is in the predicted direction and
 of the predicted order, for reasons the model has explicitly excluded.** That is
@@ -485,7 +504,11 @@ is labelled as such.
   here, it is unreachable from this solver. It needs a non-paraxial method,
   which is a different solver, not a `Medium`.
 - **Radial / quasi-1-D expansion.** Planar first. This is also precisely why
-  G7 is ungated and expected high.
+  G7 is ungated and expected high. **Retired (M6d).** Axisymmetric `(r, x)`
+  hydro landed in `src/euler2d.rs`, and the relief deficit is measured and
+  pinned at 23 % of the front speed — see [M6D_SPEC.md](M6D_SPEC.md). The bullet
+  stays here, struck through rather than deleted, so the record of what M6c did
+  not do remains readable.
 - **Runtime Mutation++ FFI.** Offline tabulation only (D8/P3). Re-opened only if
   the frozen LTE table provably fails.
 - **Non-LTE / two-temperature plasma**, and finite-rate ionization kinetics.
@@ -495,11 +518,14 @@ is labelled as such.
 - **LSC and LSR regimes.** LSD only; the regime is asserted, not assumed.
 - **Recombination / afterglow / multi-pulse.**
 - **2-D/3-D hydro.** The propagator is 3-D; the hydro is not, by construction.
+  **Narrowed to 3-D by M6d**, which made the hydro axisymmetric. 3-D remains out
+  of scope: axisymmetry assumes no azimuthal structure.
 
 ## Open questions
 
-1. **Which measured LSD dataset anchors G7.** The M6c counterpart of M6a's
-   digitized anchor, and the one input this spec cannot supply itself. Needs
+1. **Which measured LSD dataset anchors G7.** *Inherited by M6d and still
+   open — and now the **only** thing keeping G7 ungated.* The M6c counterpart of
+   M6a's digitized anchor, and the one input this spec cannot supply itself. Needs
    the same treatment
    `tests/data/tt2012_*.csv` got: a named paper, the figure number pinned in the
    provenance header at digitization time, and the setup quoted so the solver's
