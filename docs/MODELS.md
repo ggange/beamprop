@@ -15,7 +15,7 @@ depends on looking a number up.
 
 ## Claims ledger
 
-**Read this before the test count.** `cargo test` runs 210 tests. That number is
+**Read this before the test count.** `cargo test` runs 213 tests. That number is
 not a measure of how much of this solver is validated against the world, and
 reading it as one would be a mistake: most of those tests check that the code
 solves the equations it was given, several deliberately assert a *known
@@ -50,7 +50,7 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 100 rows below: 64 verified, 10 validated, 14 pinned, 12 ungated.**
+**Census of the 103 rows below: 67 verified, 10 validated, 14 pinned, 12 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
 not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
@@ -121,12 +121,15 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | Dawson's integral against its closed forms and its ODE | `breakdown0d::tests::dawson_matches_its_closed_forms` | verified | max at 0.5410442246; `Φ' = 1 − 2xΦ` to 1e-5 |
 | The two Dawson branches join continuously | `breakdown0d::tests::dawson_series_join_is_continuous` | verified | 3e-7 at the `x` = 4 seam |
 | `ln Γ` against factorials, `Γ(½)`, and the reflection formula | `breakdown0d::tests::ln_gamma_matches_its_closed_forms` | verified | 1e-12 |
-| The PPT above-threshold sum is a converged truncation | `breakdown0d::tests::ppt_ati_sum_is_converged` | verified | 64 vs 4096 terms, worst 2.9e-11 at γ = 1 |
+| The PPT above-threshold sum is converged at every `γ` it is evaluated at | `breakdown0d::tests::ppt_ati_sum_is_converged` | verified | adaptive vs 2²¹ terms, 1e-6, down to the γ = 0.1 cutover |
+| PPT reduces to the ADK closed form as `γ → 0` | `breakdown0d::tests::ppt_reduces_to_adk_in_the_tunnelling_limit` | verified | residual `O(γ²)` and falling, 3e-2 → 1e-3 |
+| The tunnelling branch joins the sum without a step | `breakdown0d::tests::ppt_tunnelling_branch_joins_the_sum` | verified | converged `A₀` = 0.994 vs the limit's 1 at the cutover |
+| The PPT rate is monotonic across the bisection bracket | `breakdown0d::tests::ppt_rate_is_monotonic_across_the_bisection_bracket` | verified | 201 samples over 10¹²–10²² W/m², both λ |
 | PPT gives an **integer** photon order `K = ⌈ν⌉` | `ppt_multiphoton_order_is_the_integer_photon_count` | verified | 7.998 / 10.998 / 6.000 at 800 / 1064 / 532 nm |
 | PPT and Keldysh share one exponent | `ppt_and_keldysh_share_the_same_exponent` | verified | ratio is `I^0.66` while the rates are `I^9.9` |
 | **PPT's absolute rate vs a measured O₂ cross-section** | `ppt_rate_matches_the_measured_o2_cross_section` | **validated** | 1.99× of `σ₈` = 3.3e-130 W⁻⁸m¹⁶s⁻¹ (Sci. Rep. **8**, 2874 (2018)), nothing fitted; theory high, the direction the paper reports |
 | **PPT does not close the wavelength gap either** | `ppt_does_not_close_the_wavelength_gap_either` | **pinned** | derived prefactor lands at 2.947 vs measured 0.80 — 16 % of the gap; `2n* − 3/2 < 0` for `Z_eff` = 0.53, so the Coulomb correction is order-unity, not orders |
-| **The two anchor experiments sit either side of the MPI seeding threshold** | `ppt_seeding_thresholds_separate_the_two_experiments` | **validated** | at each paper's own measured `I_th`: `N_seed` = 5.4e-9 (1064 nm) vs 3.05 (532 nm); seeding threshold 5.73× above measured at 1064 nm, 0.83× at 532 nm |
+| **The two anchor experiments sit either side of the MPI seeding threshold** | `ppt_seeding_thresholds_separate_the_two_experiments` | **validated** | at each paper's own measured `I_th`: `N_seed` = 5.4e-9 (1064 nm) vs 3.15 (532 nm); seeding threshold 5.73× above measured at 1064 nm, 0.83× at 532 nm |
 | Threshold is independent of the integration window | `breakdown0d::tests::threshold_is_window_independent` | verified | invariant in `w` |
 | The high-pressure slope lies between the model's analytic limits | `breakdown0d::tests::high_pressure_threshold_slope_lies_between_analytic_limits` | verified | 0.095 … 0.468 |
 | The literature-range inelastic envelope brackets the slope | `breakdown0d::tests::inelastic_loss_envelope_brackets_the_slope` | verified | over `δ_eff` 0.01–0.05, `⟨ε⟩` 2–5 eV |
@@ -959,7 +962,19 @@ A₀(ω,γ) = (4/√(3π))·(γ²/(1+γ²))·Σ_{n≥⌈ν⌉} e^{−α(n−ν)}
 ν = (U_i/ħω)(1 + 1/2γ²)     α = 2[asinh γ − γ/√(1+γ²)]     β = 2γ/√(1+γ²)
 ```
 
-`Φ` is Dawson's integral (`breakdown0d::dawson`). The exponent is **the same
+`Φ` is Dawson's integral (`breakdown0d::dawson`). The sum's truncation is
+**derived, not fixed**: `α → ⅔γ³` as `γ → 0`, so the number of terms needed to
+reach a stated depth diverges as `1/γ³` — 10 terms at `γ` = 10, tens of
+thousands by `γ` = 0.1. `ppt_ati_terms` sizes it from `α`, and below
+`γ` = 0.1 the tunnelling limit `A₀ → 1` takes over, which makes the whole
+expression ADK. A **fixed** 64-term truncation was tried first and is wrong by
+29 % at `γ` = 0.2 in a way that looks like physics; the gates that catch it are
+`ppt_reduces_to_adk_in_the_tunnelling_limit` and
+`ppt_rate_is_monotonic_across_the_bisection_bracket`, the latter because an
+un-converged sum makes the rate *fall* with intensity inside the bracket that
+`threshold_intensity` bisects on.
+
+The exponent is **the same
 object** as Keldysh's — PPT's `(2F₀/3F)g(γ)` is algebraically `(2U_i/ħω)f(γ)` —
 so `keldysh_tunnel_exponent` is reused rather than re-derived, and
 `ppt_and_keldysh_share_the_same_exponent` gates that the two have not drifted.
@@ -1016,7 +1031,7 @@ kernel's pinned 3.90–4.69× level offset cannot contaminate it:
 | | 1064 nm (T&T) | 532 nm (Chylek) |
 |---|---|---|
 | measured `I_th` (W/cm²) | 2.06×10¹¹ | 1.56×10¹¹ |
-| `N_seed = W·N·V·τ` there | **5.4×10⁻⁹** | **3.05** |
+| `N_seed = W·N·V·τ` there | **5.4×10⁻⁹** | **3.15** |
 | `I` where `N_seed` = 1 | 1.18×10¹² | 1.30×10¹¹ |
 | that, over measured `I_th` | 5.73× | **0.83×** |
 

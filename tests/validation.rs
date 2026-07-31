@@ -1857,9 +1857,6 @@ fn keldysh_mpi_does_not_close_the_wavelength_gap() {
 // (the σ₈ anchor), and two results.
 // ---------------------------------------------------------------------------
 
-/// O₂ ionization potential in J, as the kernel carries it.
-const U_ION_O2_J: f64 = 12.06 * 1.602_176_634e-19;
-
 fn omega_of_nm(nm: f64) -> f64 {
     2.0 * std::f64::consts::PI * 299_792_458.0 / (nm * 1e-9)
 }
@@ -1893,13 +1890,13 @@ fn ppt_multiphoton_order_is_the_integer_photon_count() {
         let lo = 1e14;
         let hi = 2e14;
         assert!(
-            keldysh_gamma(hi, omega, U_ION_O2_J) > 30.0,
+            keldysh_gamma(hi, omega, U_ION_O2) > 30.0,
             "{nm} nm: γ = {:.1} at the top of the fit window — not deep enough \
              in the multiphoton branch for ν ≈ U_i/ħω",
-            keldysh_gamma(hi, omega, U_ION_O2_J)
+            keldysh_gamma(hi, omega, U_ION_O2)
         );
-        let order = (ppt_rate(hi, omega, U_ION_O2_J, Z_EFF_O2)
-            / ppt_rate(lo, omega, U_ION_O2_J, Z_EFF_O2))
+        let order = (ppt_rate(hi, omega, U_ION_O2, Z_EFF_O2)
+            / ppt_rate(lo, omega, U_ION_O2, Z_EFF_O2))
         .ln()
             / (hi / lo).ln();
         assert!(
@@ -1933,8 +1930,8 @@ fn ppt_and_keldysh_share_the_same_exponent() {
     let mut ratio_pts = Vec::new();
     for k in 0..=8 {
         let i = 1e14 * 10f64.powf(k as f64 * 0.5);
-        let w_ppt = ppt_rate(i, omega, U_ION_O2_J, Z_EFF_O2);
-        let w_kel = keldysh_rate(i, omega, U_ION_O2_J, 1.0);
+        let w_ppt = ppt_rate(i, omega, U_ION_O2, Z_EFF_O2);
+        let w_kel = keldysh_rate(i, omega, U_ION_O2, 1.0);
         assert!(w_ppt > 0.0 && w_kel > 0.0, "rate vanished at I = {i:e}");
         rate_pts.push((i, w_ppt));
         ratio_pts.push((i, w_ppt / w_kel));
@@ -2020,7 +2017,7 @@ fn ppt_rate_matches_the_measured_o2_cross_section() {
         .iter()
         .map(|&i_wcm2| {
             let i = i_wcm2 * 1e4;
-            ppt_rate(i, omega, U_ION_O2_J, Z_EFF_O2) / (SIGMA_8 * i.powi(8))
+            ppt_rate(i, omega, U_ION_O2, Z_EFF_O2) / (SIGMA_8 * i.powi(8))
         })
         .collect();
 
@@ -2147,7 +2144,7 @@ fn ppt_does_not_close_the_wavelength_gap_either() {
 /// | | 1064 nm (T&T) | 532 nm (Chylek) |
 /// |---|---|---|
 /// | measured `I_th` (W/cm²) | 2.06×10¹¹ | 1.56×10¹¹ |
-/// | `N_seed` at that intensity | **5.4×10⁻⁹** | **3.05** |
+/// | `N_seed` at that intensity | **5.4×10⁻⁹** | **3.15** |
 /// | `I` where `N_seed` = 1 | 1.18×10¹² | 1.30×10¹¹ |
 /// | that, over measured `I_th` | 5.73× | **0.83×** |
 ///
@@ -2171,36 +2168,79 @@ fn ppt_does_not_close_the_wavelength_gap_either() {
 ///
 /// **Caveats, stated because they bound how much this means.** `V_focal` uses
 /// each paper's own focal radius (16.5 µm Chylek, 20 µm T&T) at T&T's 66 µm
-/// depth of focus, since Chylek does not give one; the threshold intensities are
-/// the digitized 760-Torr points; and `N_seed` = 1 is a criterion, not a
-/// measured quantity — it is the natural one for a volume that either contains
-/// an electron or does not.
+/// depth of focus, since Chylek does not give one; the two threshold points are
+/// each curve's nearest to 1 atm and land at 759.0 and 785.7 Torr, close but not
+/// equal, so each row's neutral density uses its own pressure; and `N_seed` = 1
+/// is a criterion, not a measured quantity — it is the natural one for a volume
+/// that either contains an electron or does not.
 #[test]
 fn ppt_seeding_thresholds_separate_the_two_experiments() {
     use beamprop::breakdown0d::{Z_EFF_O2, ppt_rate};
     const K_B: f64 = 1.380_649e-23;
-    let n_neutral = 101_325.0 / (K_B * 288.0);
+    const EPS0: f64 = 8.854_187_812_8e-12;
+    const C: f64 = 299_792_458.0;
     let pi = std::f64::consts::PI;
 
-    // (λ nm, measured I_th at ~760 Torr in W/cm², pulse FWHM, focal radius m)
+    // Both thresholds are READ FROM the digitized data, not transcribed: each
+    // curve's point nearest 1 atm, so the two rows are compared at matched
+    // pressure. (T&T's curve runs to 1896 Torr and Chylek's stops at 786, so
+    // "the last point" is not the same physical condition — an earlier version
+    // of this gate used it and its own pressure-match guard caught it.) T&T's
+    // ordinate is an RMS field in MV/cm — see
+    // `tt2012_level_ratio_is_bounded_within_scatter` for why the RMS form is
+    // the right conversion; Chylek's is already an intensity.
+    let tt = load_digitized_curve("tt2012_E_B_vs_pressure.csv");
+    let chylek = load_digitized_curve("chylek1990_air_threshold_vs_pressure.csv");
+    let nearest_atm = |c: &[(f64, f64)]| -> (f64, f64) {
+        *c.iter()
+            .min_by(|a, b| {
+                (a.0 - 760.0)
+                    .abs()
+                    .partial_cmp(&(b.0 - 760.0).abs())
+                    .unwrap()
+            })
+            .expect("non-empty curve")
+    };
+    let (p_tt, e_b) = nearest_atm(&tt);
+    let (p_ch, i_ch) = nearest_atm(&chylek);
+    let e_rms = e_b * 1e6 * 100.0; // MV/cm → V/m
+    let i_tt = EPS0 * C * e_rms * e_rms;
+
+    // Each row uses its OWN pressure for the neutral density rather than a
+    // shared 1 atm. The two points land within a few per cent of each other and
+    // of atmospheric, so this is bookkeeping rather than a correction — but it
+    // is bookkeeping the earlier version of this gate got wrong by asserting
+    // "~760 Torr" for a point at 786.
+    assert!(
+        (700.0..=1000.0).contains(&p_tt) && (700.0..=1000.0).contains(&p_ch),
+        "the curves' top points moved to {p_tt:.0} / {p_ch:.0} Torr — this gate \
+         compares near-atmospheric points and the pressures must stay close"
+    );
+    assert!(
+        (p_tt / p_ch).max(p_ch / p_tt) < 1.15,
+        "the two points are at {p_tt:.0} and {p_ch:.0} Torr, further apart than \
+         the 15 % this comparison tolerates"
+    );
+
+    // (λ nm, measured I_th W/m², pressure Torr, pulse FWHM, focal radius m)
     let cases = [
-        (1064.0f64, 2.0609e11f64, 6.0e-9f64, 20.0e-6f64),
-        (532.0, 1.560e11, 6.5e-9, 16.5e-6),
+        (1064.0f64, i_tt, p_tt, 6.0e-9f64, 20.0e-6f64),
+        (532.0, i_ch * 1e4, p_ch, 6.5e-9, 16.5e-6),
     ];
     let mut seeds = Vec::new();
     let mut headroom = Vec::new();
-    for (nm, i_wcm2, tau, r) in cases {
+    for (nm, i_si, p_torr, tau, r) in cases {
         let omega = omega_of_nm(nm);
         let volume = pi * r * r * 66.0e-6;
-        let i_si = i_wcm2 * 1e4;
-        let n_seed = ppt_rate(i_si, omega, U_ION_O2_J, Z_EFF_O2) * n_neutral * volume * tau;
+        let n_neutral = p_torr * TORR / (K_B * 288.0);
+        let n_seed = ppt_rate(i_si, omega, U_ION_O2, Z_EFF_O2) * n_neutral * volume * tau;
         seeds.push(n_seed);
 
         // Intensity at which N_seed = 1, by log-bisection.
         let (mut lo, mut hi) = (1e14f64, 1e22f64);
         for _ in 0..200 {
             let mid = (lo * hi).sqrt();
-            if ppt_rate(mid, omega, U_ION_O2_J, Z_EFF_O2) * n_neutral * volume * tau < 1.0 {
+            if ppt_rate(mid, omega, U_ION_O2, Z_EFF_O2) * n_neutral * volume * tau < 1.0 {
                 lo = mid;
             } else {
                 hi = mid;
@@ -2222,7 +2262,7 @@ fn ppt_seeding_thresholds_separate_the_two_experiments() {
     // threshold coincide.
     assert!(
         (0.5..=20.0).contains(&seeds[1]),
-        "532 nm N_seed = {:.4} at the measured threshold; expected ≈3.05, i.e. \
+        "532 nm N_seed = {:.4} at the measured threshold; expected ≈3.15, i.e. \
          of order one electron per pulse",
         seeds[1]
     );

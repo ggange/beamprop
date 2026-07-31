@@ -119,11 +119,31 @@ const KELDYSH_SERIES_CUTOVER: f64 = 0.1;
 /// above it (4.5×10⁻¹ by `x` = 6) and the asymptotic series degrades below it.
 const DAWSON_SERIES_CUTOVER: f64 = 4.0;
 
-/// Terms kept in the PPT above-threshold-ionization sum, see [`ppt_rate`].
-/// Fixed by `ppt_ati_sum_is_converged`, not exposed as a knob: the summand
-/// carries `e^{−α(γ)(n−ν)}` with `α ≈ 2 ln 2γ` ≈ 7 at the thresholds of
-/// interest, so the tail is negligible long before this.
-const PPT_ATI_TERMS: usize = 64;
+/// How deep into the exponential tail the PPT above-threshold sum is carried:
+/// terms are kept until `α(γ)·(n−ν)` exceeds this, i.e. to `e⁻⁴⁰` ≈ 4×10⁻¹⁸.
+///
+/// The term count is **derived from this, not fixed**, because the required
+/// depth runs from ~10 terms at `γ` = 10 to tens of thousands as `γ → 0`:
+/// `α = 2[asinh γ − γ/√(1+γ²)] → ⅔γ³`, so the sum stops converging in the
+/// tunnelling limit. A fixed 64 terms — which this originally shipped as — is
+/// converged to 1.7×10⁻⁷ at `γ` = 0.8 and *29 %* wrong at `γ` = 0.2, with the
+/// error masquerading as physics. See [`ppt_ati_terms`].
+const PPT_ATI_LOG_DEPTH: f64 = 40.0;
+
+/// Cap on the PPT above-threshold sum, so the cost stays bounded as `α → 0`.
+/// At this cap the sum is converged down to `γ` ≈ [`PPT_TUNNELLING_CUTOVER`],
+/// which is where the ADK closed form takes over.
+const PPT_ATI_MAX_TERMS: usize = 1 << 16;
+
+/// Below this `γ` the PPT above-threshold factor is replaced by its tunnelling
+/// limit `A₀ → 1`, i.e. the rate becomes ADK.
+///
+/// Not a convenience: the sum's decay constant vanishes as `⅔γ³`, so reaching
+/// the limit numerically would need ~10⁵ terms at `γ` = 0.1 and ~10⁸ by
+/// `γ` = 0.01. The closed form is exact there and free. The join costs 0.6 %
+/// (converged `A₀` = 0.9941 at `γ` = 0.1 against the limit's 1), which
+/// `ppt_tunnelling_branch_joins_the_sum` gates.
+const PPT_TUNNELLING_CUTOVER: f64 = 0.1;
 
 /// Effective residual charge `Z_eff` for molecular O₂ in PPT.
 ///
@@ -526,6 +546,31 @@ fn ln_gamma(x: f64) -> f64 {
     0.5 * (2.0 * PI).ln() + (z + 0.5) * t.ln() - t + series.ln()
 }
 
+/// Decay constant of the PPT above-threshold sum,
+/// `α(γ) = 2[asinh γ − γ/√(1+γ²)]`.
+///
+/// Its behaviour is what forces the rest of the design: `α → 2 ln 2γ − 2` for
+/// `γ ≫ 1` (fast decay, a handful of terms) but `α → ⅔γ³` for `γ ≪ 1`, so the
+/// number of terms needed diverges as the third power of `1/γ`.
+fn ppt_ati_decay(gamma: f64) -> f64 {
+    2.0 * (gamma.asinh() - gamma / (1.0 + gamma * gamma).sqrt())
+}
+
+/// Terms the above-threshold sum needs at this `γ` to reach
+/// [`PPT_ATI_LOG_DEPTH`], capped at [`PPT_ATI_MAX_TERMS`].
+///
+/// Derived rather than fixed, and *cheaper* than the fixed 64 it replaces
+/// wherever the kernel actually runs: 10 terms at `γ` = 10, 5 at `γ` = 40.
+fn ppt_ati_terms(gamma: f64) -> usize {
+    let alpha = ppt_ati_decay(gamma);
+    // Non-positive or non-finite α means the decay has vanished entirely; ask
+    // for the cap and let the caller's tunnelling branch take over.
+    if alpha <= 0.0 || !alpha.is_finite() {
+        return PPT_ATI_MAX_TERMS;
+    }
+    ((PPT_ATI_LOG_DEPTH / alpha).ceil() as usize).clamp(1, PPT_ATI_MAX_TERMS)
+}
+
 /// PPT's above-threshold-ionization factor
 ///
 /// ```text
@@ -542,7 +587,7 @@ fn ln_gamma(x: f64) -> f64 {
 /// are physics (the ATI channel-closing structure), not numerical noise.
 fn ppt_ati_sum(gamma: f64, nu: f64, terms: usize) -> f64 {
     let root = (1.0 + gamma * gamma).sqrt();
-    let alpha = 2.0 * (gamma.asinh() - gamma / root);
+    let alpha = ppt_ati_decay(gamma);
     let beta = 2.0 * gamma / root;
     let n0 = nu.ceil();
     let mut sum = 0.0;
@@ -615,20 +660,32 @@ pub fn ppt_rate(intensity: f64, omega: f64, u_ion: f64, z_eff: f64) -> f64 {
         2.0 * n_star * 2.0f64.ln() - n_star.ln() - ln_gamma(n_star + 1.0) - ln_gamma(n_star);
     let coulomb = (2.0 * n_star - 1.5) * (2.0 * f0 / (field * root)).ln();
 
-    // Above-threshold sum.
-    let nu = ip / omega_au * (1.0 + 1.0 / (2.0 * gamma * gamma));
-    let a0 = ppt_ati_sum(gamma, nu, PPT_ATI_TERMS);
+    // Above-threshold factor. Below the cutover the sum's decay constant has
+    // collapsed and its tunnelling limit A₀ → 1 is used instead, which turns
+    // the whole expression into ADK — gated both ways by
+    // `ppt_reduces_to_adk_in_the_tunnelling_limit` and
+    // `ppt_tunnelling_branch_joins_the_sum`.
+    let a0 = if gamma < PPT_TUNNELLING_CUTOVER {
+        1.0
+    } else {
+        let nu = ip / omega_au * (1.0 + 1.0 / (2.0 * gamma * gamma));
+        ppt_ati_sum(gamma, nu, ppt_ati_terms(gamma))
+    };
     if a0 <= 0.0 {
         return 0.0;
     }
 
     let exponent = 2.0 * ip / omega_au * keldysh_tunnel_exponent(gamma);
     let ln_w = ln_c2 + 0.5 * (6.0 / PI).ln() + ip.ln() + coulomb + a0.ln() - exponent;
-    if !ln_w.is_finite() || ln_w > MAX_EXPONENT {
+    if ln_w.is_nan() {
         return 0.0;
     }
+    // Saturate rather than return zero. An overflowing rate means "faster than
+    // f64 can say", and reporting that as *no ionization* would be a silent
+    // sign error in the one direction that matters — the same reason
+    // `keldysh_rate` clamps its exponent instead of bailing.
     // Atomic unit of rate is E_h/ħ.
-    ln_w.exp() * HARTREE / HBAR
+    ln_w.min(MAX_EXPONENT).exp() * HARTREE / HBAR
 }
 
 /// A monatomic gas, carrying only the two constants that are **exactly known**
@@ -2733,47 +2790,159 @@ mod tests {
         }
     }
 
-    /// T12-V6: [`PPT_ATI_TERMS`] is a converged truncation, not a tuned one.
+    /// T12-V6: [`ppt_ati_terms`] returns a **converged** truncation at every
+    /// `γ` the rate is evaluated at, down to the tunnelling cutover.
     ///
-    /// The summand carries `e^{−α(γ)(n−ν)}` with `α ≈ 2 ln 2γ`, so convergence
-    /// is fast wherever `γ` is large — which is the whole regime M6a operates
-    /// in (`γ` = 17–38 at the thresholds). The gate sweeps down to `γ` = 1,
-    /// well outside that regime, so it fails if the shipped truncation is ever
-    /// carried somewhere it does not hold.
+    /// This gate originally swept only `γ ≥ 1` against a fixed 64 terms, and
+    /// that hid a real defect: `α(γ) → ⅔γ³`, so the sum stops converging in the
+    /// tunnelling limit and a fixed truncation silently returns a number set by
+    /// the loop bound rather than by the physics — 29 % low at `γ` = 0.2, 78 %
+    /// low at `γ` = 0.1. The sweep now runs down to
+    /// [`PPT_TUNNELLING_CUTOVER`], which is the whole point.
     #[test]
     fn ppt_ati_sum_is_converged() {
-        const REFERENCE: usize = 4096;
-        // ν at 1064 nm and 532 nm for O₂, plus a deliberately awkward
-        // non-integer value.
+        const REFERENCE: usize = 1 << 21;
         for &nu in &[10.35, 5.18, 7.5] {
-            for &gamma in &[1.0, 3.0, 10.0, 20.0, 40.0] {
+            for &gamma in &[PPT_TUNNELLING_CUTOVER, 0.2, 0.5, 1.0, 3.0, 10.0, 40.0] {
                 let converged = ppt_ati_sum(gamma, nu, REFERENCE);
-                let shipped = ppt_ati_sum(gamma, nu, PPT_ATI_TERMS);
+                let shipped = ppt_ati_sum(gamma, nu, ppt_ati_terms(gamma));
                 assert!(
                     converged > 0.0,
                     "reference sum vanished at γ = {gamma}, ν = {nu}"
                 );
-                // Worst case measured over this sweep is 2.9e-11, at γ = 1 —
-                // the slowest-decaying corner, and two decades outside the
-                // regime the kernel uses.
                 let rel = (shipped / converged - 1.0).abs();
                 assert!(
-                    rel < 1e-9,
+                    rel < 1e-6,
                     "A₀ at γ = {gamma}, ν = {nu} moves {rel:.3e} between \
-                     {PPT_ATI_TERMS} and {REFERENCE} terms"
+                     {} adaptive terms and {REFERENCE}",
+                    ppt_ati_terms(gamma)
                 );
             }
         }
-        // And that the truncation is doing real work: at γ = 1 (α = 0.56, the
-        // slowest decay swept) a 4-term sum is visibly short, so the gate above
-        // is not passing merely because every truncation agrees.
+        // The adaptive count must be doing real work in both directions: cheap
+        // where the decay is fast, deep where it is not. A gate that passed
+        // because every truncation agreed would be worthless.
+        assert!(
+            ppt_ati_terms(10.0) < 32,
+            "γ = 10 asks for {} terms — the adaptive count is not exploiting \
+             fast decay",
+            ppt_ati_terms(10.0)
+        );
+        assert!(
+            ppt_ati_terms(PPT_TUNNELLING_CUTOVER) > 10_000,
+            "γ = {PPT_TUNNELLING_CUTOVER} asks for only {} terms — that is the \
+             corner where a fixed truncation was wrong",
+            ppt_ati_terms(PPT_TUNNELLING_CUTOVER)
+        );
         let short = ppt_ati_sum(1.0, 7.5, 4);
         let full = ppt_ati_sum(1.0, 7.5, REFERENCE);
         assert!(
             short / full < 0.95,
-            "a 4-term sum is already {:.4} of converged at γ = 1 — this gate \
-             cannot distinguish a converged truncation from any truncation",
+            "a 4-term sum is already {:.4} of converged at γ = 1",
             short / full
         );
+    }
+
+    /// **T12-V3: `ppt_rate` reduces to the ADK closed form as `γ → 0`.**
+    ///
+    /// This gate was specified in the plan and then not written, which is how
+    /// the truncation defect above survived to be committed — it is precisely
+    /// the check that exercises the corner a converged-at-γ≥1 sweep never
+    /// reaches. Restored, and it now anchors the tunnelling branch:
+    ///
+    /// ```text
+    /// W_ADK = |C_n*|²·√(6/π)·U_i·(2F₀/F)^{2n*−3/2}·exp(−2F₀/3F)
+    /// ```
+    ///
+    /// the standard cycle-averaged linear-polarization result. Everything in
+    /// it is closed form; there is nothing to tune.
+    #[test]
+    fn ppt_reduces_to_adk_in_the_tunnelling_limit() {
+        let u_ion = 12.06 * E_CHARGE;
+        let omega = 2.0 * PI * C_LIGHT / 1064e-9;
+        let ip = u_ion / HARTREE;
+        let kappa = (2.0 * ip).sqrt();
+        let f0 = kappa * kappa * kappa;
+        let n_star = Z_EFF_O2 / kappa;
+        let ln_c2 =
+            2.0 * n_star * 2.0f64.ln() - n_star.ln() - ln_gamma(n_star + 1.0) - ln_gamma(n_star);
+
+        // Sweep γ downward; the ratio to ADK must converge to 1, and the
+        // residual must fall like γ² (the leading correction, from √(1+γ²) in
+        // the Coulomb factor and the ⅔γ − γ³/15 exponent).
+        let mut previous = f64::MAX;
+        for &gamma in &[3e-2, 1e-2, 3e-3, 1e-3] {
+            // Invert γ = ω_au·κ/F for the field, then the intensity.
+            let field = omega * HBAR / HARTREE * kappa / gamma;
+            let intensity = 0.5 * EPS0 * C_LIGHT * (field * F_ATOMIC).powi(2);
+            let adk = (ln_c2
+                + 0.5 * (6.0 / PI).ln()
+                + ip.ln()
+                + (2.0 * n_star - 1.5) * (2.0 * f0 / field).ln()
+                - 2.0 * f0 / (3.0 * field))
+                .exp()
+                * HARTREE
+                / HBAR;
+            let ratio = ppt_rate(intensity, omega, u_ion, Z_EFF_O2) / adk;
+            let residual = (ratio - 1.0).abs();
+            assert!(
+                residual < 5.0 * gamma * gamma,
+                "γ = {gamma}: PPT/ADK = {ratio:.9}, residual {residual:.3e} \
+                 exceeds the O(γ²) it should be"
+            );
+            assert!(
+                residual < previous,
+                "γ = {gamma}: residual {residual:.3e} did not fall below the \
+                 previous {previous:.3e} — the limit is not being approached"
+            );
+            previous = residual;
+        }
+    }
+
+    /// T12-V3b: the ATI sum and its tunnelling limit agree across the join, so
+    /// [`PPT_TUNNELLING_CUTOVER`] is a documented seam and not a step.
+    ///
+    /// 0.6 % — the converged `A₀` is 0.9941 just above the cutover against the
+    /// limit's exactly 1. Small because the cutover was *chosen* where the two
+    /// meet, which is the only honest way to place it.
+    #[test]
+    fn ppt_tunnelling_branch_joins_the_sum() {
+        let g = PPT_TUNNELLING_CUTOVER;
+        for &nu in &[10.35, 5.18] {
+            let summed = ppt_ati_sum(g, nu, 1 << 21);
+            assert!(
+                (summed - 1.0).abs() < 0.01,
+                "at the γ = {g} cutover the converged A₀ is {summed:.6}, not \
+                 within 1 % of its tunnelling limit 1 — move the cutover down \
+                 rather than widening this tolerance"
+            );
+        }
+    }
+
+    /// T12-V6b: the rate is **monotonic** in intensity across the whole
+    /// bisection bracket.
+    ///
+    /// `threshold_intensity` bisects on this function, so a rate that falls as
+    /// intensity rises is not merely inelegant — it can put the bracket on the
+    /// wrong root. The un-converged truncation did exactly that: 40 of 200
+    /// sampled steps decreased, with `W(10²²) < W(10²⁰)` at 532 nm.
+    #[test]
+    fn ppt_rate_is_monotonic_across_the_bisection_bracket() {
+        let u_ion = 12.06 * E_CHARGE;
+        for &nm in &[1064e-9, 532e-9] {
+            let omega = 2.0 * PI * C_LIGHT / nm;
+            let mut previous = 0.0;
+            for k in 0..=200 {
+                let i = I_BRACKET_LO * 10f64.powf(k as f64 * 10.0 / 200.0);
+                let w = ppt_rate(i, omega, u_ion, Z_EFF_O2);
+                assert!(
+                    w >= previous,
+                    "λ = {:.0} nm: rate fell from {previous:.4e} to {w:.4e} at \
+                     I = {i:.3e} W/m², inside the bisection bracket",
+                    nm * 1e9
+                );
+                previous = w;
+            }
+        }
     }
 }

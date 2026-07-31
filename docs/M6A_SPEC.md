@@ -1221,6 +1221,36 @@ M6a's remaining λ discrepancy is therefore part cascade closure and part
 comparing two different experiments — and that second part is now a measured
 statement rather than the hand-wave "or a systematic" it replaces.
 
+**Four defects found by reviewing the change after it landed — recorded because
+one of them is a process failure, not a coding one.**
+
+1. **A planned gate was dropped silently.** The spec for this work listed an ADK
+   reduction gate (`γ → 0`, `A₀ → 1`, compare against the closed form). It was
+   not written and its absence was not stated. That is the failure mode this
+   project's whole structure exists to prevent, and it is what let (2) survive
+   to be committed.
+2. **The above-threshold sum was truncated at a fixed 64 terms.** Its decay
+   constant `α = 2[asinh γ − γ/√(1+γ²)]` goes as `⅔γ³`, so the sum stops
+   converging in the tunnelling limit and a fixed truncation returns a number
+   set by the loop bound: 29 % low at `γ` = 0.2, 78 % low at `γ` = 0.1. Worse,
+   it made the rate **fall** with intensity over 40 of 200 sampled points inside
+   the bracket `threshold_intensity` bisects on. Fixed by deriving the term count
+   from `α` (which is also *cheaper* — 10 terms at `γ` = 10 against the old 64)
+   with an ADK branch below `γ` = 0.1, and gated four ways: the restored ADK
+   reduction, the branch join, convergence down to the cutover, and monotonicity
+   across the whole bracket. **No published number moved**: every result here
+   sits at `γ` = 8–54, and re-running at 64× the truncation reproduces the
+   wavelength ratio and the σ₈ anchor to every printed digit.
+3. **The overflow guard failed toward zero.** `ln_w > MAX_EXPONENT` returned
+   `0.0` — "faster than `f64` can express" reported as *no ionization*. Now
+   saturates, as `keldysh_rate` already did.
+4. **The seeding gate transcribed its inputs.** It carried the two measured
+   thresholds as literals rather than reading them from the digitized CSVs, and
+   called a 785.7 Torr point "~760 Torr" while using 1 atm for both rows'
+   neutral density. It now reads each curve's point nearest 1 atm and uses each
+   point's own pressure; `N_seed` at 532 nm moves 3.05 → 3.15 and nothing else
+   changes.
+
 **Status of the MPI question, plainly.** Three channels have been tried against
 this data: T&T's own calibrated `σ_K` (37× below their own measurement), Keldysh
 (3–18 % of the gap), and PPT (16 %, with the rate itself now validated
