@@ -2618,11 +2618,13 @@ fn chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not() {
         measured[0]
     );
 
-    // What survives is a MID-pressure bump, which is where the seeding
-    // transition sits: below ~100 Torr multiphoton ionization supplies the
-    // electrons, above ~300 Torr the cascade does, and the kernel crosses
-    // between the two too abruptly. That is a sharper open question than the
-    // one it replaces.
+    // What survives is a MID-pressure bump. NOTE the comparison here is a
+    // model local exponent against a measured WINDOW average, which overstates
+    // it — `chylek1990_residual_is_localised_to_mid_pressure` redoes it
+    // like-for-like on six narrow bands and finds the measurement is not
+    // locally flat either (0.31–0.55). The residual is real but narrower than
+    // this window fit suggests: 2.0–2.3× over 70–350 Torr, and it is the
+    // continuum diffusion loss rather than the seeding transition.
     assert!(
         modelled[1] / measured[1] > 1.5,
         "the 100–300 Torr window is now {:.4} vs measured {:.4}; this gate \
@@ -2639,6 +2641,198 @@ fn chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not() {
          down from the 0.431 the closure change achieved",
         modelled[2],
         measured[2]
+    );
+}
+
+/// **Diagnostic gate — where the residual against Chylek actually lives, on a
+/// like-for-like comparison.**
+///
+/// `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` fits three wide
+/// windows. That is the right shape for asking "is the kernel a power law", and
+/// the wrong shape for asking "where is it wrong", because it compares the
+/// model's *local* behaviour against a measured *window* average. Doing that
+/// produced a claim that the measurement is flat at ≈0.43 throughout and the
+/// model humps to 1.04 near 100 Torr — the second half is true, the first is
+/// not.
+///
+/// On six narrow bands, both fitted over the **same measured abscissae**:
+///
+/// | band (Torr) | measured | model | cascade only |
+/// |---|---|---|---|
+/// | 4–12 | 0.308 | 0.238 | 2.203 |
+/// | 12–30 | 0.485 | 0.316 | 1.275 |
+/// | 30–70 | 0.553 | **0.580** | 1.300 |
+/// | 70–150 | 0.455 | **1.045** | 1.191 |
+/// | 150–350 | 0.339 | **0.690** | 0.769 |
+/// | 350–800 | 0.458 | 0.350 | 0.389 |
+///
+/// The measurement is **not** a clean power law locally — it runs 0.31–0.55 —
+/// and the model tracks it to better than 0.25 everywhere except **70–350
+/// Torr**, where it is 2.0–2.3× too steep. That is a much narrower target than
+/// "the kernel is not a power law", and it is where seeding does not reach:
+/// multiphoton production moves 30–70 Torr from 1.300 to 0.580 but only moves
+/// 70–150 Torr from 1.191 to 1.045, because `I_th` has fallen enough by then
+/// that an `I⁶` source switches off fast.
+///
+/// So the residual is the **continuum diffusion loss**, in the one band where
+/// nothing masks it: below ~30 Torr free-molecular escape and multiphoton
+/// seeding both bite, above ~350 Torr diffusion is sub-dominant to the cascade
+/// plateau, and in between `D_e/Λ²` is left carrying the pressure dependence on
+/// its own — at `Kn` = 0.03–0.14, where the free-molecular correction is only a
+/// few per cent.
+#[test]
+fn chylek1990_residual_is_localised_to_mid_pressure() {
+    use beamprop::breakdown0d::AirBreakdown;
+
+    const BANDS: [(f64, f64); 6] = [
+        (3.5, 12.0),
+        (12.0, 30.0),
+        (30.0, 70.0),
+        (70.0, 150.0),
+        (150.0, 350.0),
+        (350.0, 800.0),
+    ];
+    let curve = chylek_air_threshold();
+    let model = AirBreakdown::dry_air_tt2012_focus(532e-9).expect("λ in range");
+
+    let mut measured = Vec::new();
+    let mut modelled = Vec::new();
+    for (lo, hi) in BANDS {
+        let pts: Vec<(f64, f64)> = curve
+            .iter()
+            .copied()
+            .filter(|(p, _)| (lo..=hi).contains(p))
+            .collect();
+        assert!(
+            pts.len() >= 4,
+            "{lo}–{hi} Torr has only {} points",
+            pts.len()
+        );
+        let mp: Vec<(f64, f64)> = pts
+            .iter()
+            .map(|&(p_torr, _)| {
+                (
+                    p_torr,
+                    model
+                        .threshold_intensity(6.5e-9, p_torr * TORR, 400)
+                        .expect("threshold in bracket"),
+                )
+            })
+            .collect();
+        measured.push(-beamprop::validate::loglog_slope(&pts).expect("measured"));
+        modelled.push(-beamprop::validate::loglog_slope(&mp).expect("model"));
+    }
+
+    // The measurement is not locally flat. Stating this is the point: the
+    // earlier framing compared these against a single window number.
+    let m_lo = measured.iter().copied().fold(f64::MAX, f64::min);
+    let m_hi = measured.iter().copied().fold(0.0f64, f64::max);
+    assert!(
+        m_hi / m_lo > 1.5,
+        "Chylek's local exponents are {measured:?}, spread {:.2}× — this gate's \
+         premise is that they are NOT locally flat, so if they became flat the \
+         digitization changed",
+        m_hi / m_lo
+    );
+
+    // Outside 70–350 Torr the kernel tracks the measurement.
+    for i in [0usize, 1, 2, 5] {
+        let err = (modelled[i] - measured[i]).abs();
+        assert!(
+            err < 0.25,
+            "band {:?}: model {:.4} vs measured {:.4} — outside the mid-pressure \
+             window the kernel is supposed to track the data",
+            BANDS[i],
+            modelled[i],
+            measured[i]
+        );
+    }
+    // Inside it, it does not, and by a factor.
+    for i in [3usize, 4] {
+        let ratio = modelled[i] / measured[i];
+        assert!(
+            (1.8..=2.6).contains(&ratio),
+            "band {:?}: model {:.4} vs measured {:.4} ({ratio:.2}×) — this gate \
+             pins the mid-pressure residual at ≈2.0–2.3×; if it closed, say so \
+             loudly rather than letting the band absorb it",
+            BANDS[i],
+            modelled[i],
+            measured[i]
+        );
+    }
+}
+
+/// **The mid-pressure residual is not the absolute level in disguise —
+/// correcting the level makes it worse.**
+///
+/// The obvious suspicion about a model running 14–33× above Chylek is that
+/// every shape defect is really the level defect refracted through a steep
+/// nonlinearity: multiphoton production is `I⁶` at 532 nm, so evaluating it at
+/// intensities an order of magnitude too high overstates it by ~10⁶, and the
+/// overstatement drifts because the level offset itself drifts (33× near 40
+/// Torr, 14.4× at 540). That would be a tidy story.
+///
+/// It is false, and the falsification is cheap: `δ_eff` scales the cascade
+/// level almost linearly, so sweeping it downward walks the model toward the
+/// measured level. The bump gets **worse** as it does.
+///
+/// | `δ_eff` | level at 786 Torr | peak local exponent |
+/// |---|---|---|
+/// | 0.02 (default) | 15.8× | 1.04 |
+/// | 0.005 | 6.1× | 1.28 |
+/// | 0.0013 | 3.4× | 1.42 |
+///
+/// So the residual is a genuine shape defect in the loss term, not an artifact
+/// of where the curve sits. This gate exists so that conclusion is pinned
+/// rather than re-derived — and note it also rules out "fit `δ_eff`" as a
+/// response, which is the tempting move given `δ_eff` is the milestone's one
+/// remaining free constant.
+#[test]
+fn the_mid_pressure_residual_is_not_a_level_artifact() {
+    use beamprop::breakdown0d::AirBreakdown;
+
+    let peak_exponent_and_level = |delta_eff: f64| -> (f64, f64) {
+        let m = AirBreakdown::dry_air_tt2012_focus(532e-9)
+            .expect("λ in range")
+            .with_inelastic_loss(delta_eff, 3.0);
+        let ps: Vec<f64> = (0..=16)
+            .map(|k| 10.0 * 80f64.powf(k as f64 / 16.0))
+            .collect();
+        let ith: Vec<f64> = ps
+            .iter()
+            .map(|&t| {
+                m.threshold_intensity(6.5e-9, t * TORR, 400)
+                    .expect("threshold")
+            })
+            .collect();
+        let mut peak = 0.0f64;
+        for i in 1..ps.len() - 1 {
+            let local = -(ith[i + 1] / ith[i - 1]).ln() / (ps[i + 1] / ps[i - 1]).ln();
+            peak = peak.max(local);
+        }
+        (peak, ith[ith.len() - 1] / 1.56e15)
+    };
+
+    let (peak_default, level_default) = peak_exponent_and_level(0.02);
+    let (peak_lowered, level_lowered) = peak_exponent_and_level(0.0013);
+
+    // The sweep really does walk the level toward the measurement.
+    assert!(
+        level_default > 4.0 * level_lowered && level_lowered < 5.0,
+        "δ_eff = 0.0013 gives a level of {level_lowered:.1}× against {level_default:.1}× \
+         at the default; this gate needs the level to actually move"
+    );
+    // And the bump grows while it does. That is the finding.
+    assert!(
+        peak_lowered > peak_default * 1.2,
+        "peak local exponent is {peak_default:.3} at the default level and \
+         {peak_lowered:.3} at 3.4× — the claim is that correcting the level makes \
+         the mid-pressure bump WORSE, so a reversal here overturns the diagnosis"
+    );
+    assert!(
+        (0.95..=1.15).contains(&peak_default) && (1.30..=1.55).contains(&peak_lowered),
+        "peak local exponents moved: {peak_default:.3} → {peak_lowered:.3}, \
+         expected ≈1.04 → ≈1.42"
     );
 }
 

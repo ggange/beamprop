@@ -414,10 +414,51 @@ the_data` failed and said so. The builder now zeroes the other paths, as the
 other two already did.
 
 **What it costs.** The 300–786 Torr window slips 0.431 → 0.386 against 0.468,
-and a mid-pressure bump survives at 100–300 Torr (0.857 vs 0.413) — the seeding
-transition, where the kernel crosses from multiphoton-supplied to
-cascade-supplied electrons too abruptly. That is now M6a's sharpest open
-question, and it is a better one than the branch it replaced.
+and a mid-pressure residual survives.
+
+### The mid-pressure residual — diagnosed 2026-07-31, and not fixed
+
+First, a correction to how it was framed above. Those three wide windows compare
+the model's *local* behaviour against a measured *window* average, which
+overstates the defect and misplaces it. Redone like-for-like on six narrow
+bands, the measurement is **not** locally flat (0.31–0.55) and the kernel tracks
+it to better than 0.25 everywhere except **70–350 Torr**, where it is 2.0–2.3×
+too steep. The table and the reasoning are in `docs/MODELS.md` §
+"The mid-pressure residual"; `chylek1990_residual_is_localised_to_mid_pressure`
+gates it.
+
+That band is the one nothing masks: below ~30 Torr free-molecular escape and
+multiphoton seeding both bite, above ~350 Torr diffusion is sub-dominant to the
+cascade plateau, and in between `D_e/Λ²` carries the pressure dependence alone at
+`Kn` = 0.03–0.14, where the free-molecular correction is worth a few per cent.
+
+**Two candidates tested, both negative.**
+
+1. *The absolute level.* The model runs 14–33× above Chylek and the offset
+   drifts with pressure; since multiphoton production is `I⁶` at 532 nm, an
+   order-of-magnitude level error is a ~10⁶ rate error that drifts. Sweeping
+   `δ_eff` from 0.02 to 0.0013 walks the level from 15.8× to 3.4× — and the bump
+   grows, peak local exponent 1.04 → 1.42. Pinned by
+   `the_mid_pressure_residual_is_not_a_level_artifact`. This also disposes of
+   "fit `δ_eff`", which is the tempting response given it is the milestone's one
+   remaining free constant.
+2. *Space-charge screening (ambipolar diffusion).* Free diffusion holds only
+   while the plasma is tenuous; the Debye length reaches `Λ` at `n_e` ≈
+   `ε₀ε_e/(e²Λ²)` = 6.2×10¹⁸ m⁻³, four decades below `n_bd`, so most of the
+   avalanche should diffuse ambipolarly at ~1/130 the rate. Prototyped with a
+   cited ion mobility. It **moves** the error rather than removing it: 70–150
+   Torr 1.022 → 0.339 against a measured 0.455, but 4–12 Torr 0.237 → 0.702
+   against 0.308, and 350–800 Torr 0.349 → 0.174 against 0.458. Total absolute
+   error falls ~13 %. **Not landed** — a marginal gain bought with a new constant
+   is precisely what this project's rules exist to refuse, and a mechanism that
+   trades one band's error for another's has not been shown to be the missing
+   physics.
+
+**Status: not fixed, and narrower than it was.** The residual is a genuine shape
+defect in the continuum diffusion loss over 70–350 Torr, unreachable by any
+constant the model already carries (`D_e` was gated out earlier, `δ_eff` here,
+and the cascade closure gives 1.19 in that band under either variant), and the
+standard omitted mechanism does not account for it.
 
 ## Constants (SI, documented)
 

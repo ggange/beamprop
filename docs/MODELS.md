@@ -15,7 +15,7 @@ depends on looking a number up.
 
 ## Claims ledger
 
-**Read this before the test count.** `cargo test` runs 217 tests. That number is
+**Read this before the test count.** `cargo test` runs 219 tests. That number is
 not a measure of how much of this solver is validated against the world, and
 reading it as one would be a mistake: most of those tests check that the code
 solves the equations it was given, several deliberately assert a *known
@@ -50,7 +50,7 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 106 rows below: 71 verified, 10 validated, 14 pinned, 11 ungated.**
+**Census of the 108 rows below: 72 verified, 10 validated, 15 pinned, 11 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
 not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
@@ -136,6 +136,8 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | Per-slice integrator is exact and step-size independent | `breakdown0d::tests::{pure_cascade_is_exponential_growth, pure_loss_is_exponential_decay, mpi_only_seeding_is_linear, balance_point_is_linear_from_seed, slice_refinement_is_consistent}` | verified | 1e-9 relative |
 | **Measured `I_thr(p)` slope, against the `δ_eff` literature envelope** | `tt2012_threshold_slope_matches_measurement` | **validated** | measured 0.329 inside `[0.174, 0.382]`; centre 0.264. Red and `#[ignore]`d 2026-07-25 → 2026-07-30, retired by the closure change, not by re-banding |
 | **Chylek's low-pressure branch: the kernel is still far too steep** | `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | **pinned** | 10–100 Torr: kernel 1.293 vs measured 0.428, down from 1.954 once the free-molecular escape landed. The high-pressure window *agrees* (0.431 vs 0.468), so the failure is one-sided |
+| **The residual against Chylek is localised to 70–350 Torr** | `chylek1990_residual_is_localised_to_mid_pressure` | **pinned** | six matched bands: kernel tracks to <0.25 outside, 2.0–2.3× too steep inside; the measurement is *not* locally flat (0.31–0.55) |
+| The mid-pressure residual is not a level artifact | `the_mid_pressure_residual_is_not_a_level_artifact` | verified | walking `δ_eff` from a 15.8× level to 3.4× makes the peak local exponent *rise*, 1.04 → 1.42 |
 | **The wavelength ratio is falsified against measurement, in sign** | `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared` | **pinned** | kernel 3.39 vs measured ≈ 0.80; overshoot ≈ 4.24× (was 3.99 / 4.99× before the closure change) |
 | **Keldysh MPI does not close the wavelength gap** | `keldysh_mpi_does_not_close_the_wavelength_gap` | **pinned** | order-unity prefactor lands at 2.89 vs measured 0.80; the 18 % of the gap it closes is a smaller denominator, not a better rate |
 | **T&T's own MPI calibration undershoots their own measurement** | `breakdown0d::tests::tt2012_mpi_calibration_undershoots_the_data` | **pinned** | 37× below |
@@ -1118,11 +1120,55 @@ wavelength ratio also moves, 3.39 → **2.854** against a measured 0.80 (oversho
 at 1064.
 
 **What it costs, recorded rather than smoothed over.** The 300–786 Torr window
-slips from 0.431 to 0.386 against 0.468, and a **mid-pressure bump** survives at
-100–300 Torr (0.857 vs 0.413) — which is where the seeding transition sits:
-multiphoton ionization supplies the electrons below ~100 Torr and the cascade
-does above ~300, and the kernel crosses between them too abruptly. That is a
-sharper open question than the one it replaces. Absolute thresholds rise 3.3–4.2 %.
+slips from 0.431 to 0.386 against 0.468, absolute thresholds rise 3.3–4.2 %, and
+a **mid-pressure residual** survives — see below, where it is diagnosed
+properly.
+
+### The mid-pressure residual (`chylek1990_residual_is_localised_to_mid_pressure`)
+
+The three wide windows above are the right shape for asking *is the kernel a
+power law* and the wrong shape for asking *where is it wrong*: they compare the
+model's local behaviour against a measured window average. Redone like-for-like
+on six narrow bands, both fitted over the same measured abscissae:
+
+| band (Torr) | measured | model | cascade only |
+|---|---|---|---|
+| 4–12 | 0.308 | 0.238 | 2.203 |
+| 12–30 | 0.485 | 0.316 | 1.275 |
+| 30–70 | 0.553 | **0.580** | 1.300 |
+| 70–150 | 0.455 | **1.045** | 1.191 |
+| 150–350 | 0.339 | **0.690** | 0.769 |
+| 350–800 | 0.458 | 0.350 | 0.389 |
+
+The measurement is **not** locally flat — it runs 0.31–0.55 — and the kernel
+tracks it to better than 0.25 everywhere except **70–350 Torr**, where it is
+2.0–2.3× too steep. That is much narrower than "the kernel is not a power law",
+and it is exactly the band nothing masks: below ~30 Torr free-molecular escape
+and multiphoton seeding both bite, above ~350 Torr diffusion is sub-dominant to
+the cascade plateau, and in between `D_e/Λ²` carries the pressure dependence
+alone, at `Kn` = 0.03–0.14 where the free-molecular correction is a few per cent.
+
+Two candidate explanations have been tested and **both fail**:
+
+- **It is not the absolute level.** The tidy story would be that a model running
+  14–33× high overstates an `I⁶` source by ~10⁶, with a drift because the offset
+  drifts. Sweeping `δ_eff` walks the level from 15.8× to 3.4× and the bump gets
+  *worse*, peak local exponent 1.04 → 1.42. Gated as
+  `the_mid_pressure_residual_is_not_a_level_artifact`, which also rules out
+  fitting `δ_eff` — the tempting move, since it is the milestone's one remaining
+  free constant.
+- **It is not space-charge screening.** Free diffusion is only valid while the
+  plasma is tenuous; above `n_e` ≈ `ε₀ε_e/(e²Λ²)` = 6.2×10¹⁸ m⁻³ — four decades
+  below `n_bd` — diffusion should become ambipolar and ~130× weaker. Prototyped
+  with a cited ion mobility: it **redistributes** the error rather than removing
+  it (70–150 Torr 1.022 → 0.339, but 4–12 Torr 0.237 → 0.702 against a measured
+  0.308), for a net improvement of ~13 % in total absolute error at the cost of
+  a new constant. Not landed: a marginal gain bought with a new constant is what
+  this project's rules exist to refuse.
+
+So the residual is a genuine shape defect in the continuum diffusion loss, it is
+not reachable by any constant the model already has, and the obvious missing
+mechanism does not account for it. That is M6a's sharpest open question.
 
 **Window independence now holds for a better reason.** It used to hold because
 the seed was clamped, which patched a symptom; with production replacing the
