@@ -1769,9 +1769,20 @@ fn keldysh_exponent_series_matches_direct_form() {
 ///
 /// So the honest conclusion is that the λ gap is **not** a missing MPI channel at
 /// these intensities. Either the Keldysh prefactor for molecular O₂ is orders
-/// above unity (PPT Coulomb corrections — checkable against published `σ_K`, the
-/// open item), or the two-paper comparison carries a systematic. This gate exists
-/// so that conclusion is pinned rather than re-guessed.
+/// above unity (PPT Coulomb corrections — checkable against published `σ_K`), or
+/// the two-paper comparison carries a systematic. This gate exists so that
+/// conclusion is pinned rather than re-guessed.
+///
+/// **Both branches have since been settled, and neither rescues the ratio.**
+/// `ppt_rate_matches_the_measured_o2_cross_section` closes the first by
+/// measurement: PPT's *derived* prefactor for O₂ reproduces an absolutely
+/// calibrated `σ₈` within 2×, so it is not orders above unity, and
+/// `ppt_does_not_close_the_wavelength_gap_either` shows it moves the ratio to
+/// 2.947 — 16 % of the gap. The second branch turns out to be real and specific:
+/// `ppt_seeding_thresholds_separate_the_two_experiments` finds the 532 nm
+/// measurement sitting exactly at its multiphoton seeding threshold while the
+/// 1064 nm one sits 5.7× below its own, i.e. the two benches are not measuring
+/// the same mechanism.
 #[test]
 fn keldysh_mpi_does_not_close_the_wavelength_gap() {
     use beamprop::breakdown0d::AirBreakdown;
@@ -1824,6 +1835,416 @@ fn keldysh_mpi_does_not_close_the_wavelength_gap() {
         ratio_at(1e3) > 1.5,
         "ratio at prefactor 10³ is {:.3}; expected still ≈2.31, i.e. far from {MEASURED}",
         ratio_at(1e3)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M6a — PPT photoionization for molecular O₂ (T12).
+//
+// The successor `keldysh_mpi_does_not_close_the_wavelength_gap` named: Keldysh's
+// prefactor is an order-unity function nobody pins, and PPT's Coulomb correction
+// was the one candidate that could plausibly move it by orders of magnitude.
+//
+// What makes this different from every earlier MPI attempt in this file: PPT's
+// prefactor is **fully determined** once Z_eff is given, Z_eff for O₂ is
+// published (0.53, Talebpour 1999), and the resulting absolute rate can be
+// checked against a MEASURED cross-section rather than against the breakdown
+// data the model is trying to explain. That is the D5 trap avoided by
+// construction — the anchor and the target are different experiments measuring
+// different quantities.
+//
+// Four gates: one verification (the multiphoton order), one absolute validation
+// (the σ₈ anchor), and two results.
+// ---------------------------------------------------------------------------
+
+/// O₂ ionization potential in J, as the kernel carries it.
+const U_ION_O2_J: f64 = 12.06 * 1.602_176_634e-19;
+
+fn omega_of_nm(nm: f64) -> f64 {
+    2.0 * std::f64::consts::PI * 299_792_458.0 / (nm * 1e-9)
+}
+
+/// **T12-V4 verify: in the multiphoton regime PPT gives an *integer* photon
+/// order, `K = ⌈ν⌉` — which `keldysh_rate` does not.**
+///
+/// This gate was written expecting the non-integer `ν = (U_i/ħω)(1+1/2γ²)` and
+/// measured `K` instead: 10.998 at 1064 nm where `ν` = 10.34. That is not an
+/// error, it is the above-threshold sum doing its job, and it is worth stating
+/// because it is the clearest structural difference between the two rates.
+///
+/// The mechanism: the leading ATI term carries `e^{−α(γ)(⌈ν⌉−ν)}`, and
+/// `α ≈ 2[ln 2γ − 1]` with `γ ∝ I^{−1/2}`, so `dα/d ln I = −1` and the term
+/// contributes `+(⌈ν⌉−ν)` to the log-log slope. It exactly completes `ν` to the
+/// next integer. A multiphoton rate *must* go as `I^K` for whole `K` — you
+/// cannot absorb 10.34 photons — and the bare Keldysh exponential's fractional
+/// order is a known artifact of dropping the sum.
+///
+/// This is what licenses reading the σ₈ anchor below as an eight-photon
+/// cross-section: at 800 nm `ν` = 7.78 and the fitted order is 7.998.
+#[test]
+fn ppt_multiphoton_order_is_the_integer_photon_count() {
+    use beamprop::breakdown0d::{Z_EFF_O2, keldysh_gamma, ppt_rate};
+
+    // ⌈U_i/ħω⌉: 11 photons at 1064 nm, 8 at 800 nm, 6 at 532 nm.
+    for (nm, expected) in [(800.0f64, 8.0f64), (1064.0, 11.0), (532.0, 6.0)] {
+        let omega = omega_of_nm(nm);
+        // Deep multiphoton: pick an intensity decade where γ ≫ 1 so the 1/2γ²
+        // shift in ν is below the fit's own resolution.
+        let lo = 1e14;
+        let hi = 2e14;
+        assert!(
+            keldysh_gamma(hi, omega, U_ION_O2_J) > 30.0,
+            "{nm} nm: γ = {:.1} at the top of the fit window — not deep enough \
+             in the multiphoton branch for ν ≈ U_i/ħω",
+            keldysh_gamma(hi, omega, U_ION_O2_J)
+        );
+        let order = (ppt_rate(hi, omega, U_ION_O2_J, Z_EFF_O2)
+            / ppt_rate(lo, omega, U_ION_O2_J, Z_EFF_O2))
+        .ln()
+            / (hi / lo).ln();
+        assert!(
+            (order - expected).abs() < 0.02,
+            "{nm} nm: fitted photon order {order:.4}, expected the integer \
+             K = {expected}"
+        );
+    }
+}
+
+/// T12-V5 verify: `ppt_rate` and `keldysh_rate` carry the **same exponent**.
+///
+/// PPT is Keldysh's exponent with a derived prefactor; the code reuses
+/// `keldysh_tunnel_exponent` rather than re-deriving it, and this gate is what
+/// makes that reuse checkable from outside. If the two ever drift apart, every
+/// conclusion drawn from the Keldysh exponent gates stops bounding the PPT rate.
+///
+/// The test is a log-log slope comparison, because "same exponent" and "same
+/// value" are different claims: the two rates differ by a genuine power of `I`
+/// (the `⌈ν⌉ − ν` completion that
+/// `ppt_multiphoton_order_is_the_integer_photon_count` explains), so their
+/// **ratio** is a power law of order under 1 while the rates themselves are of
+/// order 11. A prefactor may drift like that; a difference in the exponential
+/// could not — it would make the ratio's own slope grow with the rates'.
+#[test]
+fn ppt_and_keldysh_share_the_same_exponent() {
+    use beamprop::breakdown0d::{Z_EFF_O2, keldysh_rate, ppt_rate};
+
+    let omega = omega_of_nm(1064.0);
+    let mut rate_pts = Vec::new();
+    let mut ratio_pts = Vec::new();
+    for k in 0..=8 {
+        let i = 1e14 * 10f64.powf(k as f64 * 0.5);
+        let w_ppt = ppt_rate(i, omega, U_ION_O2_J, Z_EFF_O2);
+        let w_kel = keldysh_rate(i, omega, U_ION_O2_J, 1.0);
+        assert!(w_ppt > 0.0 && w_kel > 0.0, "rate vanished at I = {i:e}");
+        rate_pts.push((i, w_ppt));
+        ratio_pts.push((i, w_ppt / w_kel));
+    }
+    let rate_order = beamprop::validate::loglog_slope(&rate_pts).expect("rate slope");
+    let ratio_order = beamprop::validate::loglog_slope(&ratio_pts).expect("ratio slope");
+
+    // 9.9 over this sweep, not 11: the four decades deliberately run out of the
+    // multiphoton branch at the top, which is where a mismatched exponent would
+    // show up most violently.
+    assert!(
+        rate_order > 9.0,
+        "the rates only rise as I^{rate_order:.3} over the sweep — widen it, or \
+         this gate is not testing an exponent"
+    );
+    assert!(
+        ratio_order.abs() < 1.0,
+        "W_PPT/W_Keldysh rises as I^{ratio_order:.3} while the rates rise as \
+         I^{rate_order:.3}. The ratio must stay a bounded power (≈0.66, the \
+         ⌈ν⌉−ν completion): if it tracks the rate order, the two functions have \
+         stopped sharing keldysh_tunnel_exponent"
+    );
+}
+
+/// **T12-P1 validation — the absolute anchor, and PPT passes it.**
+///
+/// The first check in this file on a photoionization *magnitude* against a
+/// measurement. Every previous one compared the kernel's breakdown threshold to
+/// a breakdown threshold, which cannot separate the MPI rate from the cascade
+/// that follows it.
+///
+/// **The anchor.** `σ₈ = (3.3 ± 0.3)×10⁻¹³⁰ W⁻⁸m¹⁶s⁻¹` for O₂ at 800 nm,
+/// 164 fs — an *absolute* rate, obtained by counting the electrons directly with
+/// Rayleigh microwave scattering calibrated against dielectric scatterers of
+/// known properties. A. Sharma, M. N. Slipchenko, M. N. Shneider et al.,
+/// "Counting the electrons in a multiphoton ionization by elastic scattering of
+/// microwaves", *Sci. Rep.* **8**, 2874 (2018); arXiv:1710.03361.
+///
+/// **Why this anchor and not another.** `K = 8` at 800 nm sits *between* the
+/// kernel's two wavelengths of interest (`K` = 11 at 1064 nm, 6 at 532 nm), so
+/// using it is interpolation. And it is a different observable on a different
+/// bench from anything M6a is trying to reproduce.
+///
+/// **The result.** With `Z_eff` = 0.53 taken from Talebpour and *nothing fitted*,
+///
+/// | `I` (W/cm²) | `W_PPT / σ₈I⁸` |
+/// |---|---|
+/// | 10¹⁰ | 1.995 |
+/// | 10¹¹ | 1.974 |
+/// | 10¹² | 1.768 |
+/// | 3×10¹² | 1.289 |
+///
+/// PPT reproduces an absolutely-calibrated measured cross-section **within a
+/// factor of 2**, and on the high side — which is the direction the paper itself
+/// reports for purely theoretical predictions ("semi-empirical predictions
+/// underestimate the rates about 2–3 times, while purely theoretical predictions
+/// seem to slightly overestimate"). An independent cross-check bounds it further:
+/// Talebpour's own measured 3×10⁹ s⁻¹ at 3×10¹³ W/cm² sits 7× below `σ₈·I⁸` at
+/// the same intensity, so the two published anchors disagree by more than PPT
+/// disagrees with either.
+///
+/// **The consequence for T10.** The escape hatch left open by
+/// `keldysh_mpi_does_not_close_the_wavelength_gap` — "either the prefactor for
+/// molecular O₂ is orders above unity, or the comparison carries a systematic" —
+/// is now closed on the first branch, by measurement. The prefactor is not
+/// orders above unity. It is 2×, and it is anchored.
+///
+/// The comparison is deliberately made at `I` ≤ 10¹² W/cm², below the paper's
+/// 2.7×10¹³ ceiling: PPT's fitted order softens as `γ` falls (see
+/// `ppt_multiphoton_order_matches_nu`), so above ~10¹² the two functions are no
+/// longer the same power of `I` and a magnitude ratio stops being meaningful.
+/// The paper's `U_i` = 12.2 eV against the kernel's 12.06 is a further reason
+/// not to read this tighter than the factor it is stated to.
+#[test]
+fn ppt_rate_matches_the_measured_o2_cross_section() {
+    use beamprop::breakdown0d::{Z_EFF_O2, ppt_rate};
+
+    // Sci. Rep. 8, 2874 (2018), eight-photon ionization of O₂ at 800 nm.
+    const SIGMA_8: f64 = 3.3e-130; // W⁻⁸ m¹⁶ s⁻¹
+    let omega = omega_of_nm(800.0);
+
+    let ratios: Vec<f64> = [1e10f64, 3e10, 1e11, 3e11, 1e12]
+        .iter()
+        .map(|&i_wcm2| {
+            let i = i_wcm2 * 1e4;
+            ppt_rate(i, omega, U_ION_O2_J, Z_EFF_O2) / (SIGMA_8 * i.powi(8))
+        })
+        .collect();
+
+    let lo = ratios.iter().copied().fold(f64::MAX, f64::min);
+    let hi = ratios.iter().copied().fold(0.0f64, f64::max);
+
+    // The substantive claim: absolute agreement within a factor of 2, with
+    // nothing fitted. The band is set by the measurement's own 9 % uncertainty
+    // and the 7× spread between the two published anchors — not by what makes
+    // this pass.
+    assert!(
+        (1.5..=2.2).contains(&hi),
+        "PPT/σ₈ peaks at {hi:.3} over the multiphoton window, expected ≈1.99. \
+         This is an ABSOLUTE comparison against a measured cross-section: if it \
+         moved, either Z_eff, the Coulomb normalisation, or the unit conversion \
+         changed"
+    );
+    assert!(
+        lo > 1.5,
+        "PPT/σ₈ falls to {lo:.3} inside the window where both are I⁸; the \
+         comparison is only meaningful where the orders match"
+    );
+    // Theory above measurement, which is the direction the source paper reports.
+    assert!(
+        lo > 1.0,
+        "PPT now undershoots the measurement ({lo:.3}); the paper reports purely \
+         theoretical predictions overshooting slightly"
+    );
+}
+
+/// **T12-P2 — PPT does not close the wavelength gap either, and now that is
+/// measured rather than assumed.**
+///
+/// With the anchored rate live at both wavelengths:
+///
+/// | source | `I_th(532)/I_th(1064)` | gap closed |
+/// |---|---|---|
+/// | cascade only | 3.349 | — |
+/// | Keldysh, prefactor 1 | 2.89 | 18 % |
+/// | **PPT, `Z_eff` = 0.53** | **2.947** | **16 %** |
+/// | PPT + a physical seed (10⁹ m⁻³) | 2.835 | 20 % |
+/// | measured | **0.80** | |
+///
+/// PPT's derived prefactor lands essentially where an order-unity Keldysh
+/// prefactor did. That is not a coincidence and it is the point: `n*` =
+/// `Z_eff/κ` = 0.563 makes the Coulomb exponent `2n* − 3/2` **negative**, so the
+/// correction that "can move the prefactor by orders of magnitude" for an atom
+/// with `Z` = 1 is order-unity for a molecule with `Z_eff` = 0.53. The scoping
+/// estimate that this would be a large *lift* was wrong, and measuring it is
+/// what showed so.
+///
+/// **So the λ⁻² failure is not a missing or mis-normalised MPI channel.** T10
+/// left two branches open; P1 closed the prefactor branch by measurement and
+/// this one closes the consequence. What survives is the cascade's own
+/// wavelength scaling and the possibility of a systematic between the two
+/// benches — and `ppt_seeding_thresholds_separate_the_two_experiments` below
+/// argues the latter is real and specific.
+#[test]
+fn ppt_does_not_close_the_wavelength_gap_either() {
+    use beamprop::breakdown0d::{AirBreakdown, Z_EFF_O2};
+
+    let p = 760.0 * TORR;
+    let ratio = |ppt: bool, seed: Option<f64>| -> f64 {
+        let mk = |nm: f64| {
+            let m = AirBreakdown::dry_air_tt2012_focus(nm * 1e-9).expect("λ in range");
+            let m = if ppt { m.with_ppt_mpi(Z_EFF_O2) } else { m };
+            match seed {
+                Some(n) => m.with_seed_density(n),
+                None => m,
+            }
+        };
+        mk(532.0)
+            .threshold_intensity(6.5e-9, p, 600)
+            .expect("532 nm")
+            / mk(1064.0)
+                .threshold_intensity(6.0e-9, p, 600)
+                .expect("1064 nm")
+    };
+
+    const MEASURED: f64 = 0.80;
+    let cascade_only = ratio(false, None);
+    let with_ppt = ratio(true, None);
+    let with_ppt_and_seed = ratio(true, Some(1e9));
+
+    assert!(
+        (3.2..=3.5).contains(&cascade_only),
+        "cascade-only baseline moved to {cascade_only:.3}, expected ≈3.35"
+    );
+    let closed = (cascade_only - with_ppt) / (cascade_only - MEASURED);
+    assert!(
+        with_ppt > 2.5 && closed < 0.30,
+        "PPT gives ratio {with_ppt:.3}, closing {:.1}% of the gap from \
+         {cascade_only:.3} to the measured {MEASURED}. This gate asserts that a \
+         rate whose prefactor is DERIVED and then validated absolutely against \
+         σ₈ still does not close it — which is a much stronger statement than \
+         the Keldysh version, where the prefactor was a free choice",
+        closed * 100.0
+    );
+    // Replacing the unphysical one-electron-per-focal-volume seed with a
+    // background density helps, and not enough.
+    assert!(
+        (2.7..=2.95).contains(&with_ppt_and_seed),
+        "PPT with a physical seed gives {with_ppt_and_seed:.3}, expected ≈2.84"
+    );
+}
+
+/// **T12-P3 — the two anchor experiments are not in the same regime, and the
+/// seeding calculation says so without using the model's threshold at all.**
+///
+/// M6a's wavelength comparison has always assumed T&T at 1064 nm and Chylek at
+/// 532 nm measure the same mechanism at two wavelengths. This gate tests that
+/// assumption directly, using only measured quantities:
+///
+/// ```text
+/// N_seed = W_PPT(I_measured) · N · V_focal · τ_pulse
+/// ```
+///
+/// — the number of electrons multiphoton ionization puts in the focal volume
+/// during the pulse, evaluated at each paper's **own measured threshold**, with
+/// each paper's own focal radius and pulse length. No model threshold enters,
+/// so the kernel's pinned 3.90–4.69× level offset
+/// (`tt2012_level_ratio_is_bounded_within_scatter`) cannot contaminate it.
+///
+/// | | 1064 nm (T&T) | 532 nm (Chylek) |
+/// |---|---|---|
+/// | measured `I_th` (W/cm²) | 2.06×10¹¹ | 1.56×10¹¹ |
+/// | `N_seed` at that intensity | **5.4×10⁻⁹** | **3.05** |
+/// | `I` where `N_seed` = 1 | 1.18×10¹² | 1.30×10¹¹ |
+/// | that, over measured `I_th` | 5.73× | **0.83×** |
+///
+/// **At 532 nm the measured breakdown threshold *is* the multiphoton seeding
+/// threshold, to 17 %.** At 1064 nm multiphoton ionization is 5.7× short of
+/// producing even one electron, so breakdown there must be seeded by something
+/// else — background ionization, impurities, or dust — exactly as the classical
+/// picture of ns IR breakdown has it.
+///
+/// This is a prediction, not a fit: the rate is `ppt_rate` at the published
+/// `Z_eff`, validated absolutely by
+/// `ppt_rate_matches_the_measured_o2_cross_section`, and the geometry and pulse
+/// length are the papers'.
+///
+/// **What it means for the λ gap.** The two experiments sit on opposite sides of
+/// the seeding transition, so their threshold *ratio* is not a measurement of
+/// one mechanism's wavelength scaling — which is the systematic T10 could only
+/// name as a possibility. It does not repair the kernel (see
+/// `ppt_does_not_close_the_wavelength_gap_either`, which measures the repair and
+/// finds 16 %); it says what the remaining discrepancy is made of.
+///
+/// **Caveats, stated because they bound how much this means.** `V_focal` uses
+/// each paper's own focal radius (16.5 µm Chylek, 20 µm T&T) at T&T's 66 µm
+/// depth of focus, since Chylek does not give one; the threshold intensities are
+/// the digitized 760-Torr points; and `N_seed` = 1 is a criterion, not a
+/// measured quantity — it is the natural one for a volume that either contains
+/// an electron or does not.
+#[test]
+fn ppt_seeding_thresholds_separate_the_two_experiments() {
+    use beamprop::breakdown0d::{Z_EFF_O2, ppt_rate};
+    const K_B: f64 = 1.380_649e-23;
+    let n_neutral = 101_325.0 / (K_B * 288.0);
+    let pi = std::f64::consts::PI;
+
+    // (λ nm, measured I_th at ~760 Torr in W/cm², pulse FWHM, focal radius m)
+    let cases = [
+        (1064.0f64, 2.0609e11f64, 6.0e-9f64, 20.0e-6f64),
+        (532.0, 1.560e11, 6.5e-9, 16.5e-6),
+    ];
+    let mut seeds = Vec::new();
+    let mut headroom = Vec::new();
+    for (nm, i_wcm2, tau, r) in cases {
+        let omega = omega_of_nm(nm);
+        let volume = pi * r * r * 66.0e-6;
+        let i_si = i_wcm2 * 1e4;
+        let n_seed = ppt_rate(i_si, omega, U_ION_O2_J, Z_EFF_O2) * n_neutral * volume * tau;
+        seeds.push(n_seed);
+
+        // Intensity at which N_seed = 1, by log-bisection.
+        let (mut lo, mut hi) = (1e14f64, 1e22f64);
+        for _ in 0..200 {
+            let mid = (lo * hi).sqrt();
+            if ppt_rate(mid, omega, U_ION_O2_J, Z_EFF_O2) * n_neutral * volume * tau < 1.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        headroom.push((lo * hi).sqrt() / i_si);
+    }
+
+    // 1064 nm: MPI essentially never supplies the seed at the measured
+    // threshold. Asserted as a magnitude, not a sign, because "small" here
+    // means nine orders.
+    assert!(
+        seeds[0] < 1e-6,
+        "1064 nm N_seed = {:.3e} at the measured threshold; expected ≈5.4e-9, \
+         i.e. MPI cannot seed there",
+        seeds[0]
+    );
+    // 532 nm: it does, and only just — the measured threshold and the seeding
+    // threshold coincide.
+    assert!(
+        (0.5..=20.0).contains(&seeds[1]),
+        "532 nm N_seed = {:.4} at the measured threshold; expected ≈3.05, i.e. \
+         of order one electron per pulse",
+        seeds[1]
+    );
+    assert!(
+        (0.6..=1.4).contains(&headroom[1]),
+        "532 nm: the seeding threshold is {:.3}× the measured breakdown \
+         threshold; expected ≈0.83, i.e. they coincide",
+        headroom[1]
+    );
+    assert!(
+        headroom[0] > 3.0,
+        "1064 nm: the seeding threshold is only {:.3}× the measured breakdown \
+         threshold; expected ≈5.73×, i.e. clearly above it",
+        headroom[0]
+    );
+    // The separation itself: the two experiments differ by nine orders in how
+    // much multiphoton seeding is available at their own thresholds.
+    assert!(
+        seeds[1] / seeds[0] > 1e6,
+        "the two experiments' seed availability differs by only {:.2e}; the \
+         claim of this gate is that they are in different regimes",
+        seeds[1] / seeds[0]
     );
 }
 

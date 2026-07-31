@@ -1162,8 +1162,76 @@ went 0.4665 → 0.4313 against a measured 0.468, and the T&T window 0.2793 →
 0.2636 against 0.329 — both still inside the `δ_eff` literature envelope, so the
 red gate stays green (envelope now `[0.174, 0.382]`, centre 0.264).
 
+### PPT for molecular O₂ — 2026-07-31, and the MPI question closes
+
+The Keldysh section above left the open item in two branches: *either* the
+prefactor for molecular O₂ is orders above unity (PPT Coulomb corrections), *or*
+the two-paper comparison carries a systematic. Both are now settled, and it is
+the second one.
+
+**What made this doable now was an anchor, not a formula.** T12 was written
+requiring a prefactor "justified to ~2 orders", which is why it sat open. Two
+published numbers do better:
+
+- `σ₈ = (3.3 ± 0.3)×10⁻¹³⁰ W⁻⁸m¹⁶s⁻¹`, the **absolute** eight-photon ionization
+  cross-section of O₂ at 800 nm, from counting the electrons directly by Rayleigh
+  microwave scattering against calibrated dielectric scatterers (Sci. Rep. **8**,
+  2874 (2018)). `K` = 8 at 800 nm sits *between* the kernel's `K` = 11 at 1064 nm
+  and `K` = 6 at 532 nm, so using it is interpolation.
+- `Z_eff` = 0.53 for O₂ (Talebpour, Chien and Chin, J. Phys. B **32**, 1229
+  (1999)), the single molecular parameter PPT needs — published, so it enters as
+  a cited constant rather than a fit. Their own rate point, 3×10⁹ s⁻¹ at
+  3×10¹³ W/cm², sits 7× below `σ₈·I⁸`, which bounds the truth to about an order
+  of magnitude before any theory is involved.
+
+The formulation, the numbers and the gate list are in `docs/MODELS.md` §
+"PPT photoionization for molecular O₂". Three things belong here as milestone
+record.
+
+**1. The first absolute validation of a rate in this milestone.** Every previous
+MPI attempt compared a breakdown threshold to a breakdown threshold, which cannot
+separate the ionization rate from the cascade that follows it. PPT's derived
+prefactor reproduces `σ₈` to **1.99×**, nothing fitted, and on the high side —
+the direction the source paper reports for purely theoretical predictions. That
+closes the prefactor branch by measurement rather than by argument.
+
+**2. The expectation that motivated the work was wrong, and measuring it is what
+showed so.** The scoping estimate said the Coulomb correction would lift the
+prefactor by ~10³–10⁴, because for an atom with `Z` = 1 the exponent `2n*` is
+≈ 2.1. For O₂ at `Z_eff` = 0.53, `n*` = 0.563 and the exponent `2n* − 3/2` is
+**negative**: the correction is order-unity. The λ ratio moves 3.349 → 2.947,
+16 % of the gap — essentially where an order-unity Keldysh prefactor already
+put it. Recorded because it was the whole hypothesis.
+
+**3. A structural result a gate found by failing.** `ppt_multiphoton_order_*`
+was written asserting the ponderomotively shifted order `ν = (U_i/ħω)(1+1/2γ²)`
+and measured 10.998 at 1064 nm where `ν` = 10.34. The above-threshold sum's
+leading term carries `e^{−α(γ)(⌈ν⌉−ν)}` with `dα/d ln I = −1`, which contributes
+exactly `⌈ν⌉ − ν`: PPT returns the **integer** photon order. That is a
+requirement, not a curiosity — you cannot absorb 10.34 photons — and the bare
+Keldysh exponential's fractional order is an artifact of dropping the sum. The
+gate was renamed to assert what it measured.
+
+**What it leaves.** The seeding calculation (`N_seed = W·N·V·τ` at each paper's
+own measured threshold, with no model threshold anywhere in it) puts the 532 nm
+measurement **at** its multiphoton seeding threshold, 0.83×, and the 1064 nm
+measurement 5.7× **below** its own. The two anchors are on opposite sides of that
+transition, so their threshold ratio is not one mechanism's wavelength scaling.
+M6a's remaining λ discrepancy is therefore part cascade closure and part
+comparing two different experiments — and that second part is now a measured
+statement rather than the hand-wave "or a systematic" it replaces.
+
+**Status of the MPI question, plainly.** Three channels have been tried against
+this data: T&T's own calibrated `σ_K` (37× below their own measurement), Keldysh
+(3–18 % of the gap), and PPT (16 %, with the rate itself now validated
+absolutely). None closes it, and the PPT result is the one that cannot be
+answered with "your prefactor was wrong".
+
 ## NOT in scope (M6a)
 
+- **Molecular structure beyond `Z_eff`** — no interference or alignment terms in
+  the PPT rate. `Z_eff` = 0.53 is the published effective-charge summary of
+  exactly that physics; inventing more would be unanchored.
 - Any propagator coupling.
 - Plasma back-reaction on the beam (absorption/refraction) — M6c.
 - Recombination / afterglow / multi-pulse.

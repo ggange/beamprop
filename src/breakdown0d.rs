@@ -100,6 +100,10 @@ const EPS0: f64 = 8.854_187_812_8e-12;
 const HBAR: f64 = 1.054_571_817e-34;
 /// Reference pressure, 1 atm (Pa).
 const P_REF: f64 = 101_325.0;
+/// Hartree energy (J) — the atomic unit of energy (CODATA 2018).
+const HARTREE: f64 = 4.359_744_722_207_1e-18;
+/// Atomic unit of electric field (V/m) — `E_h/(e·a₀)` (CODATA 2018).
+const F_ATOMIC: f64 = 5.142_206_747_63e11;
 
 /// Largest growth exponent `β·dt` the integrator evaluates; `exp` overflows
 /// above ~709. See [`AirBreakdown::advance`].
@@ -108,6 +112,29 @@ const MAX_EXPONENT: f64 = 700.0;
 /// Below this `γ` the direct form of [`keldysh_tunnel_exponent`] loses precision
 /// to cancellation, and the small-`γ` series is used instead.
 const KELDYSH_SERIES_CUTOVER: f64 = 0.1;
+
+/// Above this `x` the Maclaurin series for [`dawson`] loses to cancellation and
+/// the asymptotic series is used instead. Both are accurate to ~1.3×10⁻⁷ at the
+/// join, which is where the joint error is smallest — the series degrades fast
+/// above it (4.5×10⁻¹ by `x` = 6) and the asymptotic series degrades below it.
+const DAWSON_SERIES_CUTOVER: f64 = 4.0;
+
+/// Terms kept in the PPT above-threshold-ionization sum, see [`ppt_rate`].
+/// Fixed by `ppt_ati_sum_is_converged`, not exposed as a knob: the summand
+/// carries `e^{−α(γ)(n−ν)}` with `α ≈ 2 ln 2γ` ≈ 7 at the thresholds of
+/// interest, so the tail is negligible long before this.
+const PPT_ATI_TERMS: usize = 64;
+
+/// Effective residual charge `Z_eff` for molecular O₂ in PPT.
+///
+/// **Published, not fitted**: Talebpour, Chien and Chin, *J. Phys. B* 32, 1229
+/// (1999), fit PPT to measured O₂ ionization at 800 nm and report
+/// `Z_eff` = 0.53. It is below 1 because the departing electron in a molecule
+/// does not see a bare unit charge, and it is the single molecular parameter
+/// [`ppt_rate`] needs. Supplying it from the literature rather than from this
+/// project's own threshold data is what keeps the resulting rate an independent
+/// prediction — see `docs/M6A_SPEC.md` § "PPT for molecular O₂".
+pub const Z_EFF_O2: f64 = 0.53;
 
 /// Bisection bracket for [`AirBreakdown::threshold_intensity`] (W/m²).
 const I_BRACKET_LO: f64 = 1e12;
@@ -414,6 +441,194 @@ pub fn keldysh_rate(intensity: f64, omega: f64, u_ion: f64, prefactor: f64) -> f
         return 0.0;
     }
     prefactor * omega * (-s.min(MAX_EXPONENT)).exp()
+}
+
+/// Dawson's integral `Φ(x) = e^{−x²}∫₀ˣ e^{y²} dy`.
+///
+/// Needed by [`ppt_rate`]'s above-threshold sum. Two series with a documented
+/// join at [`DAWSON_SERIES_CUTOVER`], in the same pattern as
+/// [`keldysh_tunnel_exponent`]:
+///
+/// - `x ≤ 4`: the Maclaurin series `Σ (−2)ⁿ x^{2n+1}/(2n+1)!!`, exact term
+///   recurrence, accurate to 1.6×10⁻⁹ over the range.
+/// - `x > 4`: the asymptotic series `(1/2x)·Σ (2n−1)!!/(2x²)ⁿ`, truncated at
+///   its smallest term (it is divergent), accurate to 1.3×10⁻⁷ at the join and
+///   rapidly better above it.
+///
+/// Odd, so negative arguments reflect. `ppt_rate` only ever calls it with
+/// `x = √(β(n−ν)) ∈ [0, ~4]`, but the asymptotic branch is kept so the function
+/// is correct as published rather than correct only where it happens to be used.
+pub fn dawson(x: f64) -> f64 {
+    if x == 0.0 || !x.is_finite() {
+        return if x.is_nan() { f64::NAN } else { 0.0 };
+    }
+    if x < 0.0 {
+        return -dawson(-x);
+    }
+    if x <= DAWSON_SERIES_CUTOVER {
+        let mut term = x;
+        let mut sum = x;
+        for n in 1..500 {
+            term *= -2.0 * x * x / (2 * n + 1) as f64;
+            sum += term;
+            if term.abs() < 1e-18 * sum.abs() {
+                break;
+            }
+        }
+        return sum;
+    }
+    let y = 2.0 * x * x;
+    let mut term = 0.5 / x;
+    let mut sum = term;
+    let mut prev = term.abs();
+    for n in 1..60 {
+        term *= (2 * n - 1) as f64 / y;
+        // Divergent series: stop at the smallest term, which is where the
+        // truncation error is minimised.
+        if term.abs() > prev {
+            break;
+        }
+        sum += term;
+        prev = term.abs();
+    }
+    sum
+}
+
+/// `ln Γ(x)` for `x > 0`, Lanczos approximation (g = 7, n = 9).
+///
+/// Private because [`ppt_rate`] is its only caller, and it is only ever
+/// evaluated at `n*` ≈ 0.56 and `n*+1` — but it is gated where the closed forms
+/// are exact (integers, `Γ(½) = √π`, the reflection formula) rather than only
+/// where it is used.
+fn ln_gamma(x: f64) -> f64 {
+    const G: f64 = 7.0;
+    const COEF: [f64; 9] = [
+        0.999_999_999_999_809_9,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    if x < 0.5 {
+        // Reflection: Γ(x)Γ(1−x) = π/sin(πx).
+        return (PI / (PI * x).sin()).abs().ln() - ln_gamma(1.0 - x);
+    }
+    let z = x - 1.0;
+    let mut series = COEF[0];
+    for (i, c) in COEF.iter().enumerate().skip(1) {
+        series += c / (z + i as f64);
+    }
+    let t = z + G + 0.5;
+    0.5 * (2.0 * PI).ln() + (z + 0.5) * t.ln() - t + series.ln()
+}
+
+/// PPT's above-threshold-ionization factor
+///
+/// ```text
+/// A₀(ω,γ) = (4/√(3π))·(γ²/(1+γ²))·Σ_{n≥⌈ν⌉} e^{−α(n−ν)}·Φ(√(β(n−ν)))
+/// ```
+///
+/// with `α = 2[asinh γ − γ/√(1+γ²)]` and `β = 2γ/√(1+γ²)`. Split out of
+/// [`ppt_rate`] with `terms` explicit so `ppt_ati_sum_is_converged` can vary the
+/// truncation, which is the only way to show [`PPT_ATI_TERMS`] is a converged
+/// choice rather than a tuned one.
+///
+/// The sum runs over channels absorbing `n ≥ ⌈ν⌉` photons — the `⌈·⌉` is a real
+/// channel closing, so `A₀` has genuine kinks as `ν` crosses an integer. They
+/// are physics (the ATI channel-closing structure), not numerical noise.
+fn ppt_ati_sum(gamma: f64, nu: f64, terms: usize) -> f64 {
+    let root = (1.0 + gamma * gamma).sqrt();
+    let alpha = 2.0 * (gamma.asinh() - gamma / root);
+    let beta = 2.0 * gamma / root;
+    let n0 = nu.ceil();
+    let mut sum = 0.0;
+    for k in 0..terms {
+        let d = n0 + k as f64 - nu;
+        let e = -alpha * d;
+        if e < -MAX_EXPONENT {
+            break;
+        }
+        sum += e.exp() * dawson((beta * d).sqrt());
+    }
+    4.0 / (3.0 * PI).sqrt() * (gamma * gamma / (1.0 + gamma * gamma)) * sum
+}
+
+/// Per-neutral PPT (Perelomov–Popov–Terent'ev) photoionization rate (s⁻¹) for
+/// linear polarization and an `l = m = 0` ground state.
+///
+/// ```text
+/// W = |C_n*|²·√(6/π)·U_i·(2F₀/(F√(1+γ²)))^{2n*−3/2}·A₀(ω,γ)·exp[−(2U_i/ħω)f(γ)]
+/// ```
+///
+/// in atomic units, with `κ = √(2U_i)`, `F₀ = κ³`, `n* = Z_eff/κ`, and
+///
+/// ```text
+/// |C_n*|² = 2^{2n*}/(n*·Γ(n*+1)·Γ(n*))
+/// A₀(ω,γ) = (4/√(3π))·(γ²/(1+γ²))·Σ_{n≥⌈ν⌉} e^{−α(n−ν)}·Φ(√(β(n−ν)))
+/// ν = (U_i/ħω)(1 + 1/2γ²)      α = 2[asinh γ − γ/√(1+γ²)]      β = 2γ/√(1+γ²)
+/// ```
+///
+/// **Why this and not [`keldysh_rate`] with a multiplier.** Keldysh's prefactor
+/// is an order-unity function left explicit there because no derivation pins it;
+/// PPT's is *fully specified* once `Z_eff` is given, which is why this function
+/// takes no prefactor argument. That is the entire point of the change: it turns
+/// the soft multiplier into a prediction. `Z_eff` for O₂ is published
+/// ([`Z_EFF_O2`]).
+///
+/// **The exponent is shared, deliberately.** PPT's `(2F₀/3F)·g(γ)` is
+/// algebraically identical to `(2U_i/ħω)·f(γ)`, so
+/// [`keldysh_tunnel_exponent`] is reused rather than re-derived, and every gate
+/// that bounds the Keldysh exponent bounds this rate too
+/// (`ppt_and_keldysh_share_the_same_exponent`). What PPT adds is entirely
+/// prefactor: the Coulomb factor and the above-threshold sum `A₀`.
+///
+/// **`ν` is the ponderomotively shifted photon order**, `(U_i/ħω)(1+1/2γ²)`,
+/// not `⌈U_i/ħω⌉` — the intensity-dependent Stark shift of the continuum edge
+/// is in the theory, and it is why the fitted power law softens below `K` as
+/// `γ` falls (`ppt_multiphoton_order_matches_nu`).
+///
+/// Validated in absolute magnitude against a measured cross-section, not
+/// against threshold data: `ppt_rate_matches_the_measured_o2_cross_section`.
+pub fn ppt_rate(intensity: f64, omega: f64, u_ion: f64, z_eff: f64) -> f64 {
+    if !(intensity > 0.0 && omega > 0.0 && u_ion > 0.0 && z_eff > 0.0) {
+        return 0.0;
+    }
+    // Atomic units.
+    let ip = u_ion / HARTREE;
+    let kappa = (2.0 * ip).sqrt();
+    let f0 = kappa * kappa * kappa;
+    let n_star = z_eff / kappa;
+    let omega_au = omega * HBAR / HARTREE;
+    let field = (2.0 * intensity / (EPS0 * C_LIGHT)).sqrt() / F_ATOMIC;
+    let gamma = omega_au * kappa / field;
+    if !(gamma > 0.0 && gamma.is_finite()) {
+        return 0.0;
+    }
+    let root = (1.0 + gamma * gamma).sqrt();
+
+    // Coulomb normalisation |C_n*|², via ln Γ to stay in range for any n*.
+    let ln_c2 =
+        2.0 * n_star * 2.0f64.ln() - n_star.ln() - ln_gamma(n_star + 1.0) - ln_gamma(n_star);
+    let coulomb = (2.0 * n_star - 1.5) * (2.0 * f0 / (field * root)).ln();
+
+    // Above-threshold sum.
+    let nu = ip / omega_au * (1.0 + 1.0 / (2.0 * gamma * gamma));
+    let a0 = ppt_ati_sum(gamma, nu, PPT_ATI_TERMS);
+    if a0 <= 0.0 {
+        return 0.0;
+    }
+
+    let exponent = 2.0 * ip / omega_au * keldysh_tunnel_exponent(gamma);
+    let ln_w = ln_c2 + 0.5 * (6.0 / PI).ln() + ip.ln() + coulomb + a0.ln() - exponent;
+    if !ln_w.is_finite() || ln_w > MAX_EXPONENT {
+        return 0.0;
+    }
+    // Atomic unit of rate is E_h/ħ.
+    ln_w.exp() * HARTREE / HBAR
 }
 
 /// A monatomic gas, carrying only the two constants that are **exactly known**
@@ -824,6 +1039,10 @@ pub struct AirBreakdown {
     /// Mutually exclusive in practice with [`Self::mpi_rate_ref`] — both are
     /// multiphoton sources, and enabling both double-counts the same channel.
     keldysh_prefactor: f64,
+    /// Effective residual charge for the PPT photoionization source; zero
+    /// disables it. Mutually exclusive with the other two multiphoton paths for
+    /// the same reason. See [`Z_EFF_O2`].
+    ppt_z_eff: f64,
     /// Breakdown criterion density `n_bd` (m⁻³).
     n_bd: f64,
     /// Neutral-density-per-pressure `N/p` at reference temperature (m⁻³·Pa⁻¹),
@@ -876,6 +1095,8 @@ impl AirBreakdown {
             // gate keeps its published numbers. Enable with
             // `with_keldysh_mpi`.
             keldysh_prefactor: 0.0,
+            // PPT likewise off by default — see `with_ppt_mpi`.
+            ppt_z_eff: 0.0,
             n_bd: 1.0e23,
             n_over_p: 1.0 / (K_B * temperature),
             n_seed: 1.0 / focus.volume(),
@@ -999,7 +1220,26 @@ impl AirBreakdown {
     /// be added without making the `λ` comparison circular.
     pub fn with_keldysh_mpi(mut self, prefactor: f64) -> Self {
         self.keldysh_prefactor = prefactor;
-        // The two multiphoton paths model the same physics; keep one live.
+        // The multiphoton paths model the same physics; keep one live.
+        self.mpi_rate_ref = 0.0;
+        self.ppt_z_eff = 0.0;
+        self
+    }
+
+    /// Enable PPT photoionization as the multiphoton source, with the effective
+    /// residual charge `z_eff` ([`Z_EFF_O2`] for air).
+    ///
+    /// Unlike [`Self::with_keldysh_mpi`] this takes **no free prefactor** —
+    /// PPT's is determined by `z_eff`, and `z_eff` is published. That makes the
+    /// resulting source an independent prediction, and it is validated in
+    /// absolute magnitude against a measured cross-section
+    /// (`ppt_rate_matches_the_measured_o2_cross_section`).
+    ///
+    /// Off by default, like the other two, so every pre-existing gate keeps its
+    /// published numbers.
+    pub fn with_ppt_mpi(mut self, z_eff: f64) -> Self {
+        self.ppt_z_eff = z_eff;
+        self.keldysh_prefactor = 0.0;
         self.mpi_rate_ref = 0.0;
         self
     }
@@ -1024,7 +1264,9 @@ impl AirBreakdown {
     }
 
     /// Select which limit of the energy balance drives the cascade — see
-    /// [`CascadeModel`]. The default is [`CascadeModel::SelfConsistentClimb`].
+    /// [`CascadeModel`]. The default is [`CascadeModel::DistributionResolved`],
+    /// promoted from `SelfConsistentClimb` once it was measured to fix the
+    /// high-pressure branch.
     pub fn with_cascade_model(mut self, cascade_model: CascadeModel) -> Self {
         self.cascade_model = cascade_model;
         self
@@ -1253,6 +1495,9 @@ impl AirBreakdown {
     /// keeps every intermediate in range.
     pub fn mpi_source(&self, intensity: f64, pressure: f64) -> f64 {
         let n_neutral = self.n_over_p * pressure;
+        if self.ppt_z_eff > 0.0 {
+            return n_neutral * ppt_rate(intensity, self.omega, self.gas.u_ion, self.ppt_z_eff);
+        }
         if self.keldysh_prefactor > 0.0 {
             return n_neutral
                 * keldysh_rate(
@@ -2366,5 +2611,169 @@ mod tests {
     fn photon_count_is_eleven_at_1064nm() {
         // ⌈12.06 eV / 1.166 eV⌉ = 11.
         assert_eq!(model().k_photons, 11);
+    }
+
+    // --- Special functions used by `ppt_rate` (NOT physics validation — these
+    // are closed-form checks on two standard functions). ----------------------
+
+    /// T12-V1: Dawson's integral against the values that pin it, and against
+    /// the ODE it satisfies.
+    ///
+    /// `Φ` is the one non-elementary function in [`ppt_rate`], and an error in
+    /// it would move the above-threshold sum without moving the exponent — i.e.
+    /// it would look exactly like a physics result. Hence four independent
+    /// checks rather than one table lookup.
+    #[test]
+    fn dawson_matches_its_closed_forms() {
+        // Odd, and zero at the origin.
+        assert_eq!(dawson(0.0), 0.0);
+        assert_eq!(dawson(-1.5), -dawson(1.5));
+
+        // The maximum: Φ(0.9241388730…) = 0.5410442246…, a standard reference
+        // value. It is a stationary point, so it also checks the series near
+        // where cancellation starts to matter.
+        let x_max = 0.924_138_873_015_5;
+        assert!(
+            (dawson(x_max) - 0.541_044_224_635_5).abs() < 1e-12,
+            "Φ(x_max) = {:.15e}",
+            dawson(x_max)
+        );
+
+        // Small-x: Φ = x − 2x³/3 + 4x⁵/15 − … The residual against the
+        // two-term expansion must be the *next term*, not merely small — a
+        // tolerance loose enough to swallow it would pass on a wrong series.
+        // The tolerance is the size of the *following* term, `(8/105)x⁷`, which
+        // is `0.286·x²` of the one being checked; anything below `1e-4` has no
+        // f64 resolution left at this cancellation depth, so the sweep starts
+        // at `1e-2`.
+        for x in [1e-2f64, 3e-2, 1e-1] {
+            let truncated = x - 2.0 * x * x * x / 3.0;
+            let residual = dawson(x) - truncated;
+            let next_term = 4.0 * x.powi(5) / 15.0;
+            assert!(
+                (residual / next_term - 1.0).abs() < x * x,
+                "small-x at {x}: residual {residual:.6e} vs next term {next_term:.6e}"
+            );
+        }
+
+        // Large-x asymptote Φ → 1/(2x), approached from above.
+        for x in [20.0, 50.0, 200.0] {
+            let ratio = dawson(x) / (0.5 / x);
+            assert!(
+                ratio > 1.0 && ratio < 1.0 + 2.0 / (x * x),
+                "asymptote at {x}: ratio {ratio}"
+            );
+        }
+
+        // The defining ODE Φ' = 1 − 2xΦ, by central difference. This is the
+        // check that does not depend on any tabulated number, and it brackets
+        // the series/asymptotic join at x = 4 from both sides.
+        //
+        // `h` is deliberately 1e-3, not smaller: differencing amplifies Φ's own
+        // ~2e-10 evaluation error by 1/2h, so a "more accurate" h = 1e-5 makes
+        // this check *worse* (1e-5 of noise) rather than better. At 1e-3 the
+        // amplified noise (~1e-7) and the difference truncation (~1.7e-7) are
+        // comparable, which is the sweet spot. The join itself is not straddled
+        // — `dawson_series_join_is_continuous` owns that.
+        let h = 1e-3;
+        for &x in &[0.3, 1.0, 2.5, 3.9, 4.1, 6.0, 12.0] {
+            let numeric = (dawson(x + h) - dawson(x - h)) / (2.0 * h);
+            let exact = 1.0 - 2.0 * x * dawson(x);
+            assert!(
+                (numeric - exact).abs() < 1e-5,
+                "ODE at x = {x}: dΦ/dx = {numeric:.9e} vs 1 − 2xΦ = {exact:.9e}"
+            );
+        }
+    }
+
+    /// T12-V1b: the two Dawson branches agree across their join, so
+    /// [`DAWSON_SERIES_CUTOVER`] is a documented seam and not a discontinuity.
+    /// Same role as `keldysh_exponent_series_matches_direct_form`.
+    #[test]
+    fn dawson_series_join_is_continuous() {
+        let c = DAWSON_SERIES_CUTOVER;
+        let below = dawson(c - 1e-9);
+        let above = dawson(c + 1e-9);
+        let rel = (above - below).abs() / below;
+        assert!(
+            rel < 3e-7,
+            "Dawson branches disagree by {rel:.2e} at the x = {c} join \
+             ({below:.15e} vs {above:.15e})"
+        );
+    }
+
+    /// T12-V2: `ln_gamma` where Γ is known exactly.
+    #[test]
+    fn ln_gamma_matches_its_closed_forms() {
+        // Γ(n) = (n−1)!
+        let mut factorial = 1.0f64;
+        for n in 1..=15u32 {
+            let exact = factorial.ln();
+            assert!(
+                (ln_gamma(n as f64) - exact).abs() < 1e-12 * exact.abs().max(1.0),
+                "ln Γ({n}) = {} vs {exact}",
+                ln_gamma(n as f64)
+            );
+            factorial *= n as f64;
+        }
+        // Γ(½) = √π, and the half-integer ladder Γ(x+1) = xΓ(x).
+        assert!((ln_gamma(0.5) - PI.sqrt().ln()).abs() < 1e-13);
+        for &x in &[0.25, 0.5, 0.563, 1.5, 2.5, 7.5] {
+            let step = ln_gamma(x + 1.0) - ln_gamma(x) - x.ln();
+            assert!(step.abs() < 1e-12, "recurrence at {x}: residual {step:.3e}");
+        }
+        // Reflection: Γ(x)Γ(1−x) = π/sin(πx) — exercises the x < ½ branch.
+        for &x in &[0.1, 0.3, 0.45] {
+            let lhs = ln_gamma(x) + ln_gamma(1.0 - x);
+            let rhs = (PI / (PI * x).sin()).ln();
+            assert!(
+                (lhs - rhs).abs() < 1e-12,
+                "reflection at {x}: {lhs:.15e} vs {rhs:.15e}"
+            );
+        }
+    }
+
+    /// T12-V6: [`PPT_ATI_TERMS`] is a converged truncation, not a tuned one.
+    ///
+    /// The summand carries `e^{−α(γ)(n−ν)}` with `α ≈ 2 ln 2γ`, so convergence
+    /// is fast wherever `γ` is large — which is the whole regime M6a operates
+    /// in (`γ` = 17–38 at the thresholds). The gate sweeps down to `γ` = 1,
+    /// well outside that regime, so it fails if the shipped truncation is ever
+    /// carried somewhere it does not hold.
+    #[test]
+    fn ppt_ati_sum_is_converged() {
+        const REFERENCE: usize = 4096;
+        // ν at 1064 nm and 532 nm for O₂, plus a deliberately awkward
+        // non-integer value.
+        for &nu in &[10.35, 5.18, 7.5] {
+            for &gamma in &[1.0, 3.0, 10.0, 20.0, 40.0] {
+                let converged = ppt_ati_sum(gamma, nu, REFERENCE);
+                let shipped = ppt_ati_sum(gamma, nu, PPT_ATI_TERMS);
+                assert!(
+                    converged > 0.0,
+                    "reference sum vanished at γ = {gamma}, ν = {nu}"
+                );
+                // Worst case measured over this sweep is 2.9e-11, at γ = 1 —
+                // the slowest-decaying corner, and two decades outside the
+                // regime the kernel uses.
+                let rel = (shipped / converged - 1.0).abs();
+                assert!(
+                    rel < 1e-9,
+                    "A₀ at γ = {gamma}, ν = {nu} moves {rel:.3e} between \
+                     {PPT_ATI_TERMS} and {REFERENCE} terms"
+                );
+            }
+        }
+        // And that the truncation is doing real work: at γ = 1 (α = 0.56, the
+        // slowest decay swept) a 4-term sum is visibly short, so the gate above
+        // is not passing merely because every truncation agrees.
+        let short = ppt_ati_sum(1.0, 7.5, 4);
+        let full = ppt_ati_sum(1.0, 7.5, REFERENCE);
+        assert!(
+            short / full < 0.95,
+            "a 4-term sum is already {:.4} of converged at γ = 1 — this gate \
+             cannot distinguish a converged truncation from any truncation",
+            short / full
+        );
     }
 }

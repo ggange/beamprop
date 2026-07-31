@@ -15,7 +15,7 @@ depends on looking a number up.
 
 ## Claims ledger
 
-**Read this before the test count.** `cargo test` runs 201 tests. That number is
+**Read this before the test count.** `cargo test` runs 210 tests. That number is
 not a measure of how much of this solver is validated against the world, and
 reading it as one would be a mistake: most of those tests check that the code
 solves the equations it was given, several deliberately assert a *known
@@ -50,7 +50,7 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 91 rows below: 58 verified, 8 validated, 13 pinned, 12 ungated.**
+**Census of the 100 rows below: 64 verified, 10 validated, 14 pinned, 12 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
 not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
@@ -118,6 +118,15 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | Keldysh `γ → ∞` recovers the multiphoton photon order | `keldysh_multiphoton_limit_recovers_the_photon_order` | verified | `K = U_i/ħω` |
 | Keldysh `γ → 0` recovers the static-field tunnelling exponent | `keldysh_tunnelling_limit_matches_the_static_field_exponent` | verified | closed form |
 | The small-`γ` series joins the direct form | `keldysh_exponent_series_matches_direct_form` | verified | join pinned at γ = 0.1 |
+| Dawson's integral against its closed forms and its ODE | `breakdown0d::tests::dawson_matches_its_closed_forms` | verified | max at 0.5410442246; `Φ' = 1 − 2xΦ` to 1e-5 |
+| The two Dawson branches join continuously | `breakdown0d::tests::dawson_series_join_is_continuous` | verified | 3e-7 at the `x` = 4 seam |
+| `ln Γ` against factorials, `Γ(½)`, and the reflection formula | `breakdown0d::tests::ln_gamma_matches_its_closed_forms` | verified | 1e-12 |
+| The PPT above-threshold sum is a converged truncation | `breakdown0d::tests::ppt_ati_sum_is_converged` | verified | 64 vs 4096 terms, worst 2.9e-11 at γ = 1 |
+| PPT gives an **integer** photon order `K = ⌈ν⌉` | `ppt_multiphoton_order_is_the_integer_photon_count` | verified | 7.998 / 10.998 / 6.000 at 800 / 1064 / 532 nm |
+| PPT and Keldysh share one exponent | `ppt_and_keldysh_share_the_same_exponent` | verified | ratio is `I^0.66` while the rates are `I^9.9` |
+| **PPT's absolute rate vs a measured O₂ cross-section** | `ppt_rate_matches_the_measured_o2_cross_section` | **validated** | 1.99× of `σ₈` = 3.3e-130 W⁻⁸m¹⁶s⁻¹ (Sci. Rep. **8**, 2874 (2018)), nothing fitted; theory high, the direction the paper reports |
+| **PPT does not close the wavelength gap either** | `ppt_does_not_close_the_wavelength_gap_either` | **pinned** | derived prefactor lands at 2.947 vs measured 0.80 — 16 % of the gap; `2n* − 3/2 < 0` for `Z_eff` = 0.53, so the Coulomb correction is order-unity, not orders |
+| **The two anchor experiments sit either side of the MPI seeding threshold** | `ppt_seeding_thresholds_separate_the_two_experiments` | **validated** | at each paper's own measured `I_th`: `N_seed` = 5.4e-9 (1064 nm) vs 3.05 (532 nm); seeding threshold 5.73× above measured at 1064 nm, 0.83× at 532 nm |
 | Threshold is independent of the integration window | `breakdown0d::tests::threshold_is_window_independent` | verified | invariant in `w` |
 | The high-pressure slope lies between the model's analytic limits | `breakdown0d::tests::high_pressure_threshold_slope_lies_between_analytic_limits` | verified | 0.095 … 0.468 |
 | The literature-range inelastic envelope brackets the slope | `breakdown0d::tests::inelastic_loss_envelope_brackets_the_slope` | verified | over `δ_eff` 0.01–0.05, `⟨ε⟩` 2–5 eV |
@@ -738,6 +747,14 @@ for molecular O₂ (Coulomb corrections can lift the prefactor by orders of
 magnitude — checkable against published `σ_K`), or a systematic in the two-paper
 comparison. It is *not* a missing channel at these intensities.
 
+**Both branches were settled on 2026-07-31 — see the PPT section below.** The
+prefactor branch is closed by measurement: PPT's prefactor is *derived* once
+`Z_eff` is given, `Z_eff` = 0.53 for O₂ is published, and the resulting absolute
+rate reproduces a measured cross-section within 2×. It is not orders above
+unity, and it moves the ratio only to 2.947. The systematic branch turns out to
+be real: the two anchor experiments sit on opposite sides of the multiphoton
+*seeding* threshold.
+
 Chylek's 532 nm data sharpens the remaining question into a quantitative target
 rather than a direction. Any candidate MPI channel now has to do three things at
 once:
@@ -904,6 +921,123 @@ References:
   is the atomic mass, so for these gases the cascade has no free constant at all.
   Their own integrity gate
   (`chylek1990_fig2_digitization_reproduces_the_published_slopes`) stays.
+
+- A. Sharma, M. N. Slipchenko, M. N. Shneider, X. Wang, K. A. Rahman,
+  A. Shashurin, *Counting the electrons in a multiphoton ionization by elastic
+  scattering of microwaves*, Sci. Rep. **8**, 2874 (2018); arXiv:1710.03361 —
+  the **absolute** eight-photon ionization cross-section of O₂ at 800 nm,
+  `σ₈ = (3.3 ± 0.3)×10⁻¹³⁰ W⁻⁸m¹⁶s⁻¹`, from direct electron counting by Rayleigh
+  microwave scattering calibrated against dielectric scatterers of known
+  properties. Consumed by `ppt_rate_matches_the_measured_o2_cross_section`. This
+  is the only anchor in this file that constrains an ionization **rate** rather
+  than a breakdown threshold, which is why it can test the MPI channel without
+  the circularity that sank the earlier attempts.
+
+- A. Talebpour, C.-Y. Chien, S. L. Chin, *The effects of dissociative
+  recombination in multiphoton ionization of O₂*, J. Phys. B **32**, 1229
+  (1999) — the source of `Z_eff` = 0.53 for molecular O₂ (`breakdown0d::Z_EFF_O2`), from
+  their PPT fit to measured O₂ ionization at 800 nm, and of an independent rate
+  point (3×10⁹ s⁻¹ at 3×10¹³ W/cm²) that sits 7× below `σ₈·I⁸` at the same
+  intensity. The two published anchors disagree by more than either disagrees
+  with PPT, which is what bounds the prefactor to about an order of magnitude.
+
+### PPT photoionization for molecular O₂ (`breakdown0d::ppt_rate`)
+
+Added 2026-07-31, to settle the prefactor branch left open above. **Site:**
+`breakdown0d::ppt_rate`, off by default, enabled by
+`AirBreakdown::with_ppt_mpi(Z_EFF_O2)`.
+
+```text
+W = |C_n*|²·√(6/π)·U_i·(2F₀/(F√(1+γ²)))^{2n*−3/2}·A₀(ω,γ)·exp[−(2U_i/ħω)·f(γ)]
+```
+
+in atomic units, with `κ = √(2U_i)`, `F₀ = κ³`, `n* = Z_eff/κ`,
+`|C_n*|² = 2^{2n*}/(n*Γ(n*+1)Γ(n*))`, and the above-threshold sum
+
+```text
+A₀(ω,γ) = (4/√(3π))·(γ²/(1+γ²))·Σ_{n≥⌈ν⌉} e^{−α(n−ν)}·Φ(√(β(n−ν)))
+ν = (U_i/ħω)(1 + 1/2γ²)     α = 2[asinh γ − γ/√(1+γ²)]     β = 2γ/√(1+γ²)
+```
+
+`Φ` is Dawson's integral (`breakdown0d::dawson`). The exponent is **the same
+object** as Keldysh's — PPT's `(2F₀/3F)g(γ)` is algebraically `(2U_i/ħω)f(γ)` —
+so `keldysh_tunnel_exponent` is reused rather than re-derived, and
+`ppt_and_keldysh_share_the_same_exponent` gates that the two have not drifted.
+
+**Why this is a test and not a fit.** Keldysh's prefactor is an order-unity
+function no derivation pins, which is why `keldysh_rate` exposes it as an
+argument. PPT's is fully determined once `Z_eff` is given, and `Z_eff` = 0.53
+for O₂ is published (Talebpour 1999). `ppt_rate` therefore takes **no prefactor
+argument**, and its absolute magnitude is a prediction.
+
+**It passes an absolute validation.** Against the measured `σ₈` at 800 nm, with
+nothing fitted:
+
+| `I` (W/cm²) | `W_PPT / σ₈I⁸` |
+|---|---|
+| 10¹⁰ | 1.995 |
+| 10¹¹ | 1.974 |
+| 10¹² | 1.768 |
+
+Within a factor of 2 of an absolutely calibrated measurement, and high — the
+direction the source paper reports for purely theoretical predictions. The
+comparison is made below 10¹² W/cm² because PPT's fitted order softens as `γ`
+falls, and a magnitude ratio between two different powers of `I` means nothing.
+
+**A structural result found by a gate that expected something else.** PPT
+returns an **integer** photon order, `K = ⌈ν⌉` — 7.998 at 800 nm, 10.998 at
+1064 nm, 6.000 at 532 nm — where the bare Keldysh exponential gives the
+fractional `U_i/ħω`. The leading ATI term carries `e^{−α(γ)(⌈ν⌉−ν)}` and
+`dα/d ln I = −1`, which contributes exactly `⌈ν⌉ − ν` to the log-log slope. You
+cannot absorb 10.34 photons; the fractional order is an artifact of dropping the
+sum, and restoring it is what makes reading `σ₈` as an eight-photon
+cross-section legitimate.
+
+**And it does not close the wavelength gap.**
+
+| source | `I_th(532)/I_th(1064)` | gap closed |
+|---|---|---|
+| cascade only | 3.349 | — |
+| Keldysh, prefactor 1 | 2.89 | 18 % |
+| **PPT, `Z_eff` = 0.53** | **2.947** | **16 %** |
+| PPT + a physical seed (10⁹ m⁻³) | 2.835 | 20 % |
+| **measured** | **0.80** | |
+
+The reason is worth stating because it inverts the expectation that motivated
+the work: `n* = Z_eff/κ` = 0.563 makes the Coulomb exponent `2n* − 3/2`
+**negative**, so the correction that lifts an atomic rate by orders of magnitude
+at `Z` = 1 is order-unity for a molecule at `Z_eff` = 0.53. "Coulomb corrections
+can lift the prefactor by orders of magnitude" is true of atoms and false here.
+
+**The finding that does explain something.** Evaluated at each paper's *own
+measured* threshold — no model threshold anywhere in the calculation, so the
+kernel's pinned 3.90–4.69× level offset cannot contaminate it:
+
+| | 1064 nm (T&T) | 532 nm (Chylek) |
+|---|---|---|
+| measured `I_th` (W/cm²) | 2.06×10¹¹ | 1.56×10¹¹ |
+| `N_seed = W·N·V·τ` there | **5.4×10⁻⁹** | **3.05** |
+| `I` where `N_seed` = 1 | 1.18×10¹² | 1.30×10¹¹ |
+| that, over measured `I_th` | 5.73× | **0.83×** |
+
+At 532 nm the measured breakdown threshold **is** the multiphoton seeding
+threshold, to 17 %. At 1064 nm multiphoton ionization is 5.7× short of making a
+single electron, so breakdown there is seeded by something else — background
+ionization, impurities, dust — as the classical picture of ns IR breakdown has
+it. The two experiments are on opposite sides of that transition, so their
+threshold *ratio* is not a measurement of one mechanism's wavelength scaling.
+That is the "systematic in the two-paper comparison" branch, made specific.
+
+Gated by `ppt_multiphoton_order_is_the_integer_photon_count`,
+`ppt_and_keldysh_share_the_same_exponent`,
+`ppt_rate_matches_the_measured_o2_cross_section`,
+`ppt_does_not_close_the_wavelength_gap_either`,
+`ppt_seeding_thresholds_separate_the_two_experiments`, and the four
+special-function checks in `breakdown0d::tests`.
+
+**References.** V. S. Popov, *Tunnel and multiphoton ionization of atoms and
+ions in a strong laser field (Keldysh theory)*, Phys.-Usp. **47**, 855 (2004),
+for the PPT rate in the form used here; the two anchors above.
 
 ## M6a.2 — Aperture optics and pupil phase statistics
 
