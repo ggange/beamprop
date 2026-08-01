@@ -10,16 +10,18 @@
 //! original `main.rs` loops exactly.
 
 use anyhow::{Context, Result};
-use ndarray::{Array2, Array3, s};
+use ndarray::{Array2, Array3, Array4, s};
 
 use crate::airprops::AirTable;
 use crate::aperture::Aperture;
 use crate::blooming::ThermalBlooming;
 use crate::breakdown0d::{AirBreakdown, Focus, Gas};
 use crate::euler1d::{IdealGas, Primitive};
+use crate::euler2d::Primitive2d;
 use crate::field::{Field, IntensityScale};
 use crate::grid::Grid;
 use crate::lsd::{Absorption, IonizationCeiling, LsdColumn, SeededIgnition, raizer_lsd_velocity};
+use crate::lsd2d::{BeamProfile, Lsd2dColumn, SeededIgnition2d};
 use crate::medium::{UniformExtinction, kruse_extinction};
 use crate::montecarlo::seeded_ensemble;
 use crate::plasmaprops::PlasmaTable;
@@ -625,14 +627,15 @@ pub struct LsdRun {
 /// question "does the beam that drives the detonation also light it?", and the
 /// answer the two models give together is **no, by five orders of magnitude**:
 ///
-/// - M6a's breakdown threshold in air at 1 atm **saturates at ≈1.14×10¹⁶ W/m²
-///   and does not fall with pulse length** — 6 ns and 1 ms give 1.18×10¹⁶ and
-///   1.14×10¹⁶. It is an intensity floor, not a fluence one: below it the
-///   inelastic losses paid climbing to the ionization potential exceed the
-///   inverse-bremsstrahlung heating, the net cascade rate is negative, and no
-///   exposure time rescues it. Widening the focus does not help either — over a
-///   500× range of spot radius the threshold moves by 4 %, because diffusion
-///   loss is not what sets it at this pressure.
+/// - M6a's breakdown threshold in air at 1 atm **converges to an intensity
+///   floor of ≈6.75×10¹⁵ W/m², rather than falling without limit** — 6 ns gives
+///   8.815×10¹⁵ and 1 ms gives 6.745×10¹⁵, a bounded 1.31× fall that is flat to
+///   1 % over the last two decades of pulse length. It is an intensity floor,
+///   not a fluence one, which is what the two-stage argument below needs; see
+///   `the_sustaining_drive_is_far_below_the_breakdown_threshold` for why the
+///   claim is the *asymptotic* one rather than exact flatness. Widening the
+///   focus does not help either — over a 500× range of spot radius the
+///   threshold moves by 6 % and saturates.
 /// - The sustaining drive an LSD wave runs on is ~10¹¹ W/m² (10⁷ W/cm², the
 ///   spec's representative value).
 ///
@@ -640,9 +643,9 @@ pub struct LsdRun {
 /// a defect in either model — it is the known experimental situation, where LSD
 /// waves in clean air are initiated on a target, on an aerosol, or by a separate
 /// high-intensity spike, and are then *sustained* far below breakdown by the
-/// plasma that already exists. M6a's ungated absolute level (4.8–7.0× above the
-/// measured Thiyagarajan & Thompson curve) does not touch the conclusion: the
-/// gap is 10⁵ and the uncertainty is ~7×.
+/// plasma that already exists. M6a's ungated absolute level (3.90–4.69× above
+/// the measured Thiyagarajan & Thompson curve) does not touch the conclusion:
+/// the gap is 10⁵ and the uncertainty is ~5×.
 ///
 /// # What each half is worth
 ///
@@ -1269,7 +1272,7 @@ pub struct IgnitionRun {
 ///
 /// **The position of `p_ignite` on the `cn2` axis is not.** Whether a given
 /// realization lights depends on [`AirBreakdown`]'s absolute threshold, which is
-/// M6a's explicitly ungated quantity (4.8–7.0× above the measured Thiyagarajan
+/// M6a's explicitly ungated quantity (3.90–4.69× above the measured Thiyagarajan
 /// & Thompson curve, inside the 3–10× inter-lab scatter). Every ignition
 /// probability here carries that offset, and it must be labelled so wherever it
 /// is plotted (`docs/M6A2_SPEC.md` § "What this rung can and cannot claim").
@@ -1434,7 +1437,7 @@ pub struct IgnitionSweepRun {
 ///
 /// The **position** of the curve on the `Cn²` axis is not a claim about the
 /// world. It is set by where `AirBreakdown`'s absolute threshold falls, and
-/// that threshold is M6a's explicitly ungated quantity — 4.8–7.0× above the
+/// that threshold is M6a's explicitly ungated quantity — 3.90–4.69× above the
 /// measured Thiyagarajan & Thompson curve, inside the 3–10× inter-lab scatter.
 /// Shifting the threshold slides the whole curve sideways without changing its
 /// shape. Any plot of this must say so.
@@ -1517,4 +1520,223 @@ fn transition_width_decades(cn2: &[f64], p: &[f64]) -> f64 {
         (Some(hi), Some(lo)) => lo - hi,
         _ => f64::NAN,
     }
+}
+
+/// Parameters of the `lsd2d` case (M6d): an axisymmetric laser-supported
+/// detonation driven by a **finite-diameter** beam.
+///
+/// No ignition stage, deliberately. The `lsd` case already owns the
+/// ignition-is-not-sustaining story, and seeding directly keeps this case from
+/// re-inheriting M6a's explicitly ungated absolute threshold — see
+/// `docs/M6D_SPEC.md` § NOT in scope.
+pub struct Lsd2dParams {
+    /// Sustaining drive intensity on the beam axis (W/m²).
+    pub drive: f64,
+    /// Beam radius (m).
+    pub beam_radius: f64,
+    /// Super-Gaussian order; `0` selects a top-hat.
+    pub beam_order: u32,
+    /// Ambient pressure (Pa).
+    pub p0: f64,
+    /// Ambient temperature (K).
+    pub t0: f64,
+    /// Column length (m).
+    pub length: f64,
+    /// Domain radius, in beam radii.
+    pub domain_radii: f64,
+    /// Hydro cells along the beam.
+    pub cells_x: usize,
+    /// Rings across the domain radius.
+    pub cells_r: usize,
+    /// Grey-plasma absorption coefficient (1/m).
+    pub alpha: f64,
+    /// Fraction of the column the front is asked to cross.
+    pub cross_fraction: f64,
+    /// Number of recorded snapshots.
+    pub frames: usize,
+}
+
+/// Results of the `lsd2d` case.
+pub struct Lsd2dRun {
+    /// Ambient density from `(T₀, p₀)` (kg/m³).
+    pub rho_0: f64,
+    /// Raizer's closed form for this drive (m/s).
+    pub d_raizer: f64,
+    /// On-axis front speed with the finite beam (m/s).
+    pub d_measured: f64,
+    /// On-axis front speed of the matching **wide-beam** run (m/s) — the
+    /// reference the deficit is measured against, because the transverse
+    /// instability G14 documents is then common to both.
+    pub d_wide: f64,
+    /// `1 − D/D_wide`, the relief deficit.
+    pub relief_deficit: f64,
+    /// Ring centres (m).
+    pub r: Vec<f64>,
+    /// Cell centres along the beam (m).
+    pub x: Vec<f64>,
+    /// Snapshot times (s).
+    pub frame_time: Vec<f64>,
+    /// Fields `[frame, quantity, ring, cell]`, quantities ordered
+    /// `[p, ρ, u_x, u_r, α, I]`.
+    pub fields: Array4<f64>,
+    /// On-axis front position at each frame (m); `NaN` before a front exists.
+    pub front_x_axis: Vec<f64>,
+    /// Front position at the beam edge at each frame (m).
+    pub front_x_edge: Vec<f64>,
+    /// Energy deposited, in the `r dr dx` measure.
+    pub deposited_energy: f64,
+    /// Energy that left through the boundaries, same measure.
+    pub escaped_energy: f64,
+    /// Relative closure of the energy budget.
+    pub energy_residual: f64,
+    /// Whether the **axial** end planes are still undisturbed — the ones that
+    /// would contaminate a front-speed measurement.
+    pub boundaries_undisturbed: bool,
+    /// Whether the outermost ring is still undisturbed. A radially uniform seed
+    /// disturbs it at `t = 0` by construction, so this is information rather
+    /// than a validity flag.
+    pub rim_undisturbed: bool,
+}
+
+/// Run the `lsd2d` case: seed a wave, drive it with a finite-diameter beam, and
+/// measure how much radial relief slows it against the wide-beam limit.
+pub fn run_lsd2d(p: &Lsd2dParams) -> Result<Lsd2dRun> {
+    if !(p.length > 0.0 && p.cells_x >= 8 && p.cells_r >= 8) {
+        anyhow::bail!(
+            "lsd2d: need a positive length and at least 8 cells per direction, got {} m / \
+             {} x {}",
+            p.length,
+            p.cells_r,
+            p.cells_x
+        );
+    }
+    if p.frames < 2 {
+        anyhow::bail!("lsd2d: need at least 2 frames, got {}", p.frames);
+    }
+    if !(p.drive > 0.0 && p.drive.is_finite()) {
+        anyhow::bail!("lsd2d: drive intensity must be positive, got {}", p.drive);
+    }
+    if !(p.t0 > 0.0 && p.p0 > 0.0) {
+        anyhow::bail!("lsd2d: need positive ambient T and p");
+    }
+    if !(p.beam_radius > 0.0 && p.beam_radius.is_finite()) {
+        anyhow::bail!("lsd2d: beam radius must be positive, got {}", p.beam_radius);
+    }
+    if !(p.cross_fraction > 0.0 && p.cross_fraction < LSD_FOCUS_FRACTION) {
+        anyhow::bail!(
+            "lsd2d: --cross must be in (0, {LSD_FOCUS_FRACTION}) so the front stays inside \
+             the domain, got {}",
+            p.cross_fraction
+        );
+    }
+
+    let rho_0 = p.p0 / (R_AIR * p.t0);
+    let gas = IdealGas::AIR;
+    let d_raizer = raizer_lsd_velocity(&gas, p.drive, rho_0);
+    let ambient = Primitive2d {
+        rho: rho_0,
+        u_r: 0.0,
+        u_x: 0.0,
+        p: p.p0,
+    };
+    let e_ignite = 5.0 * gas.specific_internal_energy(rho_0, p.p0);
+    let domain_radius = p.domain_radii * p.beam_radius;
+    let beam = if p.beam_order == 0 {
+        BeamProfile::TopHat {
+            radius: p.beam_radius,
+        }
+    } else {
+        BeamProfile::SuperGaussian {
+            radius: p.beam_radius,
+            order: p.beam_order,
+        }
+    };
+    let build = |b: BeamProfile| -> Result<Lsd2dColumn> {
+        Lsd2dColumn::seeded(
+            gas,
+            p.cells_r,
+            p.cells_x,
+            domain_radius,
+            p.length,
+            ambient,
+            SeededIgnition2d {
+                centre_x: LSD_FOCUS_FRACTION * p.length,
+                width_x: 6e-4,
+                radius: domain_radius * 2.0,
+                pressure: LSD_SEED_MULTIPLE * rho_0 * d_raizer * d_raizer / (gas.gamma + 1.0),
+            },
+            Absorption::GreyThreshold {
+                alpha: p.alpha,
+                e_ignite,
+            },
+            p.drive,
+            b,
+        )
+    };
+
+    let mut column = build(beam)?;
+    let dx = p.length / p.cells_x as f64;
+    let dr = domain_radius / p.cells_r as f64;
+    let x: Vec<f64> = (0..p.cells_x).map(|i| (i as f64 + 0.5) * dx).collect();
+    let r: Vec<f64> = (0..p.cells_r).map(|j| (j as f64 + 0.5) * dr).collect();
+    let t_end = p.cross_fraction * p.length / d_raizer;
+
+    let mut fields = Array4::<f64>::zeros((p.frames, 6, p.cells_r, p.cells_x));
+    let mut frame_time = Vec::with_capacity(p.frames);
+    let mut front_x_axis = Vec::with_capacity(p.frames);
+    let mut front_x_edge = Vec::with_capacity(p.frames);
+
+    for frame in 0..p.frames {
+        let t = frame as f64 * t_end / (p.frames - 1) as f64;
+        column.advance_to(t)?;
+        let alpha = column.alpha_profile()?;
+        let beam_i = column.intensity_profile()?;
+        for j in 0..p.cells_r {
+            for i in 0..p.cells_x {
+                let w = column.hydro().cell(j, i).to_primitive(&gas);
+                let k = j * p.cells_x + i;
+                fields[[frame, 0, j, i]] = w.p;
+                fields[[frame, 1, j, i]] = w.rho;
+                fields[[frame, 2, j, i]] = w.u_x;
+                fields[[frame, 3, j, i]] = w.u_r;
+                fields[[frame, 4, j, i]] = alpha[k];
+                fields[[frame, 5, j, i]] = beam_i[k];
+            }
+        }
+        frame_time.push(column.hydro().time());
+        front_x_axis.push(column.front_position().unwrap_or(f64::NAN));
+        let edge = ((p.beam_radius / dr).floor() as usize).min(p.cells_r - 1);
+        front_x_edge.push(column.front_position_at(edge).unwrap_or(f64::NAN));
+    }
+
+    // The reference: the same run with a beam wider than the domain, so the
+    // transverse instability is common to both and the difference is relief.
+    let mut wide = build(BeamProfile::TopHat { radius: 1.0 })?;
+    let settle = 0.6 * t_end;
+    let window = 0.25 * t_end;
+    wide.advance_to(settle)?;
+    let d_wide = wide.measure_front_speed(window)?;
+
+    let mut narrow = build(beam)?;
+    narrow.advance_to(settle)?;
+    let d_measured = narrow.measure_front_speed(window)?;
+
+    Ok(Lsd2dRun {
+        rho_0,
+        d_raizer,
+        d_measured,
+        d_wide,
+        relief_deficit: 1.0 - d_measured / d_wide,
+        r,
+        x,
+        frame_time,
+        fields,
+        front_x_axis,
+        front_x_edge,
+        deposited_energy: column.deposited_energy(),
+        escaped_energy: column.hydro().escaped_energy(),
+        energy_residual: column.energy_residual(),
+        boundaries_undisturbed: column.axial_boundaries_undisturbed(),
+        rim_undisturbed: column.rim_undisturbed(),
+    })
 }

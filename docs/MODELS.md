@@ -15,7 +15,7 @@ depends on looking a number up.
 
 ## Claims ledger
 
-**Read this before the test count.** `cargo test` runs 219 tests. That number is
+**Read this before the test count.** `cargo test` runs 245 tests. That number is
 not a measure of how much of this solver is validated against the world, and
 reading it as one would be a mistake: most of those tests check that the code
 solves the equations it was given, several deliberately assert a *known
@@ -50,7 +50,7 @@ Two rows carry an extra flag in the number column:
   not with the measurement (`tt2012_cascade_theory_reference`,
   `tt2012_wavelength_scaling_matches_cascade_theory`).
 
-**Census of the 108 rows below: 72 verified, 10 validated, 15 pinned, 11 ungated.**
+**Census of the 122 rows below: 83 verified, 10 validated, 17 pinned, 12 ungated.**
 Every `site` names a test function or a `src/` symbol; a claim with neither does
 not belong in this table. The remaining unit tests in `src/` are code-level
 verification (constructors, guards, closed-form limits of individual rate terms)
@@ -131,18 +131,18 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | **PPT does not close the wavelength gap either** | `ppt_does_not_close_the_wavelength_gap_either` | **pinned** | derived prefactor lands at 2.947 vs measured 0.80 — 16 % of the gap; `2n* − 3/2 < 0` for `Z_eff` = 0.53, so the Coulomb correction is order-unity, not orders |
 | **The two anchor experiments sit either side of the MPI seeding threshold** | `ppt_seeding_thresholds_separate_the_two_experiments` | **validated** | at each paper's own measured `I_th`: `N_seed` = 5.4e-9 (1064 nm) vs 3.15 (532 nm); seeding threshold 5.73× above measured at 1064 nm, 0.83× at 532 nm |
 | Threshold is independent of the integration window | `breakdown0d::tests::threshold_is_window_independent` | verified | invariant in `w` |
-| The high-pressure slope lies between the model's analytic limits | `breakdown0d::tests::high_pressure_threshold_slope_lies_between_analytic_limits` | verified | 0.095 … 0.468 |
+| The high-pressure slope lies between the model's analytic limits | `breakdown0d::tests::high_pressure_threshold_slope_lies_between_analytic_limits` | verified | `n ∈ (0, 1)`, below the loss-only floor of 1; the closures give 0.086 / 0.264 / 0.440 |
 | The literature-range inelastic envelope brackets the slope | `breakdown0d::tests::inelastic_loss_envelope_brackets_the_slope` | verified | over `δ_eff` 0.01–0.05, `⟨ε⟩` 2–5 eV |
 | Per-slice integrator is exact and step-size independent | `breakdown0d::tests::{pure_cascade_is_exponential_growth, pure_loss_is_exponential_decay, mpi_only_seeding_is_linear, balance_point_is_linear_from_seed, slice_refinement_is_consistent}` | verified | 1e-9 relative |
 | **Measured `I_thr(p)` slope, against the `δ_eff` literature envelope** | `tt2012_threshold_slope_matches_measurement` | **validated** | measured 0.329 inside `[0.174, 0.382]`; centre 0.264. Red and `#[ignore]`d 2026-07-25 → 2026-07-30, retired by the closure change, not by re-banding |
-| **Chylek's low-pressure branch: the kernel is still far too steep** | `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | **pinned** | 10–100 Torr: kernel 1.293 vs measured 0.428, down from 1.954 once the free-molecular escape landed. The high-pressure window *agrees* (0.431 vs 0.468), so the failure is one-sided |
+| **Chylek's low-pressure branch: the kernel is still far too steep** | `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not` | **pinned** | 10–100 Torr: kernel **0.501** vs measured 0.428 (1.17×), down from 1.292 once seed production landed. The residual is now the 100–300 Torr window, 0.857 vs 0.413 |
 | **The residual against Chylek is localised to 70–350 Torr** | `chylek1990_residual_is_localised_to_mid_pressure` | **pinned** | six matched bands: kernel tracks to <0.25 outside, 2.0–2.3× too steep inside; the measurement is *not* locally flat (0.31–0.55) |
 | The mid-pressure residual is not a level artifact | `the_mid_pressure_residual_is_not_a_level_artifact` | verified | walking `δ_eff` from a 15.8× level to 3.4× makes the peak local exponent *rise*, 1.04 → 1.42 |
-| **The wavelength ratio is falsified against measurement, in sign** | `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared` | **pinned** | kernel 3.39 vs measured ≈ 0.80; overshoot ≈ 4.24× (was 3.99 / 4.99× before the closure change) |
+| **The wavelength ratio is falsified against measurement, in sign** | `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared` | **pinned** | kernel **2.85** vs measured ≈ 0.80; overshoot ≈ **3.57×** (4.00 cascade-only → 3.39 after the closure change → 2.85 after seed production) |
 | **Keldysh MPI does not close the wavelength gap** | `keldysh_mpi_does_not_close_the_wavelength_gap` | **pinned** | order-unity prefactor lands at 2.89 vs measured 0.80; the 18 % of the gap it closes is a smaller denominator, not a better rate |
 | **T&T's own MPI calibration undershoots their own measurement** | `breakdown0d::tests::tt2012_mpi_calibration_undershoots_the_data` | **pinned** | 37× below |
 | Level offset stays inside the inter-lab scatter, with a drift pin | `tt2012_level_ratio_is_bounded_within_scatter` | **pinned** | 3.90–4.69× high; drift 1.48× → 1.20× as the slope error shrank |
-| The two cascade limits bracket the measurement | `breakdown0d::tests::the_two_cascade_models_bracket_the_measurement` | **pinned** | 0.468 / 0.095 straddle 0.329 — but this is a **one-parameter sensitivity**, not two independent limits |
+| The two cascade limits bracket the measurement | `breakdown0d::tests::the_two_cascade_models_bracket_the_measurement` | **pinned** | 0.440 / 0.086 straddle 0.329 — but this is a **one-parameter sensitivity**, not two independent limits |
 | **The continuum diffusion loss is invalid at low pressure** | `the_diffusion_approximation_is_invalid_at_low_pressure` | verified | `Kn` = 0.013 at 760 Torr → **0.96 at 10 Torr**; `Kn ∝ 1/p` exactly |
 | Escape rate recovers the continuum and free-molecular limits | `escape_rate_recovers_both_limits` | verified | 0.9375 / 0.9757 / 0.9951 of `D_e/Λ²` at 760 / 2000 / 10⁴ Torr; saturates at `v̄/ℓ` |
 | The escape correction adds no constant | `the_escape_correction_adds_no_constant` | verified | `v̄` reproduces `D_e` to 1e-12; 6.740 eV, the same energy `D_e` implies |
@@ -173,7 +173,7 @@ measured datasets, and the disagreement is pinned rather than papered over.
 | The ionization background is not load-bearing | `breakdown0d::tests::ionization_background_is_not_load_bearing` | verified | threshold **bit-identical** over 12 decades of seed (10⁻⁶–10⁶ m⁻³) |
 | The seed floor applies to an explicit seed only | `breakdown0d::tests::seed_floor_applies_only_to_an_explicit_seed` | verified | floored vs free peak differ by >10³ at 8×10¹⁵ W/m² |
 | `Λ` = 7.74 µm and `ℓ` = 30.72 µm | `Focus::cylinder` | **ungated** | both pinned from T&T's Eq. 5 geometry, never fit; `Λ` matches the 8 µm the paper states |
-| The `ε_∞ → U_i` margin at threshold | — | **ungated** | `ε_∞/U_i` = 1.032 at 760 Torr, 1.011 at 1500 — the model sits at the bifurcation that *is* its plateau |
+| The `ε_∞ → U_i` margin at threshold | — | **ungated** | `ε_∞/U_i` = 1.032 at 760 Torr, 1.011 at 1500. **Mean-trajectory closure only** — that closure sits on the bifurcation that *is* its plateau, which is what the shipped `DistributionResolved` removed |
 
 ### M6a.2 — Aperture optics and ignition statistics
 
@@ -208,7 +208,26 @@ screen linearly in `r₀`), and a width gate (no independent anchor).
 | **G6 — frozen plasma table vs direct Mutation++ off-grid** | `plasma_table_matches_direct_mutationpp_off_grid` | **validated** | worst 1.48e-3 in `n_e` (independent third-party code) |
 | G8 — a real beam through the plasma column is Beer–Lambert, `δn ≡ 0` | `plasma_column_absorbs_as_beer_lambert` | verified | 1.7e-13 at τ = 339 |
 | The table's charge-state ceiling | `plasma_table_charge_state_ceiling_is_pinned` | **pinned** | regression pin on the table's extrapolation limit |
-| G7 — absolute LSD velocity vs measurement | — | **ungated** | on purpose: a planar solver has no radial relief, so the known experimental gap is a *prediction* of the omissions |
+| G7 — absolute LSD velocity vs measurement | — | **ungated** | **Amended by M6d.** Radial relief is no longer the excuse — it is modelled and pinned at δ = 0.23 (R_b·α = 3.2), i.e. ~23 % of the front speed, which covers part but not all of the ~2× gap to measurement. G7 stays ungated for exactly one reason now: there is no anchored measured dataset (the M6a-D5-style debt, inherited by M6d). Remaining candidates for the rest: radiation losses, incomplete absorption, the production EOS, and the un-refracted beam |
+
+### M6d — Axisymmetric gas dynamics and radial relief
+
+| claim | site | status | number |
+|---|---|---|---|
+| G9 — the planar 2-D solver reproduces `Euler1d` bit for bit | `euler2d_planar_limit_reproduces_euler1d_bit_for_bit` | verified | bit-identical over 240 cells x 40 steps, with both non-vacuity legs |
+| **G10 — Sedov–Taylor point blast** | `sedov_blast_matches_the_self_similar_solution` | verified | exponent 0.38628 vs 2/5; level 1.0842x falling to 1.0587 under refinement; peak compression 2.09 → 2.62 climbing toward 6 |
+| The Sedov reference reproduces the published `ξ₀` | `sedov_xi_0_matches_the_published_value` | verified | `ξ₀` = 1.03278 **derived** from the energy integral vs the published ≈1.033 |
+| The Sedov profile solves the Euler equations it was derived from | `sedov_profile_satisfies_the_euler_equations` | verified | worst residual 6.9e-5, falling as the finite-difference step squared |
+| G11 — 2nd order on smooth axisymmetric flow | `euler2d_is_second_order_on_smooth_axisymmetric_flow` | verified | 1.861 / 1.964 against a split-source contrast at 1.030 / 1.155 |
+| G12 — conservation in the `r`-weighted measure | `euler2d_conserves_mass_and_energy_in_the_r_weighted_measure` | verified | mass and energy < 1e-13 closed box; escape term needed and sufficient when the wall is brought in |
+| G13 — the axis is not a wall | `the_axis_boundary_does_not_heat_or_starve_the_on_axis_cells` | verified | on-axis entropy defect 2.99e-7 → 3.12e-8 under refinement, vs 3.02e-6 for an even-parity contrast |
+| G13(i) — a radially uniform state is a fixed point | `a_radially_uniform_state_is_a_fixed_point_of_the_axisymmetric_operator` | verified | bit-identical in mass and both momenta; energy drift < 1e-13 |
+| **G14 — the wide-beam limit reproduces the 1-D column** | `lsd2d_with_a_full_width_beam_reproduces_the_one_dimensional_column` | verified | 3.1e-13 while the front is smooth |
+| **The modelled LSD front is transversely unstable** | `lsd2d_with_a_full_width_beam_reproduces_the_one_dimensional_column` | **pinned** | grows out of round-off, amplitude-proportional (10⁶× seed → 10⁶× response), saturating at `\|u_r\|` ≈ 200–400 m/s. Identical in planar and axisymmetric geometry, so it is not the geometric source. A planar solver structurally cannot show it |
+| **G15 — radial relief lowers the front speed** | `radial_relief_lowers_the_lsd_front_speed_by_a_pinned_amount` | **pinned** | δ = 0.230 at `R_b·α` = 3.2 and 0.305 at 1.6, monotone in `R_b`; banded at ±13 %, which is the measured spread over grid (+6 %), seed (−7 %) and ignition threshold (±8 %) |
+| The relief deficit is not a boundary effect | `src/lsd2d.rs` (`rim_undisturbed`) | verified | 21.1 / 21.3 / 21.3 % at domain radii of 3 / 5 / 8 beam radii |
+| G16 — the one-third scaling survives relief | `the_one_third_scaling_survives_radial_relief` | verified | `S^0.34666` at finite `R_b` against the parameter-free 1/3, while the level moves 23 % |
+| The beam is not refracted by the plasma | `src/lsd2d.rs` (`BeamProfile`) | **ungated** | independent parallel pencils, by assumption; a two-way beam↔plasma loop is a later milestone |
 
 ### What this table says, in one paragraph
 
@@ -231,6 +250,21 @@ verification is close to the whole job, and M4 additionally reproduces a
 published experimental curve. M6c's core is verified to high order but its one
 headline agreement (Raizer) is circular by construction, which is why G4 — a
 parameter-free scaling exponent — is the milestone's real physics gate.
+
+M6d changes two things about that picture and neither is a validation. First, it
+adds the repo's **first multidimensional verification anchor**: the Sedov–Taylor
+blast is a self-similar solution the model is not built from, and its
+coefficient `ξ₀` is derived here from the energy integral rather than quoted, so
+agreeing with the published value to 0.03 % is evidence rather than bookkeeping.
+Second, it retires an *excuse*. M6c's G7 was ungated on the grounds that a
+planar solver structurally cannot show radial relief; relief is now modelled and
+pinned at 23 % of the front speed, which is a real effect and not the whole ~2×
+gap to measurement. G7 remains ungated, but only because no anchored measured
+dataset has been acquired — a smaller and more actionable claim than the one it
+replaces. M6d also produced something nobody asked it for: the modelled front is
+**transversely unstable**, growing cellular structure out of round-off, which a
+1-D solver has no way to exhibit and which had to be separated from relief before
+the relief number meant anything.
 
 ## M1 — Diffraction
 
@@ -477,7 +511,7 @@ References:
 At a point in dry air the electron density obeys the avalanche balance
 
 ```text
-dn_e/dt = (ν_i(I, p) − ν_att(p) − ν_diff(p))·n_e + S_mpi(I, p)
+dn_e/dt = (ν_i(I, p) − ν_att(p) − ν_esc(p))·n_e + S(I, p)
 ```
 
 with cascade ionization driven by the **net** power — inverse-bremsstrahlung
@@ -496,12 +530,20 @@ constant high-pressure **plateau** on top of the `1/p` avalanche term. Without
 lets it approach the measured trend at all. `L′ = δ_eff·K_m·⟨ε⟩` is one lumped
 constant taken from the centre of its literature range and never tuned.
 
+That closed form is the **mean-trajectory** closure (`CascadeModel::SelfConsistentClimb`).
+It is no longer what ships: the default since 2026-07-30 is
+`CascadeModel::DistributionResolved`, which replaces the trajectory with a
+first-passage rate and removes the `ε_∞ = U_i` bifurcation the expression above
+sits on. See § "Distribution-resolved cascade" below for the shipped rate; the
+mean-trajectory form is kept here because the plateau argument is clearest in it
+and because both closures are still selectable.
+
 The loss terms are attachment from measured rate coefficients (dissociative
 `k₂·n_O₂ ∝ p` plus three-body `k₃·n_O₂·n ∝ p²`; the two-body channel leads at
 1 atm, `5.4×10⁷` against `1.4×10⁷ s⁻¹`, with three-body overtaking it only above
-`n = k₂/k₃ = 10²⁶ m⁻³` ≈ 4 atm) and free-electron diffusion,
-free-electron **escape** from the focal volume. Attachment is negligible against
-escape throughout the gate window — `6.7×10⁷` vs `3.3×10⁹ s⁻¹` at 1 atm.
+`n = k₂/k₃ = 10²⁶ m⁻³` ≈ 4 atm) and free-electron **escape** from the focal
+volume. Attachment is negligible against escape throughout the gate window —
+`6.7×10⁷` vs `3.3×10⁹ s⁻¹` at 1 atm.
 
 Escape is *not* `D_e/Λ²`. That is a continuum random-walk result and assumes the
 electron collides many times while crossing the focus, which fails badly at low
@@ -533,245 +575,148 @@ theory ties it to the externally-gated `K_m` by `D_e = 2ε/(3 m_e K_m p)`, so
 `D_e,ref = 0.2 m²/s` **is** the statement `ε = 6.740 eV`
 (`d_e_ref_implies_a_stated_electron_energy`). Sweeping the whole band that
 formula admits — `ε` from 2 eV to `U_i`, a 6.0× range in `D_e` — moves the fitted
-slope by only 0.101 (0.0532 → 0.1545), against a 0.234 shortfall to the measured
-0.329, so `D_e` **cannot** account for the slope gap
+slope by less than 0.1, against a shortfall to the measured 0.329 that is more
+than twice that, so `D_e` **cannot** account for the slope gap
 (`d_e_sensitivity_is_pinned_across_the_kinetic_band`). Two debts remain, both
 recorded rather than papered over: diffusion assumes 6.74 eV while the
 `FixedMeanEnergy` loss term assumes `⟨ε⟩` = 3 eV (a 2.25× internal
 inconsistency), and there is still no measurement of `D_e` at the cascade's own
-energy — swarm data reaches only 0.1–2 eV. See `docs/M6A_SPEC.md`.
+energy — swarm data reaches only 0.1–2 eV.
 
 `Λ` is the diffusion length of T&T's **divergence-limited** focus, from their
 Eq. 5: `(1/Λ)² = (π/l₀)² + (2.405/r₀)²` with `r₀ = f·α/2 = 20 µm` and
 `l₀ = 0.414·(α/d)·f² = 66 µm`, giving **`Λ = 7.74 µm`** — matching the 8 µm the
-paper states. **Pinned from geometry, never fit.** (Two earlier guesses were
-wrong in opposite directions: a *sphere*, `Λ = r₀/π = 6.37 µm`, overstated
-`ν_diff` by 1.48×; a diffraction-limited *filament* put the depth of focus at
-2.4 mm instead of 66 µm.) Because the focus is set by the beam's 1 mrad
-divergence rather than by diffraction, `Λ` and the focal volume are
-wavelength-independent — which is what makes the wavelength gate below a clean
-one-variable test.
+paper states. **Pinned from geometry, never fit.** Because the focus is set by
+the beam's 1 mrad divergence rather than by diffraction, `Λ` and the focal volume
+are wavelength-independent — which is what makes the wavelength gate below a
+clean one-variable test.
 
-Finally a swappable multiphoton seed `S_mpi = σ_K·I^K·N` (off by default; the
-seed is one electron in the focal volume). Breakdown at `n_e ≥ n_bd = 10²³ m⁻³`.
+**The seed and the multiphoton source.** The kernel does not assume a starting
+electron. `n_e0(p) = q(p)/ν_att(p)` is the physical ambient free-electron
+density — the equilibrium between cosmic-ray ionization and the kernel's own
+attachment rate — and the pulse **produces** its own electrons through PPT
+photoionization, which is **on by default**. Both are covered in § "Seed
+production" below. The older `S_mpi = σ_K·I^K·N` term and the Keldysh rate remain
+implemented and selectable, but both are off by default.
 
-The per-slice ODE is advanced by its exact solution. With `σ_K = 0` the slice
-is Bernoulli — growth is **logistic**, since ionization depletes the neutrals it
-feeds on — and is evaluated as `n_e' = n_e/(e^{−βdt} + b·n_e·(1 − e^{−βdt})/β)`
-with `β = ν_i − ν_loss`, `b = ν_i/N`; that form underflows harmlessly instead of
-overflowing to `NaN` far above threshold, and `n_e` saturates at full ionization
-rather than running away. Threshold intensity is found by log-bisection; a
-pressure sweep gives `I_thr(p)`.
+Breakdown at `n_e ≥ n_bd = 10²³ m⁻³`. The per-slice ODE is advanced by its exact
+solution: with no source term the slice is Bernoulli — growth is **logistic**,
+since ionization depletes the neutrals it feeds on — and is evaluated as
+`n_e' = n_e/(e^{−βdt} + b·n_e·(1 − e^{−βdt})/β)` with `β = ν_i − ν_loss`,
+`b = ν_i/N`; that form underflows harmlessly instead of overflowing to `NaN` far
+above threshold, and `n_e` saturates at full ionization rather than running away.
+Threshold intensity is found by log-bisection; a pressure sweep gives `I_thr(p)`.
 
 Implemented in `src/breakdown0d.rs`.
 
-Gate (internal, model self-consistency): solving the avalanche criterion gives
+### The threshold, and what it is gated against
+
+Solving the avalanche criterion for the mean-trajectory closure gives
 
 ```text
-I_thr(p) = L′/h + U_i·(ν_att + ν_diff + G)/(h·p),   G = ln(n_bd/n_seed)/τ
+I_thr(p) = L′/h + U_i·(ν_att + ν_esc + G)/(h·p),   G = ln(n_bd/n_seed)/τ
 ```
 
 Attachment is negligible here, so the exponent runs between two **exact**
-limits — plateau-dominated `n → 0` and diffusion-dominated `n → 2` — with the
-growth-limited `p^-1` in between. Fitted over the pinned range **300–2000
-Torr** (8 log-spaced points, 6 ns FWHM) the model gives **n = 0.095**, and the
-gate asserts `n ∈ (0, 1)`: the plateau must be doing work, since without `L`
-the model is stuck at `n ≥ 1`. Sweeping the literature ranges of `L′`
-(δ_eff ≈ 0.01–0.05) gives an envelope `n ∈ [0.023, 0.231]`, separately pinned so
-it cannot drift. The level at 760 Torr is **1.18×10¹² W/cm²**, and the
-`FixedMeanEnergy` variant gives `n = 0.468` (level 4.58×10¹¹) as the other end
-of the bracket. Absolute threshold level is **not** gated (3–10× inter-lab
-scatter). Integrator sub-gates are unit tests of the exact per-slice solver,
-not physics validation.
+limits — plateau-dominated `n → 0` and escape-dominated `n → 2` — with the
+growth-limited `p^-1` in between. The two selectable closures give **0.086**
+(`SelfConsistentClimb`) and **0.440** (`FixedMeanEnergy`) over the pinned
+300–2000 Torr window, straddling the measured 0.329; that bracket is gated by
+`the_two_cascade_models_bracket_the_measurement` and must be read narrowly — the
+two variants differ only in where the cascade cuts off (`⟨ε⟩` = 3 eV vs
+`U_i` = 12.06 eV), so it is a *one-parameter sensitivity*, not two independent
+limits and not a bound. The **shipped** distribution-resolved closure gives
+**0.264** at the untouched literature centre. Absolute threshold level is
+**not** gated (3–10× inter-lab scatter). Integrator sub-gates are unit tests of
+the exact per-slice solver, not physics validation.
 
-External gates (Thiyagarajan & Thompson 2012, digitized into
-`tests/data/tt2012_*.csv`; the paper's setup — 1064 nm, 6 ns FWHM, 20 µm radius
-focus, 10–2000 Torr — is exactly what the kernel assumes, so nothing is fitted):
+External gates (Thiyagarajan & Thompson 2012 and Chylek et al. 1990, digitized
+into `tests/data/`; T&T's setup — 1064 nm, 6 ns FWHM, 20 µm radius focus,
+10–2000 Torr — is exactly what the kernel assumes, so nothing is fitted):
 
-- **`K_m` collision frequency — passes.** `E_eff/E_B = ν_m/√(ν_m²+ω²)`, so the
+- **`K_m` collision frequency — validated.** `E_eff/E_B = ν_m/√(ν_m²+ω²)`, so the
   paper's two curves measure `ν_m` independently of this crate. Implied
   `K_m = 4.21×10⁷` vs the kernel's `3.90×10⁷ s⁻¹Pa⁻¹`; ratio flat at
   1.05 ± 0.01 over 46–1858 Torr. Non-circular anchor.
-- **`E_eff(p)` slope — passes.** Predicted `p^+0.642`, measured `p^+0.695`;
+- **`E_eff(p)` slope — validated.** Predicted `p^+0.642`, measured `p^+0.695`;
   the positive sign confirms the `ν_m ≪ ω` branch.
-- **`I_thr(p)` slope vs the MEASURED curve — RED, and now known to be the
-  wrong target.** Measured `p^-0.329`; kernel `p^-0.095`. The measured curve
-  is not cascade-only (88 % cascade / 12 % MPI at 760 Torr per the paper), so
-  no cascade-only kernel can match it. This gate was previously green at `p^-0.356` (an "8 % match"),
-  but that rested on an integration artifact: the seed decayed by `e^-60`
-  before the pulse arrived, so an arbitrary integration bound supplied most of
-  the threshold requirement and, being pressure-dependent, manufactured slope.
-  Corrected route: `p^-1.74` → `p^-0.468` (inelastic loss) → `p^-0.095`
-  (`⟨ε⟩` eliminated). What survives is a **bracket** — the two cascade limits
-  give 0.095 and 0.468 and straddle the measurement — gated by
-  `the_two_cascade_models_bracket_the_measurement`. Read narrowly: the two
-  variants differ only in where the cascade cuts off (`⟨ε⟩` = 3 eV vs
-  `U_i` = 12.06 eV), so the bracket is a *one-parameter sensitivity*, not two
-  independent limits, and not a bound — `⟨ε⟩` ≈ 5 eV gives `n` = 0.346 on its
-  own, and `⟨ε⟩ = U_i` gives 0.192, inside the interval.
-- **"Too flat" is window-specific — the real error is CURVATURE.** The
-  `n = 0.095` above is fitted over 300–2000 Torr. Chylek's 532 nm curve extends
-  the comparison two decades lower and shows the kernel is not a power law at
-  all: local exponents **1.951** (10–100 Torr), **1.047** (100–300), **0.170**
-  (300–786), against a measurement that holds **0.41–0.47** throughout on 1.5–6 %
-  scatter. The kernel is 4.6× too steep at the bottom, 2.8× too flat at the top,
-  and crosses the data near 250 Torr — an 11.5× swing where the measurement
-  varies by 1.13×. Same behaviour at 1064 nm, so this is shape, not level or
-  wavelength. Gated as
-  `chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not`. Any statement
-  that the kernel is simply "too flat" holds only above ~250 Torr.
-- **Cascade theory (T&T Eq. 4) — PASSES, and is the apples-to-apples
-  reference.** `I_B(CC) = 1.44×10⁶(p_atm² + 2.2×10⁵λ_µm⁻²)` W/cm², implemented
-  as `validate::tt2012_cascade_threshold`. Flat at 1064 nm (`n = −0.00002`)
-  because `λ⁻²` dominates `p²` by 10⁵ — so the kernel's flatness *agrees* with
-  cascade theory. Level: `SelfConsistentClimb` 4.1–5.1× high, `FixedMeanEnergy`
-  1.3–3.2×.
-- **Wavelength scaling vs Eq. 4 — PASSES, and is the strongest shape check in
-  M6a.** Both terms of `I_thr` carry `1/h ∝ ω²`, so the kernel predicts
-  `I_thr ∝ λ⁻²`, the same exponent as Eq. 4's dominant term. Over
+- **`I_thr(p)` slope vs the MEASURED curve — validated since 2026-07-30.**
+  Measured `p^-0.329`. Sweeping the literature range of the model's one free
+  constant, `δ_eff ∈ [0.01, 0.05]`, the shipped closure gives an envelope
+  `[0.174, 0.382]` which **contains** the measurement, centre 0.264; the
+  mean-trajectory closure's `[0.023, 0.231]` excluded it. The gate pins the
+  envelope as well as the containment, so "contains the measurement" cannot
+  later be satisfied by an envelope that has quietly grown. This gate was red and
+  `#[ignore]`d from 2026-07-25 to 2026-07-30 and was retired by the closure
+  change, with no tolerance moved and no constant touched — the history is in
+  `docs/M6A_SPEC.md` § "Distribution-resolved cascade", and it matters, because
+  the same test once passed for a bad reason (an integration artifact that let an
+  arbitrary bound supply most of the threshold).
+- **Chylek's curve: the residual is a shape defect, and it is localised.** The
+  kernel is not a power law across two further decades of pressure. On three wide
+  windows it gives 0.501 / 0.857 / 0.386 against a measurement holding 0.428 /
+  0.413 / 0.468 (`chylek1990_air_is_a_power_law_and_the_cascade_kernel_is_not`).
+  Redone like-for-like on six narrow bands the failure narrows sharply — see
+  § "The mid-pressure residual" below, which is the honest statement of where the
+  kernel is wrong and by how much.
+- **Cascade theory (T&T Eq. 4) — verified, same lineage.**
+  `I_B(CC) = 1.44×10⁶(p_atm² + 2.2×10⁵λ_µm⁻²)` W/cm², implemented as
+  `validate::tt2012_cascade_threshold`. Flat at 1064 nm because `λ⁻²` dominates
+  `p²` by 10⁵ — so the kernel's flatness *agrees* with cascade theory. Level:
+  4.1–5.1× high (climb), 1.3–3.2× (fixed `⟨ε⟩`).
+- **Wavelength scaling vs Eq. 4 — verified, same lineage, and the strongest
+  shape check in M6a.** Both terms of `I_thr` carry `1/h ∝ ω²`, so the kernel
+  predicts `I_thr ∝ λ⁻²`, the same exponent as Eq. 4's dominant term. Over
   **0.53–10.6 µm** (a 20× span, geometry frozen — legitimate, since the focus is
   divergence- not diffraction-limited) both give **−2.000**, with the ratio
-  between them constant to `2×10⁻⁵`; the residual is the `(ν_m/ω)²` correction
-  at 10.6 µm. Level offsets are flat at 1.64× (`FixedMeanEnergy`) and 4.22×
-  (`SelfConsistentClimb`). Sharper still: the plateau `L′/h` and Eq. 4's `λ⁻²`
-  coefficient are the *same physical quantity* — `ω²` times the inelastic energy
-  loss per collision — and agree to **1.01×** at the literature centre
-  (`δ_eff` = 0.02, `⟨ε⟩` = 3 eV). This is a shape agreement on an axis where
-  nothing is tunable: `δ_eff·⟨ε⟩` sets the level and cannot produce a `λ`
-  exponent. It does *not* independently discover the scaling (the `λ⁻²` is
-  analytic in the `ν_m ≪ ω` limit) — it establishes that the two theories share
-  it exactly, and fails loudly if that limit is left. Gated by
-  `tt2012_wavelength_scaling_matches_cascade_theory`. **Not a pin:**
-  `δ_eff·⟨ε⟩` stays asserted from its literature range; re-pinning it *from*
+  between them constant to `2×10⁻⁵`. Sharper still: the plateau `L′/h` and Eq. 4's
+  `λ⁻²` coefficient are the *same physical quantity* — `ω²` times the inelastic
+  energy loss per collision — and agree to **1.01×** at the literature centre.
+  This is a shape agreement on an axis where nothing is tunable. It does *not*
+  independently discover the scaling (the `λ⁻²` is analytic in the `ν_m ≪ ω`
+  limit) — it establishes that the two theories share it exactly, and fails
+  loudly if that limit is left. **Not a pin:** re-pinning `δ_eff·⟨ε⟩` *from*
   Eq. 4 would make the level assertions here and in
-  `tt2012_cascade_theory_reference` circular, and both would have to be retired
-  in the same change, leaving only the exponent.
-- **Level vs the measured curve — bounded, drifting, ungated.** The model sits
-  4.84× above the data at 380 Torr and 6.97× at 1896 Torr, inside the ungated
-  3–10× inter-lab scatter. The 1.48× drift is the residual slope error in
-  absolute clothing; an earlier "flat within 1.16×" claim was withdrawn with the
-  artifact that produced it. Converting `E_B` to intensity uses
-  `I = ε₀cE_rms²`, since the `E_eff` ratio establishes `E_B` is an RMS
-  amplitude.
-- **MPI calibrated to the paper's own estimate — implemented, left OFF.**
+  `tt2012_cascade_theory_reference` circular.
+- **Level vs the measured curve — bounded, drifting, ungated.** 3.90–4.69× high
+  across the window, inside the ungated 3–10× inter-lab scatter, with the
+  remaining 1.20× drift being the residual slope error in absolute clothing.
+  Converting `E_B` to intensity uses `I = ε₀cE_rms²`, since the `E_eff` ratio
+  establishes `E_B` is an RMS amplitude.
+- **T&T's own MPI calibration undershoots their own measurement — pinned.**
   Anchoring a rate to their `I_B(MPI) = 4.42×10⁹ W/cm²` collapses the threshold
   to 5.5×10⁹, 37× below their own measurement, and contradicts the paper's own
   88 %-cascade accounting. Their number is an order-of-magnitude significance
   indicator (Nelson's flux-density criterion, whose constant the paper never
-  states), not a rate anchor. A real `σ_K` from multiphoton cross-section data
-  is the open item.
+  states), not a rate anchor.
 
-**D5 debt — DISCHARGED 2026-07-30, in the negative.** With the slope gate red,
-the plan's fallback clause required an anchor independent of the kernel's own
-coefficients. Eq. 4 supplied that for the **exponent** (`λ⁻²` is untouched by
-any coefficient choice) but not for the **level**: it is the same paper, and its
-`λ⁻²` coefficient implies the same `δ_eff·⟨ε⟩ = 0.060 eV` the kernel already
-assumes, so the 1.01× agreement is intra-lineage consistency, not corroboration.
-
-The second dataset the clause asked for is now in the suite — **Chylek et al.
-1990, clean air at 532 nm** (`tests/data/chylek1990_air_threshold_vs_pressure.csv`,
-digitized programmatically by `scripts/digitize_chylek1990.py`). It is the anchor
-D5 specified: different group, different apparatus, and a different wavelength —
-exactly half T&T's 1064 nm, at a nearly identical pulse length (6.5 vs 6 ± 1 ns)
-and focal radius (16.5 vs 20 µm). That last point is what makes it usable: the
-paper's own Sec. II names pulse duration and focal spot as the reason literature
-values of `α` contradict one another, and here they are matched, so the 532/1064
-comparison measures the *wavelength* scaling rather than two different benches.
-
-It does not corroborate the model — it falsifies the `λ⁻²` prediction against
-measurement:
+**The wavelength ratio is falsified against measurement, in sign.** Chylek et al.
+1990 is the independent anchor D5 asked for — different group, different
+apparatus, and exactly half T&T's wavelength at a nearly identical pulse length
+(6.5 vs 6 ± 1 ns) and focal radius (16.5 vs 20 µm). That match is what makes the
+532/1064 comparison a measurement of *wavelength* scaling rather than of two
+different benches. It does not corroborate the model:
 
 ```text
-cascade / kernel:  I_th(532)/I_th(1064) = 3.99   (= λ⁻²; shorter λ costs more)
-measured:          I_th(532)/I_th(1064) ≈ 0.80   (532 nm breaks down EASIER)
+kernel (shipped):  I_th(532)/I_th(1064) = 2.85
+measured:                                ≈ 0.80   (532 nm breaks down EASIER)
 ```
 
-Wrong by ~5×, and wrong in **sign**. At 532 nm the multiphoton order falls from
-`K = ⌈12.06/1.166⌉ = 11` photons to `⌈12.06/2.33⌉ = 6`, so the MPI channel the
-kernel leaves OFF is enormously stronger exactly where the measurement drops —
-the same missing channel the pressure-slope gates indict, seen on a second axis.
-Gated as `chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared`.
+An overshoot of 3.57×, and wrong in **sign**. Gated as
+`chylek1990_tt2012_wavelength_ratio_falsifies_cascade_lambda_squared`. `λ⁻²`
+remains a correct statement about the kernel's internal structure and its gate
+stays — it fails loudly if the IB Lorentzian limit is ever left — but it may
+**not** be called external agreement with measurement.
 
-**Consequence for how M6a is described.** `λ⁻²` remains a correct statement about
-the kernel's internal structure and its gate stays — it fails loudly if the IB
-Lorentzian limit is ever left. It may **not** be called external agreement with
-measurement, and it is no longer M6a's headline. M6a's honest status: verified
-against cascade theory, falsified against air on both the pressure axis and the
-wavelength axis. Does not block M6c (gated separately on Chapman–Jouguet
-velocity). See `docs/M6A_SPEC.md` § Fallback.
-
-Open question M6a hands forward: the measured `n` = 0.329 is unreachable by any
-cascade-only model, since accepted cascade theory is flat at this wavelength.
-Closing it means the MPI contribution the paper itself invokes (12 % at
-760 Torr, dominant below 100 Torr), not a flatter cascade — and separately, a
-distribution-resolved cascade rate, since the default variant's near-flatness
-comes from putting every electron on the mean trajectory (at threshold it runs
-within 0.8 % of the `ε_∞ = U_i` pole at 2000 Torr, where that idealization is
-least defensible).
-
-**The obvious MPI candidate has been tried and it fails — 2026-07-30.** Keldysh
-photoionization is implemented (`breakdown0d::keldysh_rate`) and **verified**
-against both closed-form limits of its own exponent: the multiphoton branch
-recovers the photon order `U_i/ħω` to better than 0.2 % (10.35 at 1064 nm, 5.17
-at 532 nm) and the tunnelling branch reproduces the static-field exponent
-`4√(2m)U_i^{3/2}/(3ħeE)` to 1 part in 10⁶. There is nothing tunable in that
-exponent, which is what makes it a legitimate test rather than a fit.
-
-It does not close the wavelength gap:
-
-| prefactor × ω | `I_th(532)/I_th(1064)` |
-|---|---|
-| 0 (cascade only) | 3.99 |
-| **1 (order unity)** | **3.87** |
-| 10³ | 1.84 |
-| 10⁶ | 0.48 |
-| **measured** | **0.80** |
-
-At an order-unity prefactor MPI closes 3 % of the gap. Reaching the measurement
-needs `~10⁵·ω`, i.e. an ionization rate faster than the optical frequency, which
-is not a rate. Gated as `keldysh_mpi_does_not_close_the_wavelength_gap`.
-
-Two by-products worth keeping:
-
-- **The seed density is unphysical, and it is a latent defect.** `n_e0 = 1/V_focal
-  = 1.2×10¹³ m⁻³` is ~10⁴ above the cosmic-ray background (10⁹–10¹⁰ m⁻³), which
-  puts ~10⁻⁴ electrons in an `8.3×10⁻¹⁴ m³` focus — the focus essentially never
-  holds one. Seeding *should* therefore be MPI's job, importing the photon-order
-  asymmetry (at prefactor 1, MPI makes 295 electrons per pulse in the focus at
-  532 nm and 2×10⁻⁸ at 1064 nm — ten orders of magnitude). Removing the seed
-  changes the ratio only 3.99 → 3.85, because the model's threshold is already
-  5.7–28× too high and MPI is copious there at both wavelengths. So the defect is
-  real but masked by the level error. Exposed as
-  `AirBreakdown::with_seed_density`.
-- **An earlier claim of mine, withdrawn.** The wavelength ratio is *not*
-  prefactor-insensitive. The `x^(1/K)` suppression argument only holds once MPI
-  dominates at both wavelengths; the ratio then scales as `x^(−0.097)`, so three
-  decades of prefactor still move it 1.9×, and across the transition it runs 3.99
-  → 0.48. Any future prefactor claim has to be justified to ~2 orders, not waved
-  through.
-
-The open item is therefore narrower than "add MPI": either a PPT-corrected rate
-for molecular O₂ (Coulomb corrections can lift the prefactor by orders of
-magnitude — checkable against published `σ_K`), or a systematic in the two-paper
-comparison. It is *not* a missing channel at these intensities.
-
-**Both branches were settled on 2026-07-31 — see the PPT section below.** The
-prefactor branch is closed by measurement: PPT's prefactor is *derived* once
-`Z_eff` is given, `Z_eff` = 0.53 for O₂ is published, and the resulting absolute
-rate reproduces a measured cross-section within 2×. It is not orders above
-unity, and it moves the ratio only to 2.947. The systematic branch turns out to
-be real: the two anchor experiments sit on opposite sides of the multiphoton
-*seeding* threshold.
-
-Chylek's 532 nm data sharpens the remaining question into a quantitative target
-rather than a direction. Any candidate MPI channel now has to do three things at
-once:
-lift the 532 nm threshold's *ratio* to 1064 nm from 3.99 down to ≈0.80, flatten
-the low-pressure branch from 1.951 to ≈0.43, and steepen the high-pressure
-branch from 0.170 to ≈0.47 — with `K = 6` photons at 532 nm against `K = 11` at
-1064 nm supplying most of the wavelength leverage for free. The three
-`chylek1990_*` gates pin all three numbers, so a channel that fixes one while
-breaking another cannot land quietly.
+Three candidate explanations have been implemented and gated, and none closes
+the gap: Keldysh photoionization (order-unity prefactor, 2.89), PPT with the
+published `Z_eff` (2.947, and the Coulomb correction is order-unity rather than
+orders for a molecule), and seed production (which moved it 3.39 → 2.85). What
+*did* come out of the attempt is the finding in § "PPT photoionization" below:
+the two anchor experiments sit on **opposite sides of the multiphoton seeding
+threshold**, so their threshold ratio is not a measurement of one mechanism's
+wavelength scaling at all. The full history of these attempts, including two
+claims of mine that were withdrawn, is in `docs/M6A_SPEC.md`.
 
 ### Distribution-resolved cascade (`CascadeModel::DistributionResolved`)
 
@@ -809,14 +754,16 @@ the rate is a function of `(ε_∞/U_i, ħω/U_i)` alone, preserving `ν_i ∝ p
 
 **Validated — the high-pressure slope** (`distribution_resolved_cascade_fixes_the_high_pressure_slope`).
 At the untouched literature centre `δ_eff` = 0.02: T&T 300–2000 Torr goes
-0.0951 → **0.2793** against a measured 0.329, and Chylek 300–786 Torr goes
-0.1717 → **0.4665** against 0.468. Over the literature range of that single free
+0.086 → **0.264** against a measured 0.329, and Chylek 300–786 Torr goes
+0.151 → **0.431** against 0.468. Over the literature range of that single free
 constant the envelope moves from `[0.023, 0.231]`, which *excludes* 0.329, to
-`[0.183, 0.407]`, which contains it — and on Chylek's window from `[0.039,
-0.414]` to `[0.307, 0.657]` containing 0.468.
+`[0.174, 0.382]`, which contains it. (These are the isolating comparison — both
+closures run with seeding suppressed, so the change measured is the closure's
+alone. The shipped default also produces its own seed; § "Seed production" gives
+the numbers with everything on.)
 
 **Pinned — what it does not fix.** The low-pressure branch is unmoved,
-1.952 → 1.954 against a measured 0.428, which localises that failure to diffusion
+1.289 → 1.293 against a measured 0.428, which localises that failure to diffusion
 loss rather than to the cascade closure
 (`distribution_resolved_does_not_fix_the_low_pressure_branch`). The wavelength
 ratio moves 4.00 → 3.39 against ≈0.80 — the right sign at last, since `D_ε ∝ ħω`
@@ -896,7 +843,7 @@ landed and for Ar and Xe those cross sections swing two orders of magnitude
 across the Ramsauer minimum. Full noble-gas *threshold curves* are therefore not
 computed here; the plateau gate needs neither constant.
 
-Full model and constants: `docs/M6A_SPEC.md`.
+Milestone record and the reasoning behind these choices: `docs/M6A_SPEC.md`.
 
 References:
 - Yu. P. Raizer, *Gas Discharge Physics*, Springer (1991) — cascade ionization
@@ -952,8 +899,9 @@ References:
 ### PPT photoionization for molecular O₂ (`breakdown0d::ppt_rate`)
 
 Added 2026-07-31, to settle the prefactor branch left open above. **Site:**
-`breakdown0d::ppt_rate`, off by default, enabled by
-`AirBreakdown::with_ppt_mpi(Z_EFF_O2)`.
+`breakdown0d::ppt_rate`, **on by default** since seed production landed (the
+other two multiphoton paths stay off); `AirBreakdown::with_ppt_mpi(Z_EFF_O2)`
+selects it explicitly.
 
 ```text
 W = |C_n*|²·√(6/π)·U_i·(2F₀/(F√(1+γ²)))^{2n*−3/2}·A₀(ω,γ)·exp[−(2U_i/ħω)·f(γ)]
@@ -1631,9 +1579,14 @@ Gates (`tests/validation.rs`):
   bin, so `α_slab·dz = Σ α_k·dx` exactly — is what makes marching a 2500-cell
   hydro state through an FFT propagator affordable.
 
-Not yet gated: **G7**, absolute velocity against measurement, which is expected
-to land high and is documented-but-ungated because a planar 1-D solver has no
-radial relief. See `docs/M6C_SPEC.md`.
+Not yet gated: **G7**, absolute velocity against measurement. It is expected to
+land high, and **as of M6d the reason is no longer that a planar solver has no
+radial relief** — relief is modelled and pinned at `δ` = 0.230 of the front
+speed, which covers part but not all of the ~2× gap. G7 stays ungated for one
+reason only: no measured dataset has been anchored. The remaining candidates for
+the rest of the gap are radiation losses, incomplete absorption, the production
+EOS, and the un-refracted beam. See `docs/M6C_SPEC.md` § G7 and
+`docs/M6D_SPEC.md`.
 
 ### The `lsd` demonstration run (CLI case)
 
@@ -1648,12 +1601,12 @@ consumer, and the reason it was extracted.
 *igniting* pulse and a separate long *sustaining* drive, and the two models
 together say the second could never have produced the first:
 
-- M6a's threshold in air at 1 atm saturates at **≈1.14×10¹⁶ W/m² and does not
-  fall with pulse length** (6 ns → 1.18×10¹⁶, 1 ms → 1.14×10¹⁶). It is an
-  intensity floor, not a fluence one: below it the inelastic losses paid
-  climbing to the ionization potential exceed the inverse-bremsstrahlung
-  heating, the net cascade rate is negative, and no exposure time rescues it.
-  Widening the focus moves it by 4 % over a 500× range of spot radius.
+- M6a's threshold in air at 1 atm converges to **an intensity floor of
+  ≈6.75×10¹⁵ W/m², not a fluence criterion**: 8.815×10¹⁵ at 6 ns falling to
+  6.745×10¹⁵ by 1 ms, and flat to 1 % over the last two decades of pulse length.
+  The fall is bounded at 1.31× — the distribution-resolved closure has no hard
+  cutoff, so a longer pulse buys *something*, and then stops. Widening the focus
+  buys about as little: 6 % over a 500× range of spot radius, saturating.
 - The sustaining LSD drive is ~10¹¹ W/m² — five orders of magnitude below.
 
 So the detonation must be *initiated* by something far brighter than what
@@ -1664,7 +1617,7 @@ to either model that closes the gap fails rather than quietly invalidating the
 write-up.
 
 **What each half is worth.** *When and where* the spark lights inherits M6a's
-explicitly ungated absolute level (4.8–7.0× above the measured T&T curve). The
+explicitly ungated absolute level (3.90–4.69× above the measured T&T curve). The
 front speed does not: it depends on the absorbed intensity at the front and on
 `ρ₀`, not on where the spark was lit — which is why G3/G3b/G3c and the G4
 physics gate all use seeded ignition and never touch `AirBreakdown`. The gap
@@ -1719,3 +1672,111 @@ metres.
 
 Reference: S. van der Walt, N. Smith, *matplotlib colormaps* (magma),
 <https://bids.github.io/colormap/>.
+
+## M6d — Axisymmetric gas dynamics and radial relief
+
+### Axisymmetric Euler, area-weighted finite volume
+
+```text
+∂U/∂t + (1/r)·∂(r·F_r)/∂r + ∂F_x/∂x = Ṡ_geom + Ṡ_laser
+
+U   = (ρ, ρu_r, ρu_x, E)ᵀ
+F_r = (ρu_r, ρu_r² + p, ρu_r u_x, (E + p)u_r)ᵀ
+F_x = (ρu_x, ρu_r u_x, ρu_x² + p, (E + p)u_x)ᵀ
+Ṡ_geom = (0, p/r, 0, 0)ᵀ
+```
+
+Site: `src/euler2d.rs`. HLLC + MUSCL-Hancock with minmod, Strang-split
+dimensionally as `R(dt/2) → X(dt) → R(dt/2)`, CFL asserted per step in both
+directions, positivity guard that bails with the cell **and stage** rather than
+clamping. **No laser physics is in this module**, deliberately — M6c gate
+decision 4, carried forward.
+
+Two implementation facts carry the milestone and both are recorded in the code:
+
+- **The `1/r` never appears.** Cells are annuli, interfaces carry area `A ∝ r`,
+  and the axis interface has zero area, so nothing crosses `r = 0` by
+  construction. `(A_+ − A_−)/V` *is* `1/r_j` analytically, finite in the
+  innermost ring without a floor.
+- **The geometric source is written as the same floating-point expression as
+  the pressure part of the flux difference**, so a radially uniform state is a
+  bit-exact fixed point. That is what lets G9, G13(i) and G14 assert equality
+  rather than a tolerance.
+
+The 1-D Riemann solver is **reused, not reimplemented**: a sweep packs
+`(ρ, ρu_∥, E − ½ρv_t²)` into `euler1d`'s `Conserved`, calls its `hllc_flux`, and
+recovers the transverse flux as `F_ρ·v_t` with the upwind side read off
+`sign(F_ρ)`. Both identities are exact.
+
+- **G9 — the planar limit reproduces `Euler1d` bit for bit**
+  (`euler2d_planar_limit_reproduces_euler1d_bit_for_bit`). Not a tolerance: the
+  same floating-point operations. Two non-vacuity legs.
+- **G10 — Sedov–Taylor** (`sedov_blast_matches_the_self_similar_solution`).
+  Exponent 0.38628 vs the exact 2/5; level and peak compression both gated as
+  *trends* under refinement, because a spherical blast's density spike is one or
+  two cells wide at any affordable resolution.
+- **G11 — 2nd order on smooth axisymmetric flow** (1.861 / 1.964 against a
+  split-source contrast at 1.030 / 1.155). This gate found a real defect: the
+  Hancock predictor originally built the geometric source from the reconstructed
+  *face* pressures, which is well-balanced and wrong — the pressure terms then
+  cancel identically against the flux difference and the gradient disappears
+  from the predictor. It cost an order.
+- **G12 — conservation in the `r dr dx` measure**, with radial momentum
+  deliberately *not* conserved, and an escape-flux leg that closes the budget
+  when relief reaches the wall.
+- **G13 — the axis is not a wall**, against a deliberate even-parity contrast.
+
+### The Sedov–Taylor reference
+
+Site: `src/validate.rs` (`SedovBlast`). The self-similar ODEs are integrated
+inward from the strong-shock Rankine–Hugoniot state and `ξ₀` follows from the
+energy integral, so **nothing external is quoted**: the published ≈1.033 for
+`γ` = 1.4 is an independent cross-check that the derived 1.03278 passes to
+0.03 %. Its own unit tests include putting the profile back into the Euler PDEs,
+where the residual is 6.9e-5 and falls as the finite-difference step squared —
+the check that verifies the hand derivation rather than the arithmetic.
+
+### Radial relief and the transverse instability
+
+Site: `src/lsd2d.rs`. M6c's `LsdColumn` with a beam of finite radius: one
+independent Beer–Lambert march per ring, no refraction, no diffraction.
+`Absorption`, `IonizationCeiling` and `raizer_lsd_velocity` are reused
+unchanged — the closures depend on `(ρ, p)` alone.
+
+**The transverse instability, found rather than sought.** A radially uniform
+run diverges exponentially from the 1-D column, out of round-off, reaching 3 %
+by M6c's settle. Three measurements identify it: it is bit-identical in planar
+and axisymmetric geometry (so not the geometric source), amplitude-proportional
+(a 10⁶× larger seed gives a 10⁶× larger early response), and it saturates at
+`|u_r|` ≈ 200–400 m/s. That is a linear instability going nonlinear — the
+mechanism behind the cellular structure real detonations have. It is pinned, not
+validated: no measurement has been compared to.
+
+**The relief deficit** (G15, `pinned`). Because the instability is present at
+*every* beam radius including infinite, the deficit is measured against the
+**wide-beam 2-D run**, not the 1-D column — otherwise the instability would be
+reported as relief. Measured `δ = 1 − D/D_wide` = 0.305 at `R_b·α` = 1.6 and
+0.230 at 3.2, monotone in `R_b`, with the wide-beam limit itself within 1 % of
+Raizer. The pinned claim is a **band** of ±13 %, and that width is measured
+rather than chosen: grid (+6 % on halving `Δx`), seed (−7 % at a 1× rather than
+2× CJ-pressure seed), and ignition threshold (±8 % over a 4× sweep). Pinning a
+third digit would assert a precision three separate knobs say is not there.
+
+A **failure radius** is predicted and was not reached: `check_regime` requires
+eight cells across `R_b`, so the smallest beam affordable at this `Δr` still
+carries a healthy wave. Recorded as an open item rather than asserted.
+
+- **G16 — the one-third scaling survives relief**
+  (`the_one_third_scaling_survives_radial_relief`): `S^0.34666` against the
+  parameter-free 1/3 while the level moves 23 %. M6c's G4 argues that relief can
+  only enter as a coefficient; this measures it.
+
+### The `lsd2d` demonstration run (CLI case)
+
+`cargo run --release -- lsd2d` seeds a wave, drives it with a 160 µm top-hat
+beam at `R_b·α` = 3.2, and reports the deficit against a matching wide-beam run.
+Writes `_fields.npy` `[frame, quantity, ring, cell]`, a front-track CSV carrying
+both the axis and the beam edge, `_meta.json` and `_notes.md`; images come from
+`scripts/render_lsd2d.py`. No M6a ignition stage, deliberately — the `lsd` case
+owns that story, and seeding keeps this one from re-inheriting M6a's ungated
+absolute threshold.

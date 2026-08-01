@@ -68,7 +68,7 @@ Stated up front, in the D5 spirit that M6a learned and M6c applied.
 
 **Not gateable: the position of the `P_ig` curve.** Whether a given `Cn²`
 ignites the air depends on M6a's absolute breakdown threshold, which is M6a's
-explicitly ungated quantity (4.8–7.0× above the measured Thiyagarajan & Thompson
+explicitly ungated quantity (3.90–4.69× above the measured Thiyagarajan & Thompson
 curve, inside the 3–10× inter-lab scatter). Every `P_ig(Cn²)` this rung produces
 inherits that offset. The curve's location on the `Cn²` axis is therefore **a
 statement about the model, not about the world**, and must be labelled so

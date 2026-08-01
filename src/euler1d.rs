@@ -126,7 +126,7 @@ impl Conserved {
 }
 
 /// Physical flux `F(U)`.
-fn flux(gas: &IdealGas, u: Conserved) -> Conserved {
+pub(crate) fn flux(gas: &IdealGas, u: Conserved) -> Conserved {
     let w = u.to_primitive(gas);
     Conserved {
         rho: u.mom,
@@ -149,13 +149,13 @@ pub enum Boundary {
 /// That is the point of routing every validity check through it: written as
 /// `!is_positive(x)`, a NaN state is refused, where the natural `x <= 0.0`
 /// would wave it through.
-fn is_positive(x: f64) -> bool {
+pub(crate) fn is_positive(x: f64) -> bool {
     x > 0.0 && x.is_finite()
 }
 
 /// Minmod limiter on two slopes: the TVD choice, and the one that makes the
 /// Sod contact and shock monotone.
-fn minmod(a: f64, b: f64) -> f64 {
+pub(crate) fn minmod(a: f64, b: f64) -> f64 {
     if a * b <= 0.0 {
         0.0
     } else if a.abs() < b.abs() {
@@ -386,65 +386,78 @@ impl Euler1d {
         }
         padded
     }
+}
 
-    /// HLLC flux across the interface between left state `ul` and right `ur`.
-    ///
-    /// Wave speeds are the Einfeldt/Davis estimates built on the Roe-averaged
-    /// velocity and sound speed, bounded by the one-sided characteristics:
-    /// `S_L = min(u_L − c_L, ũ − c̃)`, `S_R = max(u_R + c_R, ũ + c̃)`. Those are
-    /// the standard choice that keeps HLLC positivity-preserving for the
-    /// isolated Riemann problem (Toro §10.5–10.6).
-    fn hllc_flux(&self, ul: Conserved, ur: Conserved) -> Conserved {
-        let gas = &self.gas;
-        let wl = ul.to_primitive(gas);
-        let wr = ur.to_primitive(gas);
-        let cl = gas.sound_speed(wl.rho, wl.p);
-        let cr = gas.sound_speed(wr.rho, wr.p);
+/// HLLC flux across the interface between left state `ul` and right `ur`.
+///
+/// Wave speeds are the Einfeldt/Davis estimates built on the Roe-averaged
+/// velocity and sound speed, bounded by the one-sided characteristics:
+/// `S_L = min(u_L − c_L, ũ − c̃)`, `S_R = max(u_R + c_R, ũ + c̃)`. Those are
+/// the standard choice that keeps HLLC positivity-preserving for the
+/// isolated Riemann problem (Toro §10.5–10.6).
+///
+/// A free function rather than a method, and `pub(crate)`, so that
+/// `euler2d`'s directional sweeps can call the *same* Riemann
+/// solver instead of carrying a second copy of it. That module needs one extra
+/// fact, and it can read it off the returned flux rather than from a wider
+/// signature: **the sign of the mass flux identifies the upwind side of the
+/// contact.** In the star branches `F_ρ = ρ*_K·S*` with `ρ*_K > 0`, so
+/// `sign(F_ρ) = sign(S*)`; in the supersonic branches `S_L ≥ 0` forces
+/// `u_L > c_L > 0` and `S_R ≤ 0` forces `u_R < −c_R < 0`, so the sign still
+/// points at the donor side. A transverse momentum component therefore rides
+/// along as `F_ρ · v_upwind`, exactly (Toro §10.5: the transverse velocity is
+/// constant across the acoustic waves within each star state).
+pub(crate) fn hllc_flux(gas: &IdealGas, ul: Conserved, ur: Conserved) -> Conserved {
+    let wl = ul.to_primitive(gas);
+    let wr = ur.to_primitive(gas);
+    let cl = gas.sound_speed(wl.rho, wl.p);
+    let cr = gas.sound_speed(wr.rho, wr.p);
 
-        // Roe averages (density-weighted), for the Einfeldt bound.
-        let sl_rho = wl.rho.sqrt();
-        let sr_rho = wr.rho.sqrt();
-        let u_roe = (sl_rho * wl.u + sr_rho * wr.u) / (sl_rho + sr_rho);
-        let hl = (ul.energy + wl.p) / wl.rho;
-        let hr = (ur.energy + wr.p) / wr.rho;
-        let h_roe = (sl_rho * hl + sr_rho * hr) / (sl_rho + sr_rho);
-        let c_roe2 = (gas.gamma - 1.0) * (h_roe - 0.5 * u_roe * u_roe);
-        let c_roe = if c_roe2 > 0.0 { c_roe2.sqrt() } else { 0.0 };
+    // Roe averages (density-weighted), for the Einfeldt bound.
+    let sl_rho = wl.rho.sqrt();
+    let sr_rho = wr.rho.sqrt();
+    let u_roe = (sl_rho * wl.u + sr_rho * wr.u) / (sl_rho + sr_rho);
+    let hl = (ul.energy + wl.p) / wl.rho;
+    let hr = (ur.energy + wr.p) / wr.rho;
+    let h_roe = (sl_rho * hl + sr_rho * hr) / (sl_rho + sr_rho);
+    let c_roe2 = (gas.gamma - 1.0) * (h_roe - 0.5 * u_roe * u_roe);
+    let c_roe = if c_roe2 > 0.0 { c_roe2.sqrt() } else { 0.0 };
 
-        let s_l = (wl.u - cl).min(u_roe - c_roe);
-        let s_r = (wr.u + cr).max(u_roe + c_roe);
+    let s_l = (wl.u - cl).min(u_roe - c_roe);
+    let s_r = (wr.u + cr).max(u_roe + c_roe);
 
-        if s_l >= 0.0 {
-            return flux(gas, ul);
-        }
-        if s_r <= 0.0 {
-            return flux(gas, ur);
-        }
-
-        // Contact speed (Toro Eq. 10.37).
-        let ml = wl.rho * (s_l - wl.u);
-        let mr = wr.rho * (s_r - wr.u);
-        let s_star = (wr.p - wl.p + ml * wl.u - mr * wr.u) / (ml - mr);
-
-        // Star state on the upwind side, and its flux F_K + S_K(U*_K − U_K).
-        let star = |u: Conserved, w: Primitive, s_k: f64| -> Conserved {
-            let coef = w.rho * (s_k - w.u) / (s_k - s_star);
-            Conserved {
-                rho: coef,
-                mom: coef * s_star,
-                energy: coef
-                    * (u.energy / w.rho + (s_star - w.u) * (s_star + w.p / (w.rho * (s_k - w.u)))),
-            }
-        };
-        if s_star >= 0.0 {
-            let u_star = star(ul, wl, s_l);
-            flux(gas, ul).zip(u_star.zip(ul, |a, b| a - b), |f, du| f + s_l * du)
-        } else {
-            let u_star = star(ur, wr, s_r);
-            flux(gas, ur).zip(u_star.zip(ur, |a, b| a - b), |f, du| f + s_r * du)
-        }
+    if s_l >= 0.0 {
+        return flux(gas, ul);
+    }
+    if s_r <= 0.0 {
+        return flux(gas, ur);
     }
 
+    // Contact speed (Toro Eq. 10.37).
+    let ml = wl.rho * (s_l - wl.u);
+    let mr = wr.rho * (s_r - wr.u);
+    let s_star = (wr.p - wl.p + ml * wl.u - mr * wr.u) / (ml - mr);
+
+    // Star state on the upwind side, and its flux F_K + S_K(U*_K − U_K).
+    let star = |u: Conserved, w: Primitive, s_k: f64| -> Conserved {
+        let coef = w.rho * (s_k - w.u) / (s_k - s_star);
+        Conserved {
+            rho: coef,
+            mom: coef * s_star,
+            energy: coef
+                * (u.energy / w.rho + (s_star - w.u) * (s_star + w.p / (w.rho * (s_k - w.u)))),
+        }
+    };
+    if s_star >= 0.0 {
+        let u_star = star(ul, wl, s_l);
+        flux(gas, ul).zip(u_star.zip(ul, |a, b| a - b), |f, du| f + s_l * du)
+    } else {
+        let u_star = star(ur, wr, s_r);
+        flux(gas, ur).zip(u_star.zip(ur, |a, b| a - b), |f, du| f + s_r * du)
+    }
+}
+
+impl Euler1d {
     /// MUSCL-Hancock interface fluxes for the whole domain: minmod-limited
     /// slopes, boundary-extrapolated values, a half-step evolution of each, then
     /// one HLLC solve per interface. Returns `n + 1` fluxes.
@@ -485,7 +498,13 @@ impl Euler1d {
 
         // Interface j sits between padded cells N_GHOST-1+j and N_GHOST+j.
         Ok((0..=self.cells.len())
-            .map(|j| self.hllc_flux(right_face[N_GHOST - 1 + j], left_face[N_GHOST + j]))
+            .map(|j| {
+                hllc_flux(
+                    &self.gas,
+                    right_face[N_GHOST - 1 + j],
+                    left_face[N_GHOST + j],
+                )
+            })
             .collect())
     }
 
@@ -686,7 +705,7 @@ mod tests {
             p: 1e5,
         }
         .to_conserved(&gas);
-        let f = s.hllc_flux(fast_right, fast_right);
+        let f = hllc_flux(&s.gas, fast_right, fast_right);
         let exact = flux(&gas, fast_right);
         assert!((f.rho - exact.rho).abs() / exact.rho.abs() < 1e-14);
         assert!((f.mom - exact.mom).abs() / exact.mom.abs() < 1e-14);
