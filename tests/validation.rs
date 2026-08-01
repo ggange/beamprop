@@ -1032,13 +1032,13 @@ fn tt2012_effective_field_rises_with_pressure() {
 ///
 /// ```text
 /// mean-trajectory closure:        n ∈ [0.023, 0.231]   measurement OUTSIDE
-/// distribution-resolved (default): n ∈ [0.183, 0.407]   measurement INSIDE
+/// distribution-resolved (default): n ∈ [0.174, 0.382]   measurement INSIDE
 /// ```
 ///
 /// Nothing here was tuned and no tolerance moved. What changed is that the
 /// cascade no longer collapses the electron energy distribution onto its mean,
 /// so ionization is not gated by a hard `ε_∞ = U_i` bifurcation the model was
-/// sitting on top of. At the untouched literature centre the slope is 0.279
+/// sitting on top of. At the untouched literature centre the slope is 0.264
 /// against the measured 0.329. See
 /// `distribution_resolved_cascade_fixes_the_high_pressure_slope` for the
 /// before/after on both datasets, and `docs/M6A_SPEC.md` for why this is a

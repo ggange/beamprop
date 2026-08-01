@@ -58,7 +58,11 @@ When you change or add a model, update the docs in the same PR:
   line at the top of the section. A green test that asserts a known disagreement
   is a `pinned` row, not a `validated` one; if you cannot say which of the four
   statuses your new gate has, the gate is not finished. An asserted constant with
-  no test behind it gets an `ungated` row rather than no row.
+  no test behind it gets an `ungated` row rather than no row. The census and the
+  four statuses are **enforced** by `tests/docs.rs`, which fails with the
+  corrected line — but only the counts are mechanical. A row's *number* is
+  checked by nobody: the ground truth for it is the `assert!` in the gate the row
+  names, so quote that, and re-read it whenever a default changes.
 - **`docs/M*_SPEC.md`** — per-milestone pre-spec gates and design records. New
   milestone work is spec'd here before it is implemented.
 - **`README.md`** — the milestone status table and the CLI examples. A finished

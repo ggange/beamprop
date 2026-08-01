@@ -225,7 +225,7 @@ per hydro step dt:
 
 The velocity gates are independent of M6a. The **ignition time and position**
 are not: they come from `AirBreakdown`'s absolute threshold, which is M6a's
-explicitly ungated quantity (4.8–7.0× above the measured T&T curve, inside the
+explicitly ungated quantity (3.90–4.69× above the measured T&T curve, inside the
 3–10× inter-lab scatter). So M6c can pass every velocity gate while lighting
 the spark at the wrong intensity. This is a stated limitation, not a blocker —
 `D` depends on the absorbed `S` at the front, not on where ignition happened —
@@ -573,7 +573,21 @@ is labelled as such.
    what *sustains* it — which is the known experimental situation, where LSD
    waves in clean air are started on a target, on an aerosol, or by a separate
    spike. M6a's ungated absolute level does not touch the conclusion: the gap is
-   10⁵ against a ~7× uncertainty. Pinned by
+   10⁵ against a ~7× uncertainty.
+
+   **Amended (M6a, 2026-07-30/31): the numbers above are the ones this milestone
+   landed with, and the shape of the claim has since changed.** The
+   distribution-resolved closure removed the hard `ε_∞ = U_i` cutoff, so a longer
+   pulse now buys *something* rather than nothing, and seed production raised the
+   short-pulse end. The threshold is therefore **asymptotic rather than flat**:
+   8.815×10¹⁵ at 6 ns falling to 6.745×10¹⁵ by 1 ms, a bounded 1.31× fall that is
+   flat to 1 % over the last two decades. The focus figure is now 6 % over a 500×
+   range, and the level uncertainty is 3.90–4.69× rather than ~7×. **The
+   two-stage argument is untouched**, which is the only thing this step depended
+   on: a bounded fall to a floor is still an intensity criterion, and the drive
+   still sits ~10⁵ below it. What would break it is a threshold falling without
+   limit, and the gate below asserts that it does not. Current numbers live in
+   `docs/MODELS.md` § "The `lsd` demonstration run". Pinned by
    `the_sustaining_drive_is_far_below_the_breakdown_threshold`.
 5. **How hot the run is allowed to get** — *new, and answered (step 4).* The
    `Z̄ ≡ 1` ceiling recorded under "Property closure" bounds where `α_IB` can be

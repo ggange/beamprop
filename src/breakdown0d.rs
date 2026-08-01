@@ -1178,10 +1178,9 @@ impl AirBreakdown {
             cascade_model: CascadeModel::DistributionResolved,
             window_half_widths: 2.0,
             focus,
-            // MPI source off by default: the seed electron (n_e0 = 1/V_focal)
-            // is the initial condition, and the avalanche multiplies it. The
-            // continuous multiphoton source is the swappable term (docs Open
-            // Question 2); a physical σ_K would be supplied when it is enabled.
+            // The σ_K power-law MPI source stays off: seed production is PPT's
+            // job (below), and this term is the swappable stand-in that would
+            // need a physical σ_K supplied before it meant anything.
             mpi_rate_ref: 0.0,
             mpi_i_ref: 1.0,
             k_photons,
@@ -1352,8 +1351,10 @@ impl AirBreakdown {
     /// absolute magnitude against a measured cross-section
     /// (`ppt_rate_matches_the_measured_o2_cross_section`).
     ///
-    /// Off by default, like the other two, so every pre-existing gate keeps its
-    /// published numbers.
+    /// **On by default** since seed production landed — with a physical ambient
+    /// electron density the focus holds ~10⁻¹⁵ electrons, so without production
+    /// nothing would ever break down. This selects it explicitly, and turns the
+    /// other two multiphoton paths off.
     pub fn with_ppt_mpi(mut self, z_eff: f64) -> Self {
         self.ppt_z_eff = z_eff;
         self.keldysh_prefactor = 0.0;
@@ -1363,18 +1364,20 @@ impl AirBreakdown {
 
     /// Override the initial electron density `n_e0` (m⁻³).
     ///
-    /// The default is one electron in the focal volume, `1/V_focal`, which for
-    /// T&T's geometry is `1.2×10¹³ m⁻³`. **That is not a physical background
-    /// density**: cosmic-ray ionization maintains ~`10⁹–10¹⁰ m⁻³` in the lower
-    /// atmosphere, so an `8.3×10⁻¹⁴ m³` focus contains ~`10⁻⁴` free electrons —
-    /// it essentially never has one. Assuming a seed is present is a ~10⁴
-    /// overestimate, and it is not a harmless one: handing the cascade a free
-    /// electron removes the *seed-production* step, which is where almost all of
-    /// the wavelength dependence of real breakdown lives.
+    /// The default is [`Self::background_electron_density`] — the physical
+    /// ambient free-electron density, `q/ν_att`, which at 1 atm is `0.149 m⁻³`,
+    /// i.e. about `1.2×10⁻¹⁴` electrons in an `8.3×10⁻¹⁴ m³` focus. The pulse
+    /// then produces its own electrons through the PPT channel.
     ///
-    /// Set this small and enable [`Self::with_keldysh_mpi`] to let multiphoton
-    /// ionization create the seed instead, which is the physically ordered
-    /// calculation. See `docs/M6A_SPEC.md` § "Seeding".
+    /// This kernel previously *assumed* `n_e0 = 1/V_focal` = `1.2×10¹³ m⁻³` —
+    /// one electron sitting in the focus — which was wrong by ~14 orders and
+    /// load-bearing, since it sat exactly where the seed still moves the
+    /// threshold. See `docs/M6A_SPEC.md` § "Superseded 2026-07-31".
+    ///
+    /// An explicit override set here still behaves as a **floor**, which is what
+    /// keeps a source-free run independent of the integration window; the
+    /// derived background does not, because it must be free to deplete
+    /// (`seed_floor_applies_only_to_an_explicit_seed`).
     pub fn with_seed_density(mut self, n_seed: f64) -> Self {
         self.n_seed = Some(n_seed);
         self
@@ -2225,9 +2228,9 @@ mod tests {
         // Those two bracketed the model to n ∈ [1, 2] BEFORE the inelastic-loss
         // term existed (observed then: n = 1.737). The term adds a third,
         // pressure-independent contribution — a genuine plateau — which drags
-        // the slope below that old floor, to n = 0.095 with the default
-        // SelfConsistentClimb (0.468 with FixedMeanEnergy). So this test now
-        // gates the *combined* form:
+        // the slope below that old floor: 0.086 for `SelfConsistentClimb` and
+        // 0.440 for `FixedMeanEnergy`, with the shipped `DistributionResolved`
+        // default at 0.264. So this test now gates the *combined* form:
         //
         //     I_thr(p) = L′/h + U_i·(ν_diff + ν_att + G)/(h·p)
         //
@@ -2240,9 +2243,12 @@ mod tests {
         // so far above this window the model leaves them entirely — the slope
         // turns positive above ~10^4 Torr. That is why the range is pinned.
         //
-        // This is the model's own consistency, NOT agreement with experiment:
-        // T&T measure n = 0.33, outside this interval entirely. That gap is the
-        // real M6a finding and is gated separately in tests/validation.rs.
+        // This is the model's own consistency, NOT agreement with experiment.
+        // Agreement is a separate question and a separate gate: T&T measure
+        // n = 0.329, which the shipped closure's δ_eff envelope contains since
+        // 2026-07-30 (`tt2012_threshold_slope_matches_measurement`). Nothing
+        // here asserts that; this gate would still pass if it stopped being
+        // true.
         let m = model();
         let n_points = 8;
         let curve = m.pressure_sweep(GATE_P_LO, GATE_P_HI, n_points, 6e-9, 400);

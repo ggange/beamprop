@@ -627,14 +627,15 @@ pub struct LsdRun {
 /// question "does the beam that drives the detonation also light it?", and the
 /// answer the two models give together is **no, by five orders of magnitude**:
 ///
-/// - M6a's breakdown threshold in air at 1 atm **saturates at ≈1.14×10¹⁶ W/m²
-///   and does not fall with pulse length** — 6 ns and 1 ms give 1.18×10¹⁶ and
-///   1.14×10¹⁶. It is an intensity floor, not a fluence one: below it the
-///   inelastic losses paid climbing to the ionization potential exceed the
-///   inverse-bremsstrahlung heating, the net cascade rate is negative, and no
-///   exposure time rescues it. Widening the focus does not help either — over a
-///   500× range of spot radius the threshold moves by 4 %, because diffusion
-///   loss is not what sets it at this pressure.
+/// - M6a's breakdown threshold in air at 1 atm **converges to an intensity
+///   floor of ≈6.75×10¹⁵ W/m², rather than falling without limit** — 6 ns gives
+///   8.815×10¹⁵ and 1 ms gives 6.745×10¹⁵, a bounded 1.31× fall that is flat to
+///   1 % over the last two decades of pulse length. It is an intensity floor,
+///   not a fluence one, which is what the two-stage argument below needs; see
+///   `the_sustaining_drive_is_far_below_the_breakdown_threshold` for why the
+///   claim is the *asymptotic* one rather than exact flatness. Widening the
+///   focus does not help either — over a 500× range of spot radius the
+///   threshold moves by 6 % and saturates.
 /// - The sustaining drive an LSD wave runs on is ~10¹¹ W/m² (10⁷ W/cm², the
 ///   spec's representative value).
 ///
@@ -642,9 +643,9 @@ pub struct LsdRun {
 /// a defect in either model — it is the known experimental situation, where LSD
 /// waves in clean air are initiated on a target, on an aerosol, or by a separate
 /// high-intensity spike, and are then *sustained* far below breakdown by the
-/// plasma that already exists. M6a's ungated absolute level (4.8–7.0× above the
-/// measured Thiyagarajan & Thompson curve) does not touch the conclusion: the
-/// gap is 10⁵ and the uncertainty is ~7×.
+/// plasma that already exists. M6a's ungated absolute level (3.90–4.69× above
+/// the measured Thiyagarajan & Thompson curve) does not touch the conclusion:
+/// the gap is 10⁵ and the uncertainty is ~5×.
 ///
 /// # What each half is worth
 ///
@@ -1271,7 +1272,7 @@ pub struct IgnitionRun {
 ///
 /// **The position of `p_ignite` on the `cn2` axis is not.** Whether a given
 /// realization lights depends on [`AirBreakdown`]'s absolute threshold, which is
-/// M6a's explicitly ungated quantity (4.8–7.0× above the measured Thiyagarajan
+/// M6a's explicitly ungated quantity (3.90–4.69× above the measured Thiyagarajan
 /// & Thompson curve, inside the 3–10× inter-lab scatter). Every ignition
 /// probability here carries that offset, and it must be labelled so wherever it
 /// is plotted (`docs/M6A2_SPEC.md` § "What this rung can and cannot claim").
@@ -1436,7 +1437,7 @@ pub struct IgnitionSweepRun {
 ///
 /// The **position** of the curve on the `Cn²` axis is not a claim about the
 /// world. It is set by where `AirBreakdown`'s absolute threshold falls, and
-/// that threshold is M6a's explicitly ungated quantity — 4.8–7.0× above the
+/// that threshold is M6a's explicitly ungated quantity — 3.90–4.69× above the
 /// measured Thiyagarajan & Thompson curve, inside the 3–10× inter-lab scatter.
 /// Shifting the threshold slides the whole curve sideways without changing its
 /// shape. Any plot of this must say so.
